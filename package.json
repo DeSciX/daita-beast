@@ -1,0 +1,12 @@
+{
+  "name": "daita-beast",
+  "private": true,
+  "description": "BEAST: the coordination app of the daita community on DeSciX.",
+  "dependencies": {
+    "@descix/cli": "^1.0.18"
+  },
+  "scripts": {
+    "test": "node --test plugin/tests/*.test.mjs"
+  },
+  "license": "SEE LICENSE IN LICENSE.md"
+}

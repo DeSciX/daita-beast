@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# realign pre-commit hard gate (daita-beast skill realign).
+#
+# Blocks a commit that introduces a one-way-sink violation (live code outside an
+# archive/ directory referencing a path inside it). This is the DETERMINISTIC layer of
+# the two-layer enforcement model: git hooks block what must not land; the Claude banner
+# hook only steers attention. Bypass in a genuine emergency with `git commit --no-verify`.
+#
+# Install (per repo):
+#   cp assets/git-hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+# or point core.hooksPath at a tracked hooks dir that contains this file:
+#   git config core.hooksPath .githooks   # then place this file at .githooks/pre-commit
+#
+# It runs the repo's vendored copy of check_archive_boundary.sh when there is one, else the plugin's
+# (DAITA_BEAST_SCRIPTS: the plugin's scripts directory). A missing checker blocks the commit, named.
+
+set -euo pipefail
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# Resolve the checker: prefer a repo-vendored copy, else the global skill install.
+CANDIDATES=(
+  "$REPO_ROOT/.githooks/check_archive_boundary.sh"
+  "$REPO_ROOT/scripts/check_archive_boundary.sh"
+  "${DAITA_BEAST_SCRIPTS:-/nonexistent}/realign/check_archive_boundary.sh"
+)
+CHECK=""
+for c in "${CANDIDATES[@]}"; do [ -f "$c" ] && CHECK="$c" && break; done
+
+if [ -z "$CHECK" ]; then
+  echo "realign pre-commit: check_archive_boundary.sh not found in .githooks/, scripts/ or \$DAITA_BEAST_SCRIPTS/realign/: set DAITA_BEAST_SCRIPTS or vendor it (git commit --no-verify bypasses in an emergency)." >&2
+  exit 1
+fi
+
+# --staged: block only NEW violations introduced by this commit, not legacy debt.
+bash "$CHECK" "$REPO_ROOT" --strict --staged
