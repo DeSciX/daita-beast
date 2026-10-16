@@ -1,4 +1,4 @@
-<!-- DeSciX Community License and Membership Agreement (DCMA), version 1. Rendered from its canonical LaTeX source with pandoc (-t markdown_strict --wrap=none); do not edit by hand. -->
+<!-- DeSciX Community License and Membership Agreement (DCMA), version 1. Rendered from its canonical source; do not edit by hand. -->
 
 # Preamble – The DeSciX Virtual University & App Store: Internal Collaboration, External Value Return
 

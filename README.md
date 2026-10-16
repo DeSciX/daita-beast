@@ -9,7 +9,7 @@ Read [docs/protocol.md](docs/protocol.md) first: a workstream is a GitHub Projec
 | Path | Holds |
 |---|---|
 | `docs/protocol.md` | the protocol: the mapping, the issue shapes, seats, decisions, workstreams, hand-backs |
-| `plugin/` | the plugin: skills (`install`, `seat`, `join`, `seats`, `board`, `decision`, `pr`, `publish`, `desk`, `respond`, `status`, `workstream`, `init-repo`, `relay`, `award`, `bounty`, `ledger`, `report`, `resume`, `connector`), agents (relay messenger and installer, moderator, reporter, seat-clerk), the PreToolUse permit hook and the SessionStart seat hook, REST-only scripts and templates |
+| `plugin/` | the plugin: skills (`install`, `seat`, `join`, `seats`, `board`, `decision`, `pr`, `publish`, `license`, `desk`, `respond`, `status`, `workstream`, `init-repo`, `relay`, `award`, `bounty`, `ledger`, `report`, `resume`, `connector`), agents (relay messenger and installer, moderator, reporter, seat-clerk, license-reviewer), the PreToolUse permit hook and the SessionStart seat hook, REST-only scripts and templates |
 | `plugin/templates/` | what the scripts stamp and render: the decision, workstream and bounty issue templates, the roster example, the generated CLAUDE.md block, the board page, labels |
 | `plugin/tests/` | the test suite (`npm test`) |
 | seat homes | `seat.sh new <LABEL>` adds a seat and creates its home (the checkout, a worktree `<repo>.seats/<LABEL>`, or a wrapper opened with `claude.sh`); the SessionStart hook names the seat in a session started there |
@@ -52,4 +52,4 @@ runs the suite under `plugin/tests/` with Node's built-in test runner (Node 22, 
 
 ## Roster
 
-A coordinating repo's seats, people and repos live in its committed `.beast/roster.json` (shape: `plugin/templates/roster.example.json`; fields: `docs/protocol.md`). Every default a script needs about your setup (the decider, the board repo, the public repo a private twin publishes to) is read from the roster, never built into the plugin.
+A coordinating repo's seats, people and repos live in its committed `.beast/roster.json` (shape: `plugin/templates/roster.example.json`; fields: `docs/protocol.md`). Every default a script needs about your setup (the decider, the board repo, the public repo a private twin publishes to, the license your public repos carry) is read from the roster, never built into the plugin.
