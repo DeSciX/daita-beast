@@ -1,0 +1,23 @@
+{
+  "repo": "<owner/repo>",
+  "coordinates": "<one line: what workstreams this repo coordinates>",
+  "board": "<owner/repo where this repo's deciders' pinned board is published>",
+  "seats": [
+    {
+      "label": "<LABEL>",
+      "role": "<what this seat owns>",
+      "repo": "<owner/repo it works in>",
+      "lane": "app",
+      "github": "<login>",
+      "tracking": "<owner/repo#N>",
+      "home": { "kind": "checkout", "branch": null }
+    }
+  ],
+  "people": [
+    {
+      "github": "<login>",
+      "name": "<name>",
+      "role": "<maintainer | collaborator | owner>"
+    }
+  ]
+}
