@@ -3,7 +3,8 @@
 # through a pull request on the public repo approved on a row in the twin. Run in a checkout of the twin.
 # "Twin main" is the twin's default branch on GitHub; "public main" the public repo's.
 # This script is the ONLY writer to a public repo: its pushes go through public_push and its API writes through
-# public_send, both below, both refusing any repo but the roster's publishes_to. coord_write_guard (lib.sh) still
+# public_send, both below, both refusing any repo but the roster's publishes_to. public_push never forces, except the one
+# sanctioned force-push (request --amend), leased on the PR's head. coord_write_guard (lib.sh) still
 # refuses every coordination write (rows, desks, status, notes, acks, review requests, the board) to that repo.
 #
 #   publish.sh prepare <slug> [--paths <path>... | --commits <sha>...] [--delete <path>]... --message-file <f>
@@ -21,6 +22,10 @@
 #       file, such as a coordination pointer). It is refused when the path overlaps a --paths item or is shadowed by a
 #       .publish/ overlay file (one source of truth per path), and when the path is not on public main (nothing to
 #       delete). The commit message gains a paragraph "Removed from this repository:" listing them, for the PR body.
+#   publish.sh prepare <slug> --amend [--paths <path>... | --commits <sha>...] [--delete <path>]... --message-file <f>
+#       rebuilds publish/<slug> for a publish already requested (its row open): the same ONE commit, cut from the public
+#       default branch as it is now, with the license and scrub gates rerun. Refused when the slug was never requested
+#       (no row of its title), when its row is closed, and when nothing changes.
 #   publish.sh scrub <slug> [--body-file <f>]
 #       the scrub gate (below) on the branch's one commit: its diff and its message (and the body file). A branch that is
 #       not exactly one commit on its public base (prepare's shape; for an empty public repo the empty root plus one
@@ -30,11 +35,17 @@
 #       outside-reader description), and files the approval row in the twin (decision.sh new, home repo,
 #       --decides <public>, approved with "publish <slug>", under --milestone, which is required when the twin has an
 #       open milestone and is checked before anything is pushed). Nothing else is written on the public repo.
+#   publish.sh request <slug> --amend --seat <SEAT> [--body-file <f>]
+#       after prepare --amend: re-gates, force-pushes publish/<slug> with --force-with-lease on the open PR's head (the one
+#       sanctioned force-push), retitles the PR (and replaces its body when given), then posts ONE line on the twin row:
+#       "Amended at <UTC>: <n> files; added <list>; removed <list>; changed <list>" (amend_line, lib.sh; lists cut after 8).
+#       An approval older than the row's latest amend line no longer counts (row_answer_url, lib.sh).
 #   publish.sh merge <slug> --words "<verbatim>" --by <SEAT> [--record <comment url | commit — path>]
 #       on "publish <slug>" (or bare approve, or "<phrase> — <comment>"): re-scrubs, squash-merges the PR, deletes the
 #       public branch, records public main as merged into twin main (a merge commit with twin main's own tree, so a
 #       later pull brings only outside changes), closes the row on the words. On "reject: …": closes the PR unmerged,
-#       deletes the branch, closes the row rejected. --record defaults to the decider's answer comment on the row.
+#       deletes the branch, closes the row rejected. --record defaults to the decider's answer comment on the row; on an
+#       amended row an approval is only the decider's comment newer than the latest amend line (--record is refused).
 #   publish.sh pull
 #       merges the public default branch into twin main (outside contributions), in the twin's main checkout on
 #       main with a clean tree; on a conflict it aborts the merge and names the conflicted files.
@@ -42,9 +53,20 @@
 #       scrubs the title and the notes (written for outside readers) and creates a GitHub Release <tag> on the public repo
 #       at its default branch, the notes its body; --check scrubs and writes nothing. An existing release of that tag with the same title and body is reused
 #       (a rerun); one that differs dies naming it. wrapup.sh run publishes a milestone's release notes through it.
+#   publish.sh scan [--roster <file>] [--patterns-file <f>] (--base <ref> | --tree <dir>) [--paths <path>...]
+#   publish.sh scan [--roster <file>] --dump-patterns
+#       the stable contract for other tools (lib.sh's functions are internal): the scrub gate's classes, through the same
+#       scrub_patterns and scrub_scan, on the diff <ref>..HEAD of the repo you stand in (and those commits' messages) or on
+#       every file of a directory, optionally only under --paths. Needs no twin checkout. One line per hit on stdout:
+#       "<file>:<line> <class> <match>" ("<path>:0 path-name <match>" for a path, "commit-message <class> <match>" for a
+#       message); exit 1 on any hit, 0 when clean, 2 on a usage or pattern error. --dump-patterns prints the pattern bag
+#       (the JSON scrub_patterns builds, from --roster or the repo's own roster); --patterns-file reads one, so a scan runs
+#       with no network.
 #
-# The scrub gate (scrub_patterns + the scanner, the one owner of what may not leave the twin; the roster's "scrub" and
-# "scrub_allow" are parsed by roster_scrub, lib.sh). The content classes read the added lines of each TEXT file; a
+# The license gate: when the roster names a "license", prepare and request refuse a publish whose public tree does not
+# carry it (license.sh check, the one owner of license checks, on the publish commit).
+# The scrub gate (scrub_patterns + scrub_scan in lib.sh, the one owner of what may not leave the twin; the roster's
+# "scrub" and "scrub_allow" are parsed by roster_scrub, lib.sh). The content classes read the added lines of each TEXT file; a
 # binary file (a NUL byte in its first 8000 bytes, git's test) is not read and is named on stderr. A hit is any of:
 #   private repo   an owner/repo slug (a URL included) of a private repo, any case: every repo the roster names that is
 #                  private, and every private repo of every owner the roster names (repo, publishes_to, board, seat
@@ -56,8 +78,10 @@
 #   local path     /Users/<name>/ or /home/<name>/ (a checkout path on a machine)
 #   BEAST- line    a filled-in coordination line: one starting BEAST-<WORD> with no <placeholder> or $variable
 #   record path    a records/ directory under org/ or docs/ (the dated records; RECORD_PATH_RE, lib.sh)
-#   words          any 12-character stretch (case and spacing folded) of the words on a closed row of the twin
-#                  (the close comment's verbatim words, decision rows and PR rows)
+#   words          a stretch of 5 consecutive words with at least 2 outside the common-word list (WORDS_*, lib.sh), case,
+#                  whitespace and punctuation folded, of the words on a closed row of the twin (the close comment's verbatim
+#                  words, decision rows and PR rows), except a close on the row's own approving phrase; the roster's
+#                  scrub_allow_words phrases are allowed
 #   roster scrub   a regex of the roster's "scrub" list: a string on every text file, message and body; a
 #                  {"pattern", "paths"} entry only on text files whose path matches one of its globs
 #   path name      every added or changed path: a secret-shaped file name (wallet.json, .env, .env.*, *.pem, *.key,
@@ -66,6 +90,62 @@
 # Each hit is printed as <file>:<line>, "<path>: path name", "commit <sha> message:<line>" or "body:<line>", with its
 # class; exit 1.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+# ---- scan: the stable offline contract (no twin checkout needed; no network with --patterns-file) --------------
+if [[ "${1:-}" == scan ]]; then
+  shift
+  scan_usage() {
+    echo "daita-beast: publish.sh scan: $*" >&2
+    echo "usage: publish.sh scan [--roster <file>] [--patterns-file <f>] (--base <ref> | --tree <dir>) [--paths <path>...]" >&2
+    echo "       publish.sh scan [--roster <file>] --dump-patterns" >&2
+    exit 2
+  }
+  command -v jq >/dev/null && command -v git >/dev/null && command -v python3 >/dev/null || scan_usage "needs jq, git and python3"
+  s_roster=""; s_pat=""; s_base=""; s_tree=""; s_dump=0; s_paths=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --roster) [[ -n "${2:-}" ]] || scan_usage "--roster takes a file"; s_roster="$2"; shift 2 ;;
+      --patterns-file) [[ -n "${2:-}" ]] || scan_usage "--patterns-file takes a file"; s_pat="$2"; shift 2 ;;
+      --base) [[ -n "${2:-}" ]] || scan_usage "--base takes a ref"; s_base="$2"; shift 2 ;;
+      --tree) [[ -n "${2:-}" ]] || scan_usage "--tree takes a directory"; s_tree="$2"; shift 2 ;;
+      --dump-patterns) s_dump=1; shift ;;
+      --paths) shift; while [[ $# -gt 0 && "$1" != --* ]]; do s_paths+=("$1"); shift; done
+        [[ ${#s_paths[@]} -gt 0 ]] || scan_usage "--paths names nothing" ;;
+      *) scan_usage "unknown argument $1" ;;
+    esac
+  done
+  [[ -z "$s_roster" || -f "$s_roster" ]] || scan_usage "no roster file $s_roster"
+  if [[ $s_dump -eq 1 ]]; then
+    [[ -z "$s_pat$s_base$s_tree" && ${#s_paths[@]} -eq 0 ]] || scan_usage "--dump-patterns takes only --roster"
+    ( scrub_patterns "$s_roster" ) || { echo "daita-beast: publish.sh scan: cannot derive the pattern bag (named above)" >&2; exit 2; }
+    exit 0
+  fi
+  [[ -n "$s_base" || -n "$s_tree" ]] || scan_usage "name --base <ref> or --tree <dir>"
+  [[ -z "$s_base" || -z "$s_tree" ]] || scan_usage "--base and --tree exclude each other"
+  [[ -z "$s_pat" || -z "$s_roster" ]] || scan_usage "--roster derives the patterns, --patterns-file reads them: name one"
+  s_tmp="$(mktemp -d)"; trap 'rm -rf "$s_tmp"' EXIT
+  if [[ -z "$s_pat" ]]; then
+    s_pat="$s_tmp/patterns.json"
+    ( scrub_patterns "$s_roster" ) > "$s_pat" || { echo "daita-beast: publish.sh scan: cannot derive the pattern bag (named above)" >&2; exit 2; }
+  fi
+  [[ -f "$s_pat" ]] || scan_usage "no patterns file $s_pat"
+  s_pf=""
+  if [[ ${#s_paths[@]} -gt 0 ]]; then s_pf="$s_tmp/paths"; printf '%s\n' "${s_paths[@]}" > "$s_pf"; fi
+  s_rc=0
+  if [[ -n "$s_tree" ]]; then
+    [[ -d "$s_tree" ]] || scan_usage "no directory $s_tree"
+    s_tree="$(cd "$s_tree" && pwd)"
+    scrub_scan "$s_tree" "$s_pat" "" "" "" contract "$s_tree" "$s_pf" || s_rc=$?
+  else
+    s_root="$(git rev-parse --show-toplevel 2>/dev/null)" || scan_usage "--base reads the git repo you stand in; $PWD is not in one"
+    s_b="$(git -C "$s_root" rev-parse --verify -q "$s_base^{commit}")" || scan_usage "--base $s_base is not a commit of $s_root"
+    git -C "$s_root" rev-parse --verify -q "HEAD^{commit}" >/dev/null || scan_usage "$s_root has no HEAD commit"
+    scrub_scan "$s_root" "$s_pat" "$s_b" HEAD "" contract "" "$s_pf" || s_rc=$?
+  fi
+  [[ $s_rc -le 2 ]] || s_rc=2
+  exit "$s_rc"
+fi
+
 need gh jq git python3
 
 EMPTY_TREE="$(git hash-object -t tree /dev/null)"
@@ -111,11 +191,18 @@ public_fetch() {
   echo "$db"
 }
 
-# public_push <src> <dst-ref>: the one git push to the public repo; never forced.
+# public_push <src> <dst-ref> [<lease sha>]: the one git push to the public repo. Never forced, except the one sanctioned
+# force-push, request --amend's: given a lease, it replaces <dst-ref> only while the public repo still has it at <lease sha>
+# (--force-with-lease), so a push nobody here saw is never overwritten.
 public_push() {
   local u; u="$(G remote get-url public)"
   [[ "$(sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##' <<< "$u" | tr 'A-Z' 'a-z')" == "$(tr 'A-Z' 'a-z' <<< "$PUB")" ]] || die "public_push: the remote public is $u, not $PUB"
-  G push -q public "$1:$2" || die "git push public $1:$2 ($PUB) failed"
+  if [[ -n "${3:-}" ]]; then
+    [[ "$3" =~ ^[0-9a-f]{40}$ ]] || die "public_push: the lease '$3' is not a full sha"
+    G push -q --force-with-lease="$2:$3" public "$1:$2" || die "git push --force-with-lease=$2:${3:0:12} public $1:$2 ($PUB) failed (named above): the public branch moved, or the push was refused; nothing was replaced"
+  else
+    G push -q public "$1:$2" || die "git push public $1:$2 ($PUB) failed"
+  fi
 }
 
 # public_send <METHOD> <repos/$PUB/...> [gh field args]: the one API write to the public repo (gh_send). Any other
@@ -202,167 +289,31 @@ publish_base() {
   echo "$base"
 }
 
-# ---- the scrub gate: the one owner of what may not leave the twin --------------------------------
-
-# scrub_patterns: JSON {slugs: [...], names: [...], skipped: [...], words: [{url, words}], roster: [{pattern, paths}]}: the
-# facts the scanner matches, derived from the roster and GitHub (every read through gh_get, so a warm cache costs no
-# quota). names are the bare names checked (exact case, 5 characters or more, not in the roster's scrub_allow); skipped
-# the bare names left out, whose slug form is still checked.
-scrub_patterns() {
-  local roster slugs="" names="" r o type me words rows n body excl priv lab rs
-  roster="$(roster_path)"
-  rs="$(roster_scrub "$roster")" || exit 1
-  excl="$(jq -r --arg p "$PUB" '[$p] + [(.public_intended // [])[] | select(contains("/"))] | map(ascii_downcase) | .[]' "$roster")"
-  me="$(gh_login)" || exit 1
-  # the repos the roster names: private on GitHub (the twin is private by roster_pair_check)
-  while IFS= read -r r; do
-    [[ -n "$r" ]] || continue
-    grep -qxF -- "$(tr 'A-Z' 'a-z' <<< "$r")" <<< "$excl" && continue
-    priv="$(gh_get "repos/$r" | jq -r .private)" || die "cannot read the visibility of $r (named above)"
-    [[ "$priv" != true ]] || { slugs+="$r"$'\n'; names+="${r#*/}"$'\n'; }
-  done < <(jq -r '[.repo, .board, (.seats[]?.repo)] | map(select(. != null)) | unique | .[]' "$roster")
-  # every private repo of every owner the roster names (repo, publishes_to, board, seat repos, tracking refs): an org's
-  # through orgs/<o>/repos?type=private, the gh login's through user/repos; another user's cannot be listed and dies
-  local lst
-  while IFS= read -r o; do
-    [[ -n "$o" ]] || continue
-    type="$(gh_get "users/$o" | jq -r .type)" || die "cannot read the GitHub account $o (named above)"
-    if [[ "$type" == Organization ]]; then lst="$(gh_get_all "orgs/$o/repos?type=private")" || die "cannot list the private repos of the org $o (named above): the scrub would pass them"
-    elif [[ "$(tr 'A-Z' 'a-z' <<< "$o")" == "$(tr 'A-Z' 'a-z' <<< "$me")" ]]; then lst="$(gh_get_all "user/repos?visibility=private&affiliation=owner")" || die "cannot list the private repos of $o (named above): the scrub would pass them"
-    else die "the roster names the user $o, whose private repos the gh login $me cannot list: the scrub cannot cover them"; fi
-    lst="$(jq -r '.[] | select(.private == true) | .full_name' <<< "$lst")" || die "cannot read the private repo list of $o"
-    slugs+="$lst"$'\n'; names+="$(sed 's#^[^/]*/##' <<< "$lst")"$'\n'
-  done < <(jq -r '[.repo, .publishes_to, .board, (.seats[]?.repo), (.seats[]?.tracking | select(. != null) | split("#")[0])] | map(select(. != null and contains("/")) | split("/")[0]) | unique_by(ascii_downcase) | .[]' "$roster")
-  slugs="$(printf '%s' "$slugs" | sed '/^$/d' | while IFS= read -r r; do grep -qxF -- "$(tr 'A-Z' 'a-z' <<< "$r")" <<< "$excl" || echo "$r"; done | sort -fu)"
-  # the bare names: those of the slugs that remain (the public target and exact public_intended entries are excluded above)
-  names="$(sed 's#^[^/]*/##' <<< "$slugs" | sort -u)"
-  # the words of every closed row of the twin (decision rows and PRs on the board)
-  words='[]'
-  for lab in decision needs-review; do
-    rows="$(issues_list "$TWIN" -f labels="$lab" -f state=closed | jq -r '.[].number')" || die "cannot list the closed $lab rows of $TWIN"
-    for n in $rows; do
-      body="$(issue_comments "$TWIN" "$n" | jq -c --arg u "https://github.com/$TWIN/issues/$n" '
-        [.[] | (.body // "") | capture("^(Closed|Rejected) on the word, verbatim: \"(?<w>.*)\"\n\nRecord: "; "p")? | {url: $u, words: .w}]')" \
-        || die "cannot read the comments of $TWIN#$n"
-      words="$(jq -c -s 'add' <(printf '%s\n' "$words") <(printf '%s\n' "$body"))"
-    done
-  done
-  jq -n --arg s "$slugs" --arg nm "$names" --argjson w "$words" --argjson rs "$rs" --arg rec "$RECORD_PATH_RE" '
-    ($nm | split("\n") | map(select(length > 0)) | unique) as $all
-    | ($all | map(select(length >= 5 and (. as $n | $rs.allow | index($n) | not)))) as $chk
-    | {slugs: ($s | split("\n") | map(select(length > 0))), names: $chk, skipped: ($all - $chk), words: ($w | unique_by(.words)),
-       roster: $rs.scrub, record_re: $rec}'
-}
+# ---- the scrub gate (scrub_patterns and scrub_scan, lib.sh: the one owner of what may not leave the twin) ----------
 
 # scrub_run <branch> <default> [<body file>]: prints every hit and returns 1, or prints a one-line pass. The branch must
 # have publish_base's shape (one commit on its public base; dies otherwise), so the scan reads exactly that commit's
 # diff and its message (and the empty root's, for an orphan). With an empty <branch> and <default>, only the body is
 # scanned (release notes).
-#   content classes  read the added lines of every TEXT file; a binary file (a NUL byte in its first 8000 bytes, git's
-#                    own test) is not read, and each one skipped is named on stderr
-#   path name        every added or changed path: a secret-shaped file name, a private repo slug or name, a roster
-#                    pattern (a scoped one only on the paths its globs match)
 scrub_run() {
-  local br="$1" db="$2" body="${3:-}" base="" pat
+  local br="$1" db="$2" body="${3:-}" base="" pat rc=0
   if [[ -n "$br" ]]; then base="$(publish_base "$br" "$db")" || exit 1; fi
   pat="$(mktemp)"
   scrub_patterns > "$pat" || { rm -f "$pat"; die "cannot derive the scrub patterns (named above)"; }
-  local rc=0
-  ( cd "$root" && python3 -I - "$pat" "$base" "$br" "$body" ) <<'PY' || rc=$?
-import codecs, fnmatch, json, re, subprocess, sys
-pat_file, base, br, body = sys.argv[1:5]
-P = json.load(open(pat_file))
-def git(*a):
-    return subprocess.run(["git", *a], check=True, capture_output=True).stdout
-rules = []   # (class, compiled regex, path globs or None for every text)
-for s in P["slugs"]:
-    rules.append(("private repo " + s, re.compile(r"(?<![A-Za-z0-9_.-])" + re.escape(s) + r"(?![A-Za-z0-9_-])", re.I), None))
-for n in P["names"]:   # exact case: a repo's own name, never the English word it may also be
-    rules.append(("private repo name " + n, re.compile(r"(?<![A-Za-z0-9_-])" + re.escape(n) + r"(?![A-Za-z0-9_-])"), None))
-rules.append(("local path", re.compile(r"(?<![A-Za-z0-9_.~-])/(Users|home)/[A-Za-z0-9._-]+/"), None))
-rules.append(("record path", re.compile(P["record_re"]), None))
-for e in P["roster"]:   # parsed and compiled once already by roster_scrub (lib.sh)
-    rules.append(("roster scrub /%s/%s" % (e["pattern"], "" if e["paths"] is None else " in " + ",".join(e["paths"])), re.compile(e["pattern"]), e["paths"]))
-def applies(globs, path):
-    return globs is None or (path is not None and any(fnmatch.fnmatchcase(path, g) for g in globs))
-SECRET_NAMES = ["wallet.json", ".env", ".env.*", "*.pem", "*.key", "id_rsa*", "id_ed25519*", "*.p12", "*.pfx", "keystore*.json", "credentials*.json"]
-beast_line = re.compile(r"^[\s>`'\"*#-]*BEAST-[A-Z]+(\s|$)")
-fold = lambda t: re.sub(r"\s+", " ", t).casefold()
-W = 12
-windows = {}
-for w in P["words"]:
-    f = fold(w["words"])
-    for i in range(len(f) - W + 1):
-        windows.setdefault(f[i:i+W], w["url"])
-hits = []
-def scan(where, lineno, line, path=None):
-    for cls, rx, globs in rules:
-        if not applies(globs, path): continue
-        m = rx.search(line)
-        if m: hits.append("%s:%d: %s: %s" % (where, lineno, cls, m.group(0)))
-    if beast_line.search(line) and not re.search(r"[<$]", line):
-        hits.append("%s:%d: BEAST- line: %s" % (where, lineno, line.strip()[:80]))
-    f = fold(line)
-    for i in range(len(f) - W + 1):
-        u = windows.get(f[i:i+W])
-        if u:
-            hits.append("%s:%d: words of %s: \"%s\"" % (where, lineno, u, f[i:i+W])); break
-def scan_path(path):
-    leaf = path.rsplit("/", 1)[-1].lower()
-    for g in SECRET_NAMES:
-        if fnmatch.fnmatchcase(leaf, g): hits.append("%s: path name: secret-shaped file name (%s)" % (path, g)); break
-    for cls, rx, globs in rules:
-        if not applies(globs, path): continue
-        m = rx.search(path)
-        if m: hits.append("%s: path name: %s: %s" % (path, cls, m.group(0)))
-binaries = set()
-if br:
-    # the files the one commit adds or changes (a deletion publishes no content), unquoted
-    raw = git("diff", "--raw", "-z", "--no-abbrev", "--no-renames", base, br).split(b"\0")
-    changed = []   # (path, blob sha, mode)
-    for i in range(0, len(raw) - 1, 2):
-        meta, path = raw[i].decode(), raw[i + 1].decode("utf-8", "surrogateescape")
-        _, mode, _, sha, st = meta.split(" ")   # ":<old mode> <new mode> <old sha> <new sha> <status>"
-        if st != "D": changed.append((path, sha, mode))
-    blobs = [(p, s) for p, s, m in changed if m != "160000"]
-    if blobs:
-        out = subprocess.run(["git", "cat-file", "--batch"], input=b"".join(s.encode() + b"\n" for _, s in blobs), check=True, capture_output=True).stdout
-        pos = 0
-        for p, s in blobs:
-            nl = out.index(b"\n", pos); size = int(out[pos:nl].split(b" ")[2]); data = out[nl + 1:nl + 1 + size]; pos = nl + 1 + size + 1
-            if b"\0" in data[:8000]: binaries.add(p)
-    for p, _, _ in changed: scan_path(p)
-    for p in sorted(binaries):
-        print("scrub: binary file %s not scanned for content (a NUL byte in its first 8000 bytes); its path name was checked" % p, file=sys.stderr)
-    # the added lines of the text files, with their new line numbers
-    diff = git("-c", "core.quotePath=false", "diff", "-U0", "--text", "--no-color", "--no-ext-diff", "--no-renames", base, br).decode("utf-8", "replace")
-    cur, ln, header = None, 0, False   # a "+++ " line names a file only in a file header, never inside a hunk
-    for line in diff.split("\n"):
-        if line.startswith("diff --git "):
-            header = True
-        elif header and line.startswith("+++ "):
-            t = line[4:]
-            if t.startswith('"'): t = codecs.escape_decode(t[1:-1].encode("latin-1", "backslashreplace"))[0].decode("utf-8", "replace")
-            cur = None if t == "/dev/null" else t[2:] if t.startswith("b/") else t
-            if cur in binaries: cur = None
-        elif line.startswith("@@"):
-            header = False; ln = int(re.match(r"@@ -\S+ \+(\d+)", line).group(1))
-        elif not header and line.startswith("+") and cur is not None:
-            scan(cur, ln, line[1:], cur); ln += 1
-    # the one commit's message, and the empty root's when the branch is an orphan
-    for sha in git("rev-list", br if git("rev-list", "--max-parents=0", br).decode().strip() == base else base + ".." + br).decode().split():
-        msg = git("log", "-1", "--format=%B", sha).decode("utf-8", "replace")
-        for i, l in enumerate(msg.split("\n"), 1): scan("commit %s message" % sha[:12], i, l)
-if body:
-    for i, l in enumerate(open(body, encoding="utf-8").read().split("\n"), 1): scan("body", i, l)
-if hits:
-    print("scrub: %d hit(s) on %s; nothing of this leaves the twin:" % (len(hits), br or body))
-    for h in hits: print("  " + h)
-    sys.exit(1)
-print("scrub: clean (%s from %s: %d private repo slugs, %d private repo names (%d short or allowed left to their slugs), %d closed rows' words, %d roster patterns checked; %d binary file(s) not read)" % (br or body, base[:12] or "-", len(P["slugs"]), len(P["names"]), len(P["skipped"]), len(P["words"]), len(P["roster"]), len(binaries)))
-PY
+  scrub_scan "$root" "$pat" "$base" "$br" "$body" || rc=$?
   rm -f "$pat"
   return $rc
+}
+
+# ---- the license gate (license.sh check: the one owner of license checks) --------------------------
+
+# license_gate <tree-ish>: when the roster names a "license", the public tree a publish makes must carry it (present,
+# its body the render's, its header the neutral one and clean, every manifest pointing at it); license.sh check prints
+# each item and fails on a miss. A roster without "license" passes.
+license_gate() {
+  local lic; lic="$(roster_license)" || exit 1
+  [[ -n "$lic" ]] || return 0
+  ( cd "$root" && "$BEAST_SCRIPTS/license.sh" check "$1" )
 }
 
 # ---- rows and pull requests of a slug ------------------------------------------------------------
@@ -382,14 +333,53 @@ slug_row() {
   echo "$got"
 }
 
+# slug_requested <slug>: the open approval row of a slug an amend may change; dies when the slug was never requested (no
+# row of that title in the twin, open or closed) or when its row is closed (a decided publish is not amended).
+slug_requested() {
+  local t all open
+  t="$(row_title "$1")"
+  all="$(issues_list "$TWIN" -f labels=decision -f state=all | jq -c --arg t "$t" '[.[] | select(.pull_request == null and .title == $t) | {number, state}]')" || die "cannot list the decision rows of $TWIN"
+  [[ "$(jq length <<< "$all")" -gt 0 ]] || die "$1 was never requested: no row \"$t\" in $TWIN (publish.sh request files it); an amend changes a requested publish, so prepare and request it instead"
+  open="$(jq -r '[.[] | select(.state == "open") | .number] | join(" ")' <<< "$all")"
+  [[ -n "$open" ]] || die "the row of $1 is closed ($TWIN#$(jq -r '[.[].number] | join(", #")' <<< "$all")): a decided publish is not amended; prepare a new slug"
+  [[ "$open" != *" "* ]] || die "several open rows \"$t\" in $TWIN: #${open// /, #}; close the extra ones"
+  echo "$open"
+}
+
+# amend_summary <old head> <new head> <default>: the change an amend makes to a publish, as "<n>\t<added>\t<removed>\t<changed>":
+# n the files the new publish commit touches; added the paths it touches that the old one did not, removed the reverse,
+# changed the paths both touch with a different result. Each list is comma-joined, "none" when empty, cut after 8 with
+# "… (+<k> more)".
+amend_summary() {
+  local ob nb
+  ob="$(publish_base "$1" "$3")" || exit 1
+  nb="$(publish_base "$2" "$3")" || exit 1
+  python3 -I - <(G diff --raw -z --no-abbrev --no-renames "$ob" "$1") <(G diff --raw -z --no-abbrev --no-renames "$nb" "$2") <<'PY'
+import sys
+def files(fn):
+    raw = open(fn, "rb").read().split(b"\0"); out = {}
+    for i in range(0, len(raw) - 1, 2):
+        _, _, _, sha, st = raw[i].decode().split(" ")
+        out[raw[i + 1].decode("utf-8", "surrogateescape")] = (st, sha)
+    return out
+old, new = files(sys.argv[1]), files(sys.argv[2])
+def show(ps):
+    ps = sorted(ps)
+    if not ps: return "none"
+    return ", ".join(ps[:8]) + (" … (+%d more)" % (len(ps) - 8) if len(ps) > 8 else "")
+print("\t".join([str(len(new)), show(set(new) - set(old)), show(set(old) - set(new)), show(p for p in set(old) & set(new) if old[p] != new[p])]))
+PY
+}
+
 # ---- verbs -----------------------------------------------------------------------------------------
 cmd="${1:-}"; shift || true
 case "$cmd" in
   prepare)
     slug="${1:-}"; shift || true; slug_check "$slug"
-    mode=""; items=(); msg=""; dels=()
+    mode=""; items=(); msg=""; dels=(); amend=0
     while [[ $# -gt 0 ]]; do
       case "$1" in
+        --amend) amend=1; shift ;;
         --paths|--commits) [[ -z "$mode" ]] || die "--paths and --commits exclude each other"; mode="${1#--}"; shift
           while [[ $# -gt 0 && "$1" != --* ]]; do items+=("$1"); shift; done ;;
         --delete) [[ -n "${2:-}" && "$2" != --* ]] || die "--delete takes one path"; dels+=("$2"); shift 2 ;;
@@ -401,10 +391,17 @@ case "$cmd" in
     [[ -z "$mode" || ${#items[@]} -gt 0 ]] || die "--$mode names nothing"
     [[ -n "$msg" && -f "$msg" ]] || die "prepare needs --message-file <f>: the commit message, written for outside readers"
     [[ -n "$(head -1 "$msg" | tr -d '[:space:]')" ]] || die "$msg: the first line (the commit's subject) is empty"
+    roster_scrub >/dev/null || exit 1   # a malformed scrub entry is named before any gate runs
     br="publish/$slug"
-    ! G rev-parse --verify -q "refs/heads/$br" >/dev/null || die "$br exists in $root: delete it (git branch -D $br) or choose another slug"
-    db="$(public_fetch)" || exit 1
-    ! G rev-parse --verify -q "refs/remotes/public/$br" >/dev/null || die "$PUB already has a branch $br: choose another slug"
+    if [[ $amend -eq 1 ]]; then
+      slug_requested "$slug" >/dev/null || exit 1
+      db="$(public_fetch)" || exit 1
+      was="$(G rev-parse --verify -q "refs/remotes/public/$br")" || die "$PUB has no branch $br: the request's push never landed; nothing to amend"
+    else
+      ! G rev-parse --verify -q "refs/heads/$br" >/dev/null || die "$br exists in $root: delete it (git branch -D $br) or choose another slug"
+      db="$(public_fetch)" || exit 1
+      ! G rev-parse --verify -q "refs/remotes/public/$br" >/dev/null || die "$PUB already has a branch $br: choose another slug"
+    fi
     if G rev-parse --verify -q "refs/remotes/public/$db" >/dev/null; then
       parent="$(G rev-parse "refs/remotes/public/$db")"
     else
@@ -463,10 +460,20 @@ case "$cmd" in
     if [[ ${#dpaths[@]} -gt 0 ]]; then { printf '\nRemoved from this repository:\n'; printf -- '- %s\n' "${dpaths[@]}"; } >> "$fmsg"; fi
     commit="$(G commit-tree "$tree" -p "$parent" -F "$fmsg")" || { rm -f "$fmsg"; die "cannot make the publish commit"; }
     rm -f "$fmsg"
-    # the gate on the commit before any branch exists: on a hit nothing is created
+    # the gates on the commit before any branch exists: on a miss or a hit nothing is created
+    license_gate "$commit" || die "prepare refused by the license check: the public tree would not carry the roster's license (named above); no branch was created. Render it in the twin (license.sh render -o <file>), commit it and add it to --paths"
     G update-ref "refs/publish-scrub/$slug" "$commit"
     if ! scrub_run "refs/publish-scrub/$slug" "$db"; then G update-ref -d "refs/publish-scrub/$slug"; die "prepare refused by the scrub gate: no branch was created; fix the hits (or the message file) and run prepare again"; fi
     G update-ref -d "refs/publish-scrub/$slug"
+    if [[ $amend -eq 1 ]]; then
+      [[ "$tree" != "$(G rev-parse "$was^{tree}")" || "$(G log -1 --format=%B "$commit")" != "$(G log -1 --format=%B "$was")" ]] \
+        || die "nothing to amend: $PUB's $br (${was:0:12}) already carries this tree and message"
+      G update-ref "refs/heads/$br" "$commit" || die "cannot set $br"
+      echo "amended $br to $(G rev-parse --short "$commit") on public $db ($(G rev-parse --short "$parent")); the PR is at ${was:0:12}:"
+      G diff --stat "$parent" "$commit" | sed 's/^/  /'
+      echo "next: publish.sh request $slug --amend --seat <SEAT> [--body-file <f>]"
+      exit 0
+    fi
     G update-ref "refs/heads/$br" "$commit" "" || die "cannot create $br"
     echo "prepared $br at $(G rev-parse --short "$commit") on public $db ($(G rev-parse --short "$parent")):"
     G diff --stat "$parent" "$commit" | sed 's/^/  /'
@@ -485,15 +492,61 @@ case "$cmd" in
     ;;
   request)
     slug="${1:-}"; shift || true; slug_check "$slug"
-    seat=""; body=""; ms=""
+    seat=""; body=""; ms=""; amend=0
     while [[ $# -gt 0 ]]; do
       case "$1" in
+        --amend) amend=1; shift ;;
         --seat) seat="$2"; shift 2 ;;
         --body-file) body="$2"; shift 2 ;;
         --milestone) ms="$2"; shift 2 ;;
         *) die "unknown argument $1" ;;
       esac
     done
+    roster_scrub >/dev/null || exit 1   # a malformed scrub entry is named before any gate runs
+    if [[ $amend -eq 1 ]]; then
+      # the amend: re-gate, force-update the PR branch (leased on the PR's head), retitle the PR, one line on the row
+      [[ -n "$seat" && ( -z "$body" || -f "$body" ) ]] || die "usage: publish.sh request <slug> --amend --seat <SEAT> [--body-file <f>]"
+      [[ -z "$ms" ]] || die "--milestone belongs to the first request: an amend keeps the row where it is"
+      seat="$(seat_rostered "$seat")" || exit 1
+      row="$(slug_requested "$slug")" || exit 1
+      br="publish/$slug"
+      G rev-parse --verify -q "refs/heads/$br" >/dev/null || die "no branch $br in $root (publish.sh prepare $slug --amend rebuilds it)"
+      db="$(public_fetch)" || exit 1
+      publish_base "$br" "$db" >/dev/null || exit 1
+      license_gate "$br" || die "the amend was refused by the license check (named above): nothing was pushed"
+      scrub_run "$br" "$db" "$body" || die "the amend was refused by the scrub gate: nothing was pushed"
+      n="$(slug_pr "$slug" open)" || die "cannot list the pull requests of $PUB"
+      [[ -n "$n" ]] || die "no open PR from $br on $PUB: nothing to amend"
+      prh="$(gh_get "repos/$PUB/pulls/$n" | jq -r '.head.sha // empty')" || die "cannot read $PUB#$n"
+      there="$(G rev-parse --verify -q "refs/remotes/public/$br")" || die "$PUB has no branch $br"
+      [[ "$there" == "$prh" ]] || die "$PUB's $br is at ${there:0:12} but $PUB#$n names its head ${prh:0:12}: fetch again; nothing was pushed"
+      head="$(G rev-parse "$br")"
+      pend="refs/publish-amend/$slug"   # the replaced head, kept until the row carries the amend line
+      if [[ "$head" == "$prh" ]]; then
+        old="$(G rev-parse --verify -q "$pend")" || die "nothing to amend: $PUB's $br is already at ${head:0:12} (publish.sh prepare $slug --amend rebuilds it)"
+        echo "the branch is already force-updated (${old:0:12} -> ${head:0:12}) but the row has no line for it: posting it now" >&2
+      else
+        ( publish_base "refs/remotes/public/$br" "$db" ) >/dev/null 2>&1 || die "$PUB's $br (${prh:0:12}) is not one publish commit on its public base: someone else pushed to the PR branch; nothing was pushed. Look at it on $PUB#$n before anything replaces it"
+        old="$prh"
+        G update-ref "$pend" "$old"
+        public_push "$br" "refs/heads/$br" "$old"
+        echo "force-updated $PUB's $br: ${old:0:12} -> ${head:0:12} (--force-with-lease on ${old:0:12})"
+      fi
+      sum="$(amend_summary "$old" "$head" "$db")" || exit 1
+      IFS=$'\t' read -r nf added removed changed <<< "$sum"
+      args=(-f title="$(G log -1 --format=%s "$br")")
+      [[ -z "$body" ]] || args+=(-F body=@"$body")
+      public_send PATCH "repos/$PUB/pulls/$n" "${args[@]}" >/dev/null
+      echo "retitled $PUB#$n${body:+ and replaced its body}"
+      coord_write_guard "$TWIN"
+      line="$(amend_line "$nf" "$added" "$removed" "$changed")"
+      url="$(issue_comment "$TWIN" "$row" "$line")" || die "the PR branch is amended but the line on $TWIN#$row was NOT posted (named above): an earlier approval would still read as standing; rerun publish.sh request $slug --amend --seat $seat"
+      G update-ref -d "$pend"
+      echo "$url"
+      echo "$line"
+      echo "an approval given before this amend no longer counts: the decider approves again on $TWIN#$row"
+      exit 0
+    fi
     [[ -n "$seat" && -n "$body" && -f "$body" ]] || die "usage: publish.sh request <slug> --seat <SEAT> --body-file <f> [--milestone \"<title>\"]"
     seat="$(seat_rostered "$seat")" || exit 1
     decider="$(roster_decider)" || exit 1
@@ -503,6 +556,7 @@ case "$cmd" in
     G rev-parse --verify -q "refs/heads/$br" >/dev/null || die "no branch $br in $root (publish.sh prepare makes it)"
     db="$(public_fetch)" || exit 1
     base="$(publish_base "$br" "$db")" || exit 1
+    license_gate "$br" || die "request refused by the license check (named above): nothing was pushed"
     scrub_run "$br" "$db" "$body" || die "request refused by the scrub gate: nothing was pushed"
     if ! G rev-parse --verify -q "refs/remotes/public/$db" >/dev/null; then
       public_push "$base" "refs/heads/$db"
@@ -550,8 +604,12 @@ case "$cmd" in
       *) die "the words \"$words\" neither approve (\"publish $slug\") nor reject (\"reject: …\"): a question back, answered on the row" ;;
     esac
     row="$(slug_row "$slug")" || exit 1
+    rowj="$(row_read "$TWIN" "$row")" || exit 1
+    amended="$(row_amended_at "$rowj")"
+    [[ -z "$rec" || -z "$amended" || "$kind" != approve ]] \
+      || die "$TWIN#$row was amended at $amended: the approval is the decider's comment on the row after it (row_answer_url), and --record cannot show when words given elsewhere were given; nothing merged"
     if [[ -z "$rec" ]]; then
-      rec="$(row_answer_url "$(row_read "$TWIN" "$row")" "publish $slug" "$kind")" || exit 1
+      rec="$(row_answer_url "$rowj" "publish $slug" "$kind")" || exit 1
       [[ -n "$rec" ]] || die "the decider's standing answer on $TWIN#$row is not a $kind comment: words typed to a session are recorded first; pass --record <commit — path>"
     fi
     br="publish/$slug"

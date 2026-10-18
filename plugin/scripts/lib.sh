@@ -769,43 +769,75 @@ row_phrase() {
   echo "daita-beast: $who: '## Approve with' carries no quoted phrase; bare approve/revise:/reject: still count" >&2
 }
 
+# The amend line: the one line publish.sh request --amend posts on a publish row after it force-updates the PR branch.
+# One owner of its shape: amend_line writes it, row_amended_at reads it.
+#   Amended at <UTC>: <n> files; added <list>; removed <list>; changed <list>
+AMEND_LINE_RE='^Amended at [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z: '
+
+# amend_line <n files> <added> <removed> <changed>: the line, the lists already joined and truncated ("none" when empty).
+amend_line() { printf 'Amended at %s: %s files; added %s; removed %s; changed %s' "$(utc_now)" "$1" "$2" "$3" "$4"; }
+
+# row_amended_at <row>: (a row_read result) the created_at of the row's newest comment whose first line is an amend line,
+# or nothing. Any author counts: a stray amend line only makes an earlier approval read as stale (the safe direction).
+row_amended_at() {
+  jq -r --arg re "$AMEND_LINE_RE" '[.comments[] | select(((.body // "") | split("\n")[0]) | test($re)) | .created_at] | sort | last // empty' <<< "$1"
+}
+
 # row_answer_url <row> <phrase> <approve|reject|revise>: (a row_read result) the URL of the decider's standing answer when it
 # is of that kind, else nothing. The standing answer is the newest comment by an assignee of the row whose first line is an
-# answer form (answer_kind): an approve followed by a revise is not an approval. The one reader of "the decider answered
-# this row so" (publish.sh merge, wrapup.sh run).
+# answer form (answer_kind): an approve followed by a revise is not an approval. An approve no newer than the row's latest
+# amend line (row_amended_at) approved what the amend replaced: it reads as not approved, named on stderr with the amend
+# time. The one reader of "the decider answered this row so" (publish.sh merge, wrapup.sh run).
 row_answer_url() {
   [[ $# -eq 3 ]] || die "row_answer_url takes <row> <phrase> <kind>, not $*"
   case "$3" in approve|reject|revise) ;; *) die "row_answer_url: kind is approve, reject or revise, not '$3'" ;; esac
-  local row="$1" phrase="$2" want="$3" a login u b k last_u="" last_k=""
+  local row="$1" phrase="$2" want="$3" a login at u b k last_u="" last_k="" last_at="" amended
   a="$(jq -r '[.issue.assignees[].login] | join(" ")' <<< "$row")" || die "row_answer_url: not a row_read result"
-  while IFS=$'\t' read -r login u b; do
+  while IFS=$'\t' read -r login at u b; do
     [[ -n "$login" && " $a " == *" $login "* ]] || continue
     k="$(answer_kind "$b" "$phrase")"; [[ -n "$k" ]] || continue
-    last_u="$u"; last_k="$k"
-  done < <(jq -r '.comments | sort_by(.created_at)[] | [.user.login, .html_url, ((.body // "") | split("\n")[0])] | @tsv' <<< "$row")
-  [[ "$last_k" != "$want" ]] || echo "$last_u"
+    last_u="$u"; last_k="$k"; last_at="$at"
+  done < <(jq -r '.comments | sort_by(.created_at)[] | [.user.login, .created_at, .html_url, ((.body // "") | split("\n")[0])] | @tsv' <<< "$row")
+  [[ "$last_k" == "$want" ]] || return 0
+  amended="$(row_amended_at "$row")"
+  if [[ "$want" == approve && -n "$amended" && ! "$last_at" > "$amended" ]]; then
+    echo "daita-beast: the approval $last_u ($last_at) predates the amend at $amended: not approved; the decider approves again on the row, after the amend" >&2
+    return 0
+  fi
+  echo "$last_u"
 }
 
 # RECORD_PATH_RE: the dated records' directory (an ERE and a Python regex alike). The publish scrub refuses it in what
 # leaves the twin; wrapup.sh plan deletes the record files a closed row names under it. One owner of the shape.
 RECORD_PATH_RE='(org|docs)/records/'
 
-# roster_scrub [roster]: the one parser of the roster's "scrub" and "scrub_allow". Prints JSON
-# {"scrub": [{"pattern": <regex>, "paths": [<glob>...] | null}], "allow": [<bare name>...]}. A "scrub" entry is a regex
-# string (every text file, path name, commit message and body) or {"pattern": <regex>, "paths": [<glob>, ...]} (only text
-# files and path names whose public path matches a glob: Python fnmatch on the whole path, `*` crossing `/`). A
-# "scrub_allow" entry is a private repo's bare name that is also an ordinary word: the bare-name class skips exactly it.
-# Dies naming the first malformed entry: another type, another key, an empty pattern or paths list, a regex Python
-# cannot compile, an allow entry that is not a bare repo name.
+# The words class (scrub_scan): a closed row's words hit only as a stretch of WORDS_MIN consecutive words of which at
+# least WORDS_MIN_RARE are outside WORDS_COMMON (English stopwords and the protocol's verbs). A word is a WORDS_TOKEN_RE
+# match (a Python regex: letters and digits, so whitespace and punctuation only separate words), compared casefolded.
+# One owner of the rule: roster_scrub reads it to check scrub_allow_words, scrub_scan to match.
+WORDS_MIN=5
+WORDS_MIN_RARE=2
+WORDS_TOKEN_RE='[^\W_]+'
+WORDS_COMMON="a about above after again against all am an and any are as at be because been before being below between both but by can could did do does doing down during each few for from further had has have having he her here hers herself him himself his how i if in into is it its itself just me more most my myself no nor not now of off on once only or other our ours ourselves out over own same she should so some such than that the their theirs them themselves then there these they this those through to too under until up very was we were what when where which while who whom why will with would you your yours yourself yourselves approve publish merge close revise reject record"
+
+# roster_scrub [roster]: the one parser of the roster's "scrub", "scrub_allow" and "scrub_allow_words". Prints JSON
+# {"scrub": [{"pattern": <regex>, "paths": [<glob>...] | null}], "allow": [<bare name>...], "allow_words": [<phrase>...]}.
+# A "scrub" entry is a regex string (every text file, path name, commit message and body) or {"pattern": <regex>, "paths":
+# [<glob>, ...]} (only text files and path names whose public path matches a glob: Python fnmatch on the whole path, `*`
+# crossing `/`). A "scrub_allow" entry is a private repo's bare name that is also an ordinary word: the bare-name class
+# skips exactly it. A "scrub_allow_words" entry is an exact phrase of closed-row words that may publish: the words class
+# drops every stretch inside it, and nothing else. Dies naming the first malformed entry: another type, another key, an
+# empty pattern or paths list, a regex Python cannot compile, an allow entry that is not a bare repo name, an allowed
+# phrase that is not one line of at least WORDS_MIN words (shorter, it could never match).
 roster_scrub() {
   local r="${1:-}"; [[ -n "$r" ]] || r="$(roster_path)"
   [[ -f "$r" ]] || die "no roster at $r — run init-repo.sh for this repo first"
-  python3 -I - "$r" <<'PY' || exit 1
+  python3 -I - "$r" "$WORDS_TOKEN_RE" "$WORDS_MIN" <<'PY' || exit 1
 import json, re, sys
-r = sys.argv[1]
+r, tok_re, wmin = sys.argv[1], re.compile(sys.argv[2]), int(sys.argv[3])
 def die(m): sys.exit("daita-beast: roster %s: %s" % (r, m))
 R = json.load(open(r, encoding="utf-8"))
-out = {"scrub": [], "allow": []}
+out = {"scrub": [], "allow": [], "allow_words": []}
 s = R.get("scrub", [])
 if not isinstance(s, list): die("\"scrub\" is a list of entries, got %s" % json.dumps(s))
 for i, e in enumerate(s):
@@ -828,8 +860,291 @@ for i, n in enumerate(a):
     if not isinstance(n, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", n):
         die("scrub_allow[%d] %s: an entry is a private repo's bare name (no owner, no /), exact case" % (i, json.dumps(n)))
     out["allow"].append(n)
+w = R.get("scrub_allow_words", [])
+if not isinstance(w, list): die("\"scrub_allow_words\" is a list of exact phrases, got %s" % json.dumps(w))
+for i, p in enumerate(w):
+    where = "scrub_allow_words[%d] %s" % (i, json.dumps(p))
+    if not isinstance(p, str) or "\n" in p or not p.strip(): die("%s: an entry is a one-line phrase (a string)" % where)
+    n = len(tok_re.findall(p))
+    if n < wmin: die("%s: %d word(s); the words class matches stretches of %d words, so a shorter phrase could never be allowed" % (where, n, wmin))
+    out["allow_words"].append(p)
 print(json.dumps(out))
 PY
+}
+
+# roster_license [roster]: the one parser of the roster's "license": the license every public repo of the roster's owners
+# carries. Prints it as compact JSON {"name", "file", "manifest", "source": {"repo", "path", "render" | null, "checkout" |
+# null}}, or nothing when the roster has no "license". Dies naming the first malformed part: not an object, an unknown
+# key, a missing or empty string, a name that cannot sit in one HTML comment line, a file that is not a plain relative
+# path, a source repo that is not owner/repo, a checkout that is not an absolute path.
+roster_license() {
+  local r="${1:-}"; [[ -n "$r" ]] || r="$(roster_path)"
+  [[ -f "$r" ]] || die "no roster at $r — run init-repo.sh for this repo first"
+  python3 -I - "$r" <<'PY' || exit 1
+import json, re, sys
+r = sys.argv[1]
+def die(m): sys.exit("daita-beast: roster %s: \"license\": %s" % (r, m))
+R = json.load(open(r, encoding="utf-8"))
+if "license" not in R: sys.exit(0)
+L = R["license"]
+if not isinstance(L, dict): die("is an object {\"name\", \"file\", \"manifest\", \"source\"}, got %s" % json.dumps(L))
+def keys(o, allowed, where):
+    extra = sorted(set(o) - set(allowed))
+    if extra: die("%sunknown key(s) %s; allowed: %s" % (where + ": " if where else "", ", ".join(extra), ", ".join(allowed)))
+def text(o, k, where, required=True):
+    v = o.get(k)
+    if v is None and not required: return None
+    if not isinstance(v, str) or not v.strip() or "\n" in v: die("%s%s is a non-empty one-line string, got %s" % (where + "." if where else "", k, json.dumps(v)))
+    return v
+keys(L, ["name", "file", "manifest", "source", "vendored"], "")
+name, f, man = text(L, "name", ""), text(L, "file", ""), text(L, "manifest", "")
+if "--" in name: die("name %s: it sits in one HTML comment line, so it may not carry \"--\"" % json.dumps(name))
+if f.startswith("/") or any(p in ("", ".", "..") for p in f.split("/")): die("file %s: a plain path relative to a repo's root" % json.dumps(f))
+S = L.get("source")
+if not isinstance(S, dict): die("source is an object {\"repo\", \"path\", \"render\"?, \"checkout\"?}, got %s" % json.dumps(S))
+keys(S, ["repo", "path", "render", "checkout"], "source")
+repo, path = text(S, "repo", "source"), text(S, "path", "source")
+if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo): die("source.repo %s: owner/repo" % json.dumps(repo))
+if path.startswith("/") or any(p in ("", ".", "..") for p in path.split("/")): die("source.path %s: a plain path relative to the source repo's root" % json.dumps(path))
+render, co = text(S, "render", "source", False), text(S, "checkout", "source", False)
+if co is not None and not co.startswith("/"): die("source.checkout %s: an absolute path (a checkout of %s on this machine)" % (json.dumps(co), repo))
+V = L.get("vendored", [])
+if not isinstance(V, list) or not all(isinstance(v, str) and v.strip() and "\n" not in v and not v.startswith("/") and not any(p in ("", ".", "..") for p in v.rstrip("/").split("/")) for v in V):
+    die("vendored is a list of plain directory paths relative to a repo's root (copies of upstream packages whose manifests are not ours), got %s" % json.dumps(V))
+print(json.dumps({"name": name, "file": f, "manifest": man, "source": {"repo": repo, "path": path, "render": render, "checkout": co}, "vendored": [v.rstrip("/") for v in V]}))
+PY
+}
+
+# ---- the scrub gate: the one owner of what may not leave a private twin ----------------------------
+# scrub_patterns derives the facts, scrub_scan matches them; publish.sh (a publish's commit, body, release notes) and
+# license.sh (a license file's header) both run them. The classes are listed in docs/protocol.md, Publishing.
+
+# roster_repo_owners [roster]: every owner of a repo the roster names (repo, publishes_to, board, seat repos, tracking refs),
+# one per line, each once (case-insensitively). The scrub lists their private repos; license.sh audit their public ones.
+roster_repo_owners() {
+  local r="${1:-}"; [[ -n "$r" ]] || r="$(roster_path)"
+  [[ -f "$r" ]] || die "no roster at $r — run init-repo.sh for this repo first"
+  jq -r '[.repo, .publishes_to, .board, (.seats[]?.repo), (.seats[]?.tracking | select(. != null) | split("#")[0])] | map(select(. != null and contains("/")) | split("/")[0]) | unique_by(ascii_downcase) | .[]' "$r"
+}
+
+# scrub_patterns [roster]: the pattern bag, JSON {bag, slugs: [...], names: [...], skipped: [...], words: [{url, words}],
+# allow_words: [...], roster: [{pattern, paths}], record_re}: the facts the scanner matches, derived from the roster (the
+# repo's own by default) and GitHub (every read through gh_get, so a warm cache costs no quota). names are the bare names
+# checked (exact case, 5 characters or more, not in the roster's scrub_allow); skipped the bare names left out, whose slug
+# form is still checked. words are the verbatim close words of the twin's closed rows, except a row whose close words are
+# exactly its own approving phrase (its '## Approve with', approve_phrase): that phrase is the protocol's, not the decider's.
+scrub_patterns() {
+  local roster="${1:-}" twin pub slugs="" names="" r o type me words rows n body excl priv lab rs list phrase
+  [[ -n "$roster" ]] || roster="$(roster_path)"
+  [[ -f "$roster" ]] || die "no roster at $roster"
+  twin="$(jq -r '.repo // empty' "$roster")"
+  [[ "$twin" =~ ^[^/]+/[^/]+$ ]] || die "roster $roster has no \"repo\" (owner/repo), got '$twin'"
+  pub="$(jq -r '.publishes_to // empty' "$roster")"
+  rs="$(roster_scrub "$roster")" || exit 1
+  excl="$(jq -r --arg p "$pub" '[$p] + [(.public_intended // [])[] | select(contains("/"))] | map(ascii_downcase) | .[]' "$roster")"
+  me="$(gh_login)" || exit 1
+  # the repos the roster names: private on GitHub (the twin is private by roster_pair_check)
+  while IFS= read -r r; do
+    [[ -n "$r" ]] || continue
+    grep -qxF -- "$(tr 'A-Z' 'a-z' <<< "$r")" <<< "$excl" && continue
+    priv="$(gh_get "repos/$r" | jq -r .private)" || die "cannot read the visibility of $r (named above)"
+    [[ "$priv" != true ]] || { slugs+="$r"$'\n'; names+="${r#*/}"$'\n'; }
+  done < <(jq -r '[.repo, .board, (.seats[]?.repo)] | map(select(. != null)) | unique | .[]' "$roster")
+  # every private repo of every owner the roster names (repo, publishes_to, board, seat repos, tracking refs): an org's
+  # through orgs/<o>/repos?type=private, the gh login's through user/repos; another user's cannot be listed and dies
+  local lst
+  while IFS= read -r o; do
+    [[ -n "$o" ]] || continue
+    type="$(gh_get "users/$o" | jq -r .type)" || die "cannot read the GitHub account $o (named above)"
+    if [[ "$type" == Organization ]]; then lst="$(gh_get_all "orgs/$o/repos?type=private")" || die "cannot list the private repos of the org $o (named above): the scrub would pass them"
+    elif [[ "$(tr 'A-Z' 'a-z' <<< "$o")" == "$(tr 'A-Z' 'a-z' <<< "$me")" ]]; then lst="$(gh_get_all "user/repos?visibility=private&affiliation=owner")" || die "cannot list the private repos of $o (named above): the scrub would pass them"
+    else die "the roster names the user $o, whose private repos the gh login $me cannot list: the scrub cannot cover them"; fi
+    lst="$(jq -r '.[] | select(.private == true) | .full_name' <<< "$lst")" || die "cannot read the private repo list of $o"
+    slugs+="$lst"$'\n'; names+="$(sed 's#^[^/]*/##' <<< "$lst")"$'\n'
+  done < <(roster_repo_owners "$roster")
+  slugs="$(printf '%s' "$slugs" | sed '/^$/d' | while IFS= read -r r; do grep -qxF -- "$(tr 'A-Z' 'a-z' <<< "$r")" <<< "$excl" || echo "$r"; done | sort -fu)"
+  # the bare names: those of the slugs that remain (the public target and exact public_intended entries are excluded above)
+  names="$(sed 's#^[^/]*/##' <<< "$slugs" | sort -u)"
+  # the words of every closed row of the twin (decision rows and PRs on the board), less a close on the row's own phrase
+  words='[]'
+  for lab in decision needs-review; do
+    list="$(issues_list "$twin" -f labels="$lab" -f state=closed)" || die "cannot list the closed $lab rows of $twin"
+    rows="$(jq -r '.[].number' <<< "$list")"
+    for n in $rows; do
+      phrase="$(approve_phrase "$(jq -r --argjson n "$n" '.[] | select(.number == $n) | .body // ""' <<< "$list")")"
+      body="$(issue_comments "$twin" "$n" | jq -c --arg u "https://github.com/$twin/issues/$n" --arg p "$phrase" '
+        [.[] | (.body // "") | capture("^(Closed|Rejected) on the word, verbatim: \"(?<w>.*)\"\n\nRecord: "; "p")? | select($p == "" or .w != $p) | {url: $u, words: .w}]')" \
+        || die "cannot read the comments of $twin#$n"
+      words="$(jq -c -s 'add' <(printf '%s\n' "$words") <(printf '%s\n' "$body"))"
+    done
+  done
+  jq -n --arg s "$slugs" --arg nm "$names" --argjson w "$words" --argjson rs "$rs" --arg rec "$RECORD_PATH_RE" '
+    ($nm | split("\n") | map(select(length > 0)) | unique) as $all
+    | ($all | map(select(length >= 5 and (. as $n | $rs.allow | index($n) | not)))) as $chk
+    | {bag: "beast-scrub-patterns/1", slugs: ($s | split("\n") | map(select(length > 0))), names: $chk, skipped: ($all - $chk),
+       words: ($w | unique_by(.words)), allow_words: $rs.allow_words, roster: $rs.scrub, record_re: $rec}'
+}
+
+# scrub_scan <root> <patterns file> <base> <branch> <body file> [<format> [<tree dir> [<paths file>]]]: the scanner, the one
+# matcher of every class. Exit 0 clean, 1 on any hit, 2 on a malformed pattern bag or a scanner fault (never read as clean).
+#   diff mode   with a <branch>: the diff <base>..<branch> in the git tree <root> (the caller owns the branch's shape:
+#               publish_base, publish.sh) and the messages of the commits <base>..<branch>
+#   tree mode   with a <tree dir> (and empty <base> and <branch>): every file under it (.git excepted), whole
+#   body        the body file, when given
+#   paths file  one path per line: the diff or the tree is read only under those paths
+#   format      human (the default: a header, "  <where>:<line>: <class text>: <match>" per hit, or a pass line) or
+#               contract, publish.sh scan's stable shape: per hit "<file>:<line> <class> <match>" ("<path>:0 path-name
+#               <match>" for a path, "commit-message <class> <match>" for a message, "body:<line> <class> <match>"),
+#               nothing else on stdout. Classes: private-repo private-name local-path record-path roster-scrub
+#               beast-line words path-name.
+#   content classes  read every added line (diff) or every line (tree) of every TEXT file; a binary file (a NUL byte in its
+#                    first 8000 bytes, git's own test) is not read, and each one skipped is named on stderr
+#   path name        every added or changed path (diff) or every path (tree): a secret-shaped file name, a private repo
+#                    slug or name, a roster pattern (a scoped one only on the paths its globs match)
+scrub_scan() {
+  local root="$1" pat="$2" base="$3" br="$4" body="$5" fmt="${6:-human}" tree="${7:-}" paths="${8:-}" rc=0
+  case "$fmt" in human|contract) ;; *) echo "daita-beast: scrub_scan: format is human or contract, not '$fmt'" >&2; return 2 ;; esac
+  ( cd "$root" && python3 -I - "$pat" "$base" "$br" "$body" "$fmt" "$tree" "$paths" "$WORDS_TOKEN_RE" "$WORDS_MIN" "$WORDS_MIN_RARE" "$WORDS_COMMON" ) <<'PY' || rc=$?
+import codecs, fnmatch, json, os, re, subprocess, sys
+pat_file, base, br, body, fmt, tree, paths_file, tok_re, wmin, wrare, common = sys.argv[1:12]
+def fail(m):
+    print("daita-beast: scrub: %s" % m, file=sys.stderr); sys.exit(2)
+try:
+    P = json.load(open(pat_file, encoding="utf-8"))
+except Exception as x:
+    fail("the pattern bag %s is not JSON: %s" % (pat_file, x))
+SHAPE = {"slugs": list, "names": list, "skipped": list, "words": list, "allow_words": list, "roster": list, "record_re": str}
+if not isinstance(P, dict) or P.get("bag") != "beast-scrub-patterns/1":
+    fail("%s is not a pattern bag (\"bag\": \"beast-scrub-patterns/1\"; publish.sh scan --dump-patterns writes one)" % pat_file)
+for k, t in SHAPE.items():
+    if not isinstance(P.get(k), t): fail("the pattern bag %s: \"%s\" is missing or not a %s" % (pat_file, k, t.__name__))
+try:
+    want_paths = [l.strip().strip("/") for l in open(paths_file, encoding="utf-8") if l.strip()] if paths_file else []
+    def git(*a):
+        return subprocess.run(["git", *a], check=True, capture_output=True).stdout
+    rules = []   # (class id, class text, compiled regex, path globs or None for every text)
+    for s in P["slugs"]:
+        rules.append(("private-repo", "private repo " + s, re.compile(r"(?<![A-Za-z0-9_.-])" + re.escape(s) + r"(?![A-Za-z0-9_-])", re.I), None))
+    for n in P["names"]:   # exact case: a repo's own name, never the English word it may also be
+        rules.append(("private-name", "private repo name " + n, re.compile(r"(?<![A-Za-z0-9_-])" + re.escape(n) + r"(?![A-Za-z0-9_-])"), None))
+    rules.append(("local-path", "local path", re.compile(r"(?<![A-Za-z0-9_.~-])/(Users|home)/[A-Za-z0-9._-]+/"), None))
+    rules.append(("record-path", "record path", re.compile(P["record_re"]), None))
+    for e in P["roster"]:   # parsed and compiled once already by roster_scrub (lib.sh)
+        rules.append(("roster-scrub", "roster scrub /%s/%s" % (e["pattern"], "" if e["paths"] is None else " in " + ",".join(e["paths"])), re.compile(e["pattern"]), e["paths"]))
+    def applies(globs, path):
+        return globs is None or (path is not None and any(fnmatch.fnmatchcase(path, g) for g in globs))
+    SECRET_NAMES = ["wallet.json", ".env", ".env.*", "*.pem", "*.key", "id_rsa*", "id_ed25519*", "*.p12", "*.pfx", "keystore*.json", "credentials*.json"]
+    beast_line = re.compile(r"^[\s>`'\"*#-]*BEAST-[A-Z]+(\s|$)")
+    # the words class (WORDS_* in lib.sh): stretches of wmin consecutive words with at least wrare outside the common list
+    TOK, WMIN, WRARE, COMMON = re.compile(tok_re), int(wmin), int(wrare), set(common.split())
+    def words(t): return [w.casefold() for w in TOK.findall(t)]
+    def grams(ws, rare=True):
+        for i in range(len(ws) - WMIN + 1):
+            g = tuple(ws[i:i + WMIN])
+            if not rare or sum(1 for w in g if w not in COMMON) >= WRARE: yield g
+    windows = {}
+    for w in P["words"]:
+        for g in grams(words(w["words"])): windows.setdefault(g, w["url"])
+    for a in P["allow_words"]:   # the roster's scrub_allow_words: every stretch inside the phrase, and nothing else
+        for g in grams(words(a), rare=False): windows.pop(g, None)
+    hits = []   # (where, line or None, class id, class text, match); where is a file, "commit <sha>" or "body"
+    def scan(where, lineno, line, path=None, kind="file"):
+        for cid, cls, rx, globs in rules:
+            if not applies(globs, path): continue
+            m = rx.search(line)
+            if m: hits.append((kind, where, lineno, cid, cls, m.group(0)))
+        if beast_line.search(line) and not re.search(r"[<$]", line):
+            hits.append((kind, where, lineno, "beast-line", "BEAST- line", line.strip()[:80]))
+        for g in grams(words(line)):
+            u = windows.get(g)
+            if u:
+                hits.append((kind, where, lineno, "words", "words of " + u, " ".join(g))); break
+    def scan_path(path):
+        leaf = path.rsplit("/", 1)[-1].lower()
+        for g in SECRET_NAMES:
+            if fnmatch.fnmatchcase(leaf, g): hits.append(("path", path, None, "path-name", "path name: secret-shaped file name (%s)" % g, leaf)); break
+        for cid, cls, rx, globs in rules:
+            if not applies(globs, path): continue
+            m = rx.search(path)
+            if m: hits.append(("path", path, None, "path-name", "path name: " + cls, m.group(0)))
+    binaries = set()
+    def is_binary(data): return b"\0" in data[:8000]
+    def scan_text(path, data):
+        for i, l in enumerate(data.decode("utf-8", "replace").split("\n"), 1): scan(path, i, l, path)
+    spec = ["--", *want_paths] if want_paths else []
+    if tree:
+        for top, dirs, files in os.walk(tree):
+            dirs[:] = sorted(d for d in dirs if d != ".git")
+            for f in sorted(files):
+                rel = os.path.relpath(os.path.join(top, f), tree).replace(os.sep, "/")
+                if want_paths and not any(rel == p or rel.startswith(p + "/") for p in want_paths): continue
+                scan_path(rel)
+                data = open(os.path.join(top, f), "rb").read()
+                if is_binary(data): binaries.add(rel)
+                else: scan_text(rel, data)
+    elif br:
+        # the files the diff adds or changes (a deletion publishes no content), unquoted
+        raw = git("diff", "--raw", "-z", "--no-abbrev", "--no-renames", base, br, *spec).split(b"\0")
+        changed = []   # (path, blob sha, mode)
+        for i in range(0, len(raw) - 1, 2):
+            meta, path = raw[i].decode(), raw[i + 1].decode("utf-8", "surrogateescape")
+            _, mode, _, sha, st = meta.split(" ")   # ":<old mode> <new mode> <old sha> <new sha> <status>"
+            if st != "D": changed.append((path, sha, mode))
+        blobs = [(p, s) for p, s, m in changed if m != "160000"]
+        if blobs:
+            out = subprocess.run(["git", "cat-file", "--batch"], input=b"".join(s.encode() + b"\n" for _, s in blobs), check=True, capture_output=True).stdout
+            pos = 0
+            for p, s in blobs:
+                nl = out.index(b"\n", pos); size = int(out[pos:nl].split(b" ")[2]); data = out[nl + 1:nl + 1 + size]; pos = nl + 1 + size + 1
+                if is_binary(data): binaries.add(p)
+        for p, _, _ in changed: scan_path(p)
+        # the added lines of the text files, with their new line numbers
+        diff = git("-c", "core.quotePath=false", "diff", "-U0", "--text", "--no-color", "--no-ext-diff", "--no-renames", base, br, *spec).decode("utf-8", "replace")
+        cur, ln, header = None, 0, False   # a "+++ " line names a file only in a file header, never inside a hunk
+        for line in diff.split("\n"):
+            if line.startswith("diff --git "):
+                header = True
+            elif header and line.startswith("+++ "):
+                t = line[4:]
+                if t.startswith('"'): t = codecs.escape_decode(t[1:-1].encode("latin-1", "backslashreplace"))[0].decode("utf-8", "replace")
+                cur = None if t == "/dev/null" else t[2:] if t.startswith("b/") else t
+                if cur in binaries: cur = None
+            elif line.startswith("@@"):
+                header = False; ln = int(re.match(r"@@ -\S+ \+(\d+)", line).group(1))
+            elif not header and line.startswith("+") and cur is not None:
+                scan(cur, ln, line[1:], cur); ln += 1
+        # the messages of the commits base..branch, and the root's too when base is the branch's own root (an orphan publish)
+        for sha in git("rev-list", br if git("rev-list", "--max-parents=0", br).decode().strip() == base else base + ".." + br).decode().split():
+            msg = git("log", "-1", "--format=%B", sha).decode("utf-8", "replace")
+            for i, l in enumerate(msg.split("\n"), 1): scan("commit %s message" % sha[:12], i, l, None, "message")
+    for p in sorted(binaries):
+        print("scrub: binary file %s not scanned for content (a NUL byte in its first 8000 bytes); its path name was checked" % p, file=sys.stderr)
+    if body:
+        for i, l in enumerate(open(body, encoding="utf-8").read().split("\n"), 1): scan("body", i, l, None, "body")
+except SystemExit:
+    raise
+except Exception as x:
+    fail("the scanner failed (%s: %s); nothing is known clean" % (type(x).__name__, x))
+what = br or tree or body
+if fmt == "contract":
+    for kind, where, ln, cid, cls, m in hits:
+        m = m.replace("\n", " ")
+        if kind == "message": print("commit-message %s %s" % (cid, m))
+        elif kind == "path": print("%s:0 %s %s" % (where, cid, m))
+        else: print("%s:%d %s %s" % (where, ln, cid, m))
+    print("scrub: %s (%s: %d hit(s))" % ("clean" if not hits else "HITS", what, len(hits)), file=sys.stderr)
+    sys.exit(1 if hits else 0)
+if hits:
+    print("scrub: %d hit(s) on %s; nothing of this leaves the twin:" % (len(hits), what))
+    for kind, where, ln, cid, cls, m in hits:
+        if kind == "path": print("  %s: %s: %s" % (where, cls, m))
+        elif cid == "beast-line": print("  %s:%d: BEAST- line: %s" % (where, ln, m))
+        elif cid == "words": print("  %s:%d: %s: \"%s\"" % (where, ln, cls, m))
+        else: print("  %s:%d: %s: %s" % (where, ln, cls, m))
+    sys.exit(1)
+print("scrub: clean (%s from %s: %d private repo slugs, %d private repo names (%d short or allowed left to their slugs), %d closed rows' words, %d roster patterns checked; %d binary file(s) not read)" % (what, base[:12] or "-", len(P["slugs"]), len(P["names"]), len(P["skipped"]), len(P["words"]), len(P["roster"]), len(binaries)))
+PY
+  return $rc
 }
 
 # ---- rows: the board's two kinds (decision issues, pull requests for review) and the desks ----------

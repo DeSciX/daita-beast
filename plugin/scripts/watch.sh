@@ -108,7 +108,7 @@ poll() {
           # Only news is an event: the new comments, minus seat bookkeeping (BEAST-ACK / BEAST-STATUS / BEAST-NOTES
           # first lines, and close comments, which DECIDED already carries).
           read -r repo number < <(parse_issue_ref "$url")
-          news="$(issue_comments "$repo" "$number" 2>/dev/null | jq --argjson d "${delta:-1}" '[.[-$d:][] | ((.body // "") | split("\n")[0]) | select(test("^(BEAST-ACK|BEAST-STATUS|BEAST-NOTES) |^(Closed|Rejected) on the (decider.s )?word") | not)] | length' 2>/dev/null || echo 1)"
+          news="$(issue_comments "$repo" "$number" 2>/dev/null | jq --argjson d "${delta:-1}" --arg amend "$AMEND_LINE_RE" '[.[-$d:][] | ((.body // "") | split("\n")[0]) | select(test("^(BEAST-ACK|BEAST-STATUS|BEAST-NOTES) |^(Closed|Rejected) on the (decider.s )?word") or test($amend) | not)] | length' 2>/dev/null || echo 1)"
           if [[ "$news" -gt 0 ]]; then echo "BEAST-EVENT kind=UPDATED seat=$seat $title $url"; fi ;;
       esac
     done

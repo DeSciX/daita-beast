@@ -19,5 +19,15 @@
       "name": "<name>",
       "role": "<maintainer | collaborator | owner>"
     }
-  ]
+  ],
+  "license": {
+    "name": "<display name, e.g. Acme Community License, version 1>",
+    "file": "LICENSE.md",
+    "manifest": "SEE LICENSE IN LICENSE.md",
+    "source": {
+      "repo": "<owner/repo of the canonical source>",
+      "path": "<path of the source in it>",
+      "render": "pandoc -f latex -t markdown_strict --wrap=none"
+    }
+  }
 }
