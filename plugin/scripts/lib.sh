@@ -462,7 +462,10 @@ ws_seats_all() {
   while IFS=$'\t' read -r slug r n title url; do
     [[ -n "$slug" ]] || continue
     body="$(issue_get "$r" "$n" | jq -r '.body // ""')" || exit 1
-    rows="$(ws_seats_table_parse "$r#$n" "$(printf '%s\n' "$body" | section Seats)")" || exit 1
+    if ! rows="$(ws_seats_table_parse "$r#$n" "$(printf '%s\n' "$body" | section Seats)" 2>&1)"; then
+      # one repo's malformed table never blinds every seat on the machine: named once, skipped; ws_seats_parse <slug> still dies on it
+      echo "daita-beast: workstream $slug ($r#$n): its \`## Seats\` table does not parse; skipped by ws_seats_all (${rows#daita-beast: })" >&2; continue
+    fi
     [[ -z "$rows" ]] || awk -F'\t' -v s="$slug" -v t="$r#$n" -v ti="$title" 'NF {print s "\t" $0 "\t" t "\t" ti}' <<< "$rows"
   done < <(workstream_candidates) > "$memo.tmp" || { rm -f "$memo.tmp"; exit 1; }
   mv -f "$memo.tmp" "$memo"

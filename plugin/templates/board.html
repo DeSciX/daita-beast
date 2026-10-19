@@ -129,6 +129,8 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
 .dchip .bad { color: var(--hands); }
 .dchip[aria-pressed="true"] .bad { color: inherit; }
 .dchip .due { color: var(--warn); }
+.dchip .dim { color: var(--muted); font-weight: 400; }
+.dchip[aria-pressed="true"] .dim { color: inherit; opacity: 0.8; }
 .dchip[aria-pressed="true"] .due { color: inherit; }
 .desk { margin-bottom: 16px; }
 .ask { background: var(--sunk); border-radius: 6px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
@@ -408,7 +410,10 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
        BEAST-WITHDRAW n=<seq>                 ask n withdrawn by the seat
        BEAST-MSG from=<composite> to=<composite> re=<ref|none> blocking=no at=<UTC>   the seat-to-seat tag (lib.sh MSG_HEADER_RE), then the body
      A comment that is none of these and starts with no BEAST- line is a message from its author (the viewer, today).
-     A first line that names one of these four forms but does not match it is malformed: counted and shown, never guessed. */
+     A first line that names one of these four forms but does not match it is malformed: counted and shown, never guessed.
+     One exception, lib.sh desk_parse's rule: a BEAST-MSG line that does not match the shape (the pre-1.5.0 tag) on a
+     comment no newer than the seat's newest BEAST-ACK on the desk (ackLine, the one ack reader) is history the seat
+     acted on: counted in `history`, never listed. With no ack by the seat every line is in the window. */
   var ASK_RE = /^BEAST-ASK n=(\d+) seat=((?:[A-Za-z0-9-]+\/)?[A-Z0-9_-]+) at=(\S+)(?: milestone="([^"]+)")?\s*$/;
   var WAITS_RE = /^Waits on: ([A-Za-z0-9-]+\/[A-Z0-9_-]+|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[0-9]+)$/;
   var ANSWER_RE = /^BEAST-ANSWER n=(\d+)(?: (.*))?$/;
@@ -416,8 +421,13 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
   var MSG_RE = /^BEAST-MSG from=([a-z0-9][a-z0-9-]*\/[A-Z0-9_-]+\/[A-Za-z0-9-]+) to=([a-z0-9][a-z0-9-]*\/[A-Z0-9_-]+\/[A-Za-z0-9-]+) re=([^ ]+) blocking=no at=([^ ]+)$/;
   var DESK_FORM_RE = /^BEAST-(ASK|ANSWER|WITHDRAW|MSG)\b/;
   function parseDesk(list, deskSeat) {
-    var out = { asks: [], open: [], answered: [], withdrawn: [], messages: [], malformed: [], other: 0 }, byN = {}, replies = [];
+    var out = { asks: [], open: [], answered: [], withdrawn: [], messages: [], malformed: [], other: 0, history: 0, ackAt: null }, byN = {}, replies = [];
     var bad = function (c, why) { out.malformed.push({ url: c.html_url, at: c.created_at, line: String(c.body || "").split(/\r?\n/)[0], why: why }); };
+    /* The seat's newest ack on the desk (as lib.sh seat_acks: the newest at= among its well-formed BEAST-ACK lines). */
+    (list || []).forEach(function (c) {
+      var a = c && deskSeat ? ackLine(c.body, null, c.created_at) : null;
+      if (a && a !== "malformed" && seatMatch(a.seat, deskSeat) && (out.ackAt === null || String(a.at) > out.ackAt)) out.ackAt = String(a.at);
+    });
     (list || []).forEach(function (c) {
       if (!c) return;
       var lines = String(c.body || "").replace(/^\s+/, "").split(/\r?\n/), first = lines[0].replace(/\s+$/, ""), rest = lines.slice(1), m;
@@ -456,7 +466,10 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
         return;
       }
       if (form[1] === "MSG") {
-        if (!(m = MSG_RE.exec(first))) return bad(c, "not BEAST-MSG from=<composite> to=<composite> re=<ref|none> blocking=no at=<UTC>");
+        if (!(m = MSG_RE.exec(first))) {
+          if (out.ackAt !== null && String(c.created_at) <= out.ackAt) { out.history++; return; }
+          return bad(c, "not BEAST-MSG from=<composite> to=<composite> re=<ref|none> blocking=no at=<UTC>");
+        }
         out.messages.push({ from: m[1], to: m[2], re: m[3], at: c.created_at, body: rest.join("\n").trim(), url: c.html_url, plain: false });
         return;
       }
@@ -1008,6 +1021,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
           onclick: function () { openDesk(d); } },
           (d.seat ? seatText(d.seat) : "no seat label") + " · " + (d.s.deskErr ? "?" : n === null ? "…" : n) + " open asks",
           dk && dk.malformed.length ? h("span", { class: "bad", text: " · " + dk.malformed.length + " malformed" }) : null,
+          dk && dk.history ? h("span", { class: "dim", title: dk.history + " pre-1.5.0 message line" + (dk.history > 1 ? "s" : "") + " older than the seat's last ack (" + dk.ackAt + "): history, not read", text: " · " + dk.history + " earlier" }) : null,
           !d.seat ? h("span", { class: "bad", text: " · " + d.seats.length + " seat labels" }) : null));
         mine.forEach(function (m) { chip.appendChild(h("span", { class: m.days < 0 ? "bad" : "due", title: m.url, text: " · milestone " + dueText(m) })); });
       });
@@ -1091,6 +1105,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
       panel.appendChild(h("div", { class: "note err", text: dk.malformed.length + " malformed desk line" + (dk.malformed.length > 1 ? "s" : "") + ", not counted:" }));
       dk.malformed.forEach(function (x) { panel.appendChild(h("div", { class: "cmt" }, h("div", { class: "meta" }, h("a", { href: x.url, target: "_blank", rel: "noopener noreferrer", text: utc(x.at) }), " · " + x.why), h("div", { class: "mono", text: x.line }))); });
     }
+    if (dk.history) panel.appendChild(h("div", { class: "meta", text: dk.history + " earlier message line" + (dk.history > 1 ? "s" : "") + " (pre-1.5.0 tag) older than the seat's last ack (" + utc(dk.ackAt) + "): history, not read." }));
     panel.appendChild(h("div", { class: "lbl", text: "Open asks (" + dk.open.length + ")" }));
     if (!dk.open.length) panel.appendChild(h("div", { class: "meta", text: "No open asks." }));
     dk.open.forEach(function (a) { panel.appendChild(askCard(d, a)); });
