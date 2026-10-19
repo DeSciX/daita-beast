@@ -3,7 +3,7 @@
 # a seat (its seat:<login>/<LABEL> label; seat_label_terms owns which labels count). A row is a decision
 # issue, a PR labelled needs-review, or the seat's desk (RELAY_ROW_LABELS in lib.sh): a new ask answer or
 # message on a desk is an UPDATED for its seat.
-#   watch.sh --roster [--once] [--interval 120]           every seat in this repo's .beast/roster.json
+#   watch.sh --roster [--once] [--interval 120]           every seat of every open workstream among this repo's roster owners (ws_seats_all)
 #   watch.sh <LABEL | login/LABEL>... [--once] [--interval 120]   named seats only
 # Event lines (stdout):
 #   BEAST-EVENT kind=NEW seat=<id> state=<open|closed> <title> <url>            a decision concerning the seat appeared
@@ -25,7 +25,7 @@ need gh jq
 seats=(); interval=120; once=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --roster) ids="$(roster_seat_ids)" || exit 1; while IFS= read -r s; do [[ -n "$s" ]] && seats+=("$s"); done <<< "$ids"; shift ;;
+    --roster) ids="$(ws_seats_all | cut -f2)" || exit 1; while IFS= read -r s; do [[ -n "$s" ]] && seats+=("$s"); done <<< "$ids"; shift ;;
     --interval) interval="$2"; shift 2 ;;
     --once) once=1; shift ;;
     -*) die "unknown argument $1" ;;
