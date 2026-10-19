@@ -63,6 +63,7 @@ a.btn { display: inline-block; text-decoration: none; color: var(--ink); }
 .crow .status.work { color: var(--accent); }
 .crow .status.wait { color: var(--muted); }
 .crow .status.turn { font-weight: 700; }
+.crow .status .note { font-weight: 400; color: var(--muted); white-space: normal; }
 .turn-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-bottom: 12px; }
 .turn-head .big { font: 700 1.25rem/1.2 var(--display); }
 .turn-head .big.none { color: var(--ok); }
@@ -368,7 +369,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     var cl = CLOSER_RE.exec(String(body || ""));
     if (cl && ms(closedAt || createdAt) !== null) return { seat: cl[1], at: closedAt || createdAt, state: "seen" };
     var m = ACK_RE.exec(first) || ACK_RE.exec(last);
-    if (m && ms(m[2]) !== null) return { seat: m[1], at: m[2], state: m[3] };
+    if (m && ms(m[2]) !== null) { var nx = /\snext=(.+)$/.exec(m.input); return { seat: m[1], at: m[2], state: m[3], next: nx ? nx[1].trim() : "" }; }
     return /^BEAST-ACK/.test(first) || /^BEAST-ACK/.test(last) ? "malformed" : null;
   }
   function deriveRow(it, s, phrase) {
@@ -387,7 +388,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
       if (a === "malformed") { bad++; return; }
       if (!a) return;
       var cAt = ms(c.created_at) || 0, prev = acks[a.seat];
-      if (!prev || cAt >= prev.cAt) acks[a.seat] = { at: a.at, state: a.state, url: c.html_url, cAt: cAt };
+      if (!prev || cAt >= prev.cAt) acks[a.seat] = { at: a.at, state: a.state, next: a.next || "", url: c.html_url, cAt: cAt };
     });
     s.acks = acks; s.malformedAcks = bad; s.event = ev ? { at: ev.at, kind: ev.kind } : null;
     out.known = true; out.acks = acks; out.event = s.event; out.malformedAcks = bad;
@@ -644,23 +645,30 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
   /* ---------- whose turn ----------
      One plain-language status per open row, from what the page already reads:
        your answer on the issue (s.answered / s.thread) and each seat's newest BEAST-ACK (d.acks, d.unacked).
-     mine = the row waits on the viewer. Order matters: a seat reply after a revise, then executed / blocked acks
-     current with the row's latest event, then the viewer's own answer, else it is the viewer's turn. */
+     mine = the row waits on the viewer. Order: a seat reply after a revise is the viewer's turn; an ANSWERED row is with
+     the seats (revise → waiting on them; the newest ack current with the row's latest event: executed → working on it,
+     blocked → blocked; a seat unacked → hasn't picked it up; else they have it); an open row the viewer has NOT answered
+     is the viewer's turn whatever the seats acked — an ack says how the seat handled the row's latest event (filed it,
+     executed a part, is blocked), never who decides (docs/protocol.md: the board is a queue of rows waiting on the
+     decider's word). The newest current blocked / executed ack is then a muted note after "Your turn", with the ack's
+     next= text when it is blocked. */
   function turnOf(row) {
     var s = row.s, d = row.d, seats = d.seats, names = seats.length ? seats.map(seatText).join(", ") : "the seat";
     if (s.thread) return { mine: true, cls: "turn", text: "Your turn — " + names + " replied" };
     var newest = null;
     if (d.known) seats.forEach(function (x) { var a = ackFor(d.acks, x); if (a && d.current.indexOf(x) >= 0 && (!newest || a.cAt >= newest.a.cAt)) newest = { a: a, x: x }; });
-    if (newest && newest.a.state === "executed") return { mine: false, cls: "work", text: seatText(newest.x) + " working on it" };
-    if (newest && newest.a.state === "blocked") return { mine: false, cls: "turn", text: seatText(newest.x) + " blocked" };
     if (s.answered) {
       if (s.answered.kind === "revise") return { mine: false, cls: "wait", text: "Revision requested — waiting on " + names };
+      if (newest && newest.a.state === "executed") return { mine: false, cls: "work", text: seatText(newest.x) + " working on it" };
+      if (newest && newest.a.state === "blocked") return { mine: false, cls: "turn", text: seatText(newest.x) + " blocked" };
       if (!d.known) return { mine: false, cls: "done", text: "Answered" };
       var late = seats.filter(function (x) { return d.unacked.indexOf(x) >= 0; });
       return late.length ? { mine: false, cls: "wait", text: "Answered — " + late.map(seatText).join(", ") + " hasn't picked it up" }
                          : { mine: false, cls: "done", text: "Answered — " + names + " has it" };
     }
-    return { mine: true, cls: "turn", text: "Your turn" };
+    var note = !newest ? "" : newest.a.state === "blocked" ? seatText(newest.x) + " blocked" + (newest.a.next ? ": " + newest.a.next : "")
+             : newest.a.state === "executed" ? seatText(newest.x) + " executed its part" : "";
+    return { mine: true, cls: "turn", text: "Your turn", note: note };
   }
 
   /* ---------- cards ---------- */
@@ -688,7 +696,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     });
     if (s.malformedAcks) chips.appendChild(h("span", { class: "chip warn", title: "A BEAST-ACK line that does not parse is not counted as an ack", text: s.malformedAcks + " malformed BEAST-ACK line" + (s.malformedAcks > 1 ? "s" : "") }));
     if (chips.childNodes.length) bar.appendChild(chips);
-    if (tab === "decisions") { var tn = turnOf(row); bar.insertBefore(h("span", { class: "status " + tn.cls, text: tn.text }), bar.querySelector(".chips")); }
+    if (tab === "decisions") { var tn = turnOf(row); bar.insertBefore(h("span", { class: "status " + tn.cls, text: tn.text }, tn.note ? h("small", { class: "note", text: " · " + tn.note }) : null), bar.querySelector(".chips")); }
     return bar;
   }
 
