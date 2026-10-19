@@ -5,8 +5,9 @@
 #
 #   license.sh render [-o <file>]
 #       the expected license file: the source (from source.checkout's HEAD when the roster names a checkout, else
-#       through the GitHub contents API), rendered with source.render (a shell command, source on stdin; without it the
-#       source as-is), under ONE neutral header line naming no repo:
+#       through the GitHub contents API), rendered with source.render (a shell command, source on stdin,
+#       BEAST_SCRIPTS set to this directory so it can name a filter the plugin ships: pandoc/latex-crossrefs.lua; without
+#       it the source as-is), under ONE neutral header line naming no repo:
 #         <!-- <name>. Rendered from its canonical source; do not edit by hand. -->
 #       then an empty line. Stdout, or the file.
 #   license.sh check <dir | tree-ish>
@@ -20,24 +21,29 @@
 #                       and .git pruned)
 #       Each item prints ok or MISS; exit 1 on any miss, naming it. publish.sh prepare and request run it on the publish commit.
 #   license.sh audit
-#       every public repo of every owner the roster names (roster_repo_owners), at its default branch, read through the
+#       every public repo of every owner the roster names, public_intended owners included (roster_public_owners, lib.sh),
+#       at its default branch, read through the
 #       REST API (git trees and blobs; no clone), with the same checks. Prints one table: repo | license file | body
 #       matches | header clean | manifests | twin seat (the rostered seat whose repo is the private twin publishing to
-#       it). Exit 1 when any row misses or cannot be read.
+#       it). A repo the roster's license "exempt" lists (under its own license: a fork of an upstream project) is read no
+#       further and listed as "exempt", never a miss. Exit 1 when any row misses or cannot be read, or an exempt entry
+#       names no public repo of the owners (a stale exemption).
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 need gh jq git python3
 
 LIC="$(roster_license)" || exit 1
 [[ -n "$LIC" ]] || die "the roster $(roster_path) has no \"license\": nothing to render or check (docs/protocol.md, License)"
 L_NAME="$(jq -r .name <<< "$LIC")"; L_FILE="$(jq -r .file <<< "$LIC")"; L_MAN="$(jq -r .manifest <<< "$LIC")"
-# Manifests under a roster "vendored" directory belong to an upstream package copied in byte for byte: not ours, not held.
-L_VENDORED="$(jq -r '.vendored[]' <<< "$LIC")"; export L_VENDORED
+# Manifests under a roster "vendored" directory (roster_vendored, lib.sh) belong to an upstream package copied in byte for
+# byte: not ours, not held.
+L_VENDORED="$(roster_vendored)" || exit 1; L_VENDORED="$(jq -r '.[]' <<< "$L_VENDORED")"; export L_VENDORED
+L_EXEMPT="$(jq -r '.exempt[]' <<< "$LIC")"
 is_vendored() { local v; while IFS= read -r v; do [[ -n "$v" && ( "$1" == "$v"/* ) ]] && return 0; done <<< "$L_VENDORED"; return 1; }
 S_REPO="$(jq -r .source.repo <<< "$LIC")"; S_PATH="$(jq -r .source.path <<< "$LIC")"
 S_RENDER="$(jq -r '.source.render // empty' <<< "$LIC")"; S_CO="$(jq -r '.source.checkout // empty' <<< "$LIC")"
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+on_exit 'rm -rf "$TMP"'
 
 license_header() { printf '<!-- %s. Rendered from its canonical source; do not edit by hand. -->\n' "$L_NAME"; }
 
@@ -69,7 +75,7 @@ license_render() {
   license_source > "$src" || exit 1
   [[ -s "$src" ]] || die "the license source $S_REPO:$S_PATH is empty"
   if [[ -n "$S_RENDER" ]]; then
-    bash -c "$S_RENDER" < "$src" > "$body" || die "the render command \`$S_RENDER\` (license.source.render) failed on $S_REPO:$S_PATH (named above)"
+    BEAST_SCRIPTS="$BEAST_SCRIPTS" bash -c "$S_RENDER" < "$src" > "$body" || die "the render command \`$S_RENDER\` (license.source.render) failed on $S_REPO:$S_PATH (named above)"
   else
     cp "$src" "$body"
   fi
@@ -243,7 +249,7 @@ case "$cmd" in
       seats="$(jq -r --arg r "$r" '[.seats[]? | select((.repo // "" | ascii_downcase) == ($r | ascii_downcase)) | .label] | join(",")' "$roster")"
       twins="$(jq -c --arg p "$(tr 'A-Z' 'a-z' <<< "$p")" --arg s "${seats:-no seat}" '.[$p] = $s' <<< "$twins")"
     done < <(jq -r '[.repo, (.seats[]?.repo)] | map(select(. != null)) | unique_by(ascii_downcase) | .[]' "$roster")
-    rows="$TMP/rows"; : > "$rows"; bad=0
+    rows="$TMP/rows"; : > "$rows"; bad=0; seen_exempt=""
     while IFS= read -r o; do
       [[ -n "$o" ]] || continue
       type="$(gh_get "users/$o" | jq -r .type)" || die "cannot read the GitHub account $o (named above)"
@@ -253,6 +259,9 @@ case "$cmd" in
         [[ -n "$r" ]] || continue
         tag="$r"; [[ "$fork" != true ]] || tag+=" (fork)"; [[ "$arch" != true ]] || tag+=" (archived)"
         seat="$(jq -r --arg r "$(tr 'A-Z' 'a-z' <<< "$r")" '.[$r] // "-"' <<< "$twins")"
+        if grep -qixF -- "$r" <<< "$L_EXEMPT"; then
+          printf '%s\t%s\t-\t-\t-\t%s\n' "$tag" "exempt (its own license)" "$seat" >> "$rows"; seen_exempt+="$r"$'\n'; continue
+        fi
         if ! tree="$(gh_get "repos/$r/git/trees/$(uri "$db")?recursive=1" 2>"$TMP/err")"; then
           # an empty repo has no default branch to read (GitHub answers 404 or 409 and lists it with size 0)
           if [[ "$size" == 0 ]] && grep -Eq 'HTTP (404|409)' "$TMP/err"; then printf '%s\t%s\t-\t-\t-\t%s\n' "$tag" "no (an empty repo)" "$seat" >> "$rows"; bad=1; continue; fi
@@ -282,12 +291,17 @@ case "$cmd" in
             $seat ] | @tsv' <<< "$res" >> "$rows"
         jq -e --arg man "$L_MAN" '.present and .body and .header == "ok" and (.header_hits | length) == 0 and all(.manifests[]; .ok)' <<< "$res" >/dev/null || bad=1
       done < <(jq -r '.[] | select(.private == false) | [.full_name, (.default_branch // ""), .fork, .archived, .size] | @tsv' <<< "$lst")
-    done < <(roster_repo_owners "$roster")
+    done < <(roster_public_owners "$roster")
     echo "license.sh audit: $L_NAME in $L_FILE; manifests \"$L_MAN\"; read-only, at each public repo's default branch"
     echo
     echo "| repo | license file | body matches | header clean | manifests | twin seat |"
     echo "|---|---|---|---|---|---|"
     sort -f "$rows" | awk -F'\t' '{ for (i = 1; i <= NF; i++) gsub(/\|/, "\\|", $i); printf "| %s | %s | %s | %s | %s | %s |\n", $1, $2, $3, $4, $5, $6 }'
+    while IFS= read -r x; do
+      [[ -n "$x" ]] || continue
+      grep -qixF -- "$x" <<< "$seen_exempt" && continue
+      echo; echo "license audit: the roster's license \"exempt\" lists $x, which is not a public repo of the roster's owners (a stale exemption: remove it)"; bad=1
+    done <<< "$L_EXEMPT"
     [[ $bad -eq 0 ]] || { echo; echo "license audit: some public repos miss or drift (above)"; exit 1; }
     ;;
   *) die "usage: license.sh render [-o <file>] | check <dir | tree-ish> | audit (see the header of $0)" ;;

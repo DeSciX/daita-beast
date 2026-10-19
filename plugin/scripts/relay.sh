@@ -8,9 +8,13 @@
 # message from a sender in another permission mode (measured 2026-10-12: 23 lines "sent" to a
 # bypassPermissions seat from a default-mode messenger, none delivered), so the messenger runs in the
 # seats' mode, bypassPermissions by default. Delivery is the receiver's: a held message never reports
-# back to a one-shot sender, so the log says queued, never delivered.
+# back to a one-shot sender, so the log says queued, never delivered. An event whose seat has no direct address from this
+# machine (seats.sh address: its BEAST-ADDRESS comment names another account, another machine, or is stale) is logged
+# "no direct address from this machine: <seat>" and never reaches the messenger; when no event's seat has one, no
+# messenger starts and the tick spends no tokens.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$here/lib.sh"   # checkout_require_root; the run cache it makes is shared with the watch and the address reads
 repo=""; model="haiku"; pmode="bypassPermissions"; dry=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -21,7 +25,7 @@ while [[ $# -gt 0 ]]; do
     *) echo "relay.sh: unknown argument $1" >&2; exit 1 ;;
   esac
 done
-[[ -n "$repo" && -d "$repo/.git" ]] || { echo "relay.sh: --repo must be a git checkout holding .beast/roster.json" >&2; exit 1; }
+[[ -n "$repo" ]] || { echo "relay.sh: --repo must be a git checkout holding .beast/roster.json" >&2; exit 1; }; checkout_require_root "$repo"
 log="$HOME/.beast/relay.log"; mkdir -p "$HOME/.beast"
 stamp() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
@@ -39,16 +43,24 @@ printf '%s\n' "$events" | sed 's/^/  /' >> "$log"
 # The messenger is the plugin agent `relay-messenger` (plugin/agents/relay-messenger.md): its prompt
 # is the address map and the event list; its only tool is SendMessage.
 plugin="$(cd "$here/.." && pwd)"
-addresses=""
+addresses=""; send=""
 while IFS= read -r seat; do
   [[ -n "$seat" ]] || continue
-  if addr="$(cd "$repo" && "$here/seats.sh" address "$seat" 2>/dev/null)" && [[ -n "$addr" ]]; then
+  # seats.sh address: line 1 the address, then the facts, then "path: direct|desk — <why>"; only a direct path is relayed
+  # (same Claude account, same machine, fresh): a SendMessage address reaches a session only from there.
+  if out="$(cd "$repo" && "$here/seats.sh" address "$seat" 2>/dev/null)" && [[ -n "$out" ]] && grep -q '^path: direct' <<< "$out"; then
+    addr="$(head -1 <<< "$out")"
     addresses+="ADDRESS $seat = $addr"$'\n'
+    send+="$(printf '%s\n' "$events" | awk -v s="seat=$seat" '$3 == s')"$'\n'
   else
-    addresses+="ADDRESS $seat = none"$'\n'
+    echo "$(stamp) no direct address from this machine: $seat ($(grep '^path:' <<< "${out:-}" | head -1 || echo "none recorded"))" >> "$log"
   fi
 done < <(printf '%s\n' "$events" | sed -n 's/^BEAST-EVENT kind=[A-Z]* seat=\([^ ]*\).*/\1/p' | sort -u)
-prompt="$addresses$events"
+if [[ -z "$addresses" ]]; then
+  echo "$(stamp) relay: no messenger (no event's seat has a direct address from this machine)" >> "$log"
+  exit 0
+fi
+prompt="$addresses$send"
 out="$(cd "$repo" && claude -p "$prompt" --plugin-dir "$plugin" --agent "daita-beast:relay-messenger" \
         --model "$model" --permission-mode "$pmode" --max-turns 12 \
         --allowedTools "SendMessage" --disallowedTools "Bash" "Read" "Write" "Edit" "Agent" "WebFetch" "WebSearch" 2>&1)" || true

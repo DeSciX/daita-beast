@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # publish.sh — publish chosen changes of a private twin to its public repo (the roster's "publishes_to"),
 # through a pull request on the public repo approved on a row in the twin. Run in a checkout of the twin.
+# --seat / --by name the acting seat by LABEL, login/LABEL or identity, resolved through the workstream tables
+# (seat_id): a twin whose roster has no seat rows is worked by a seat rostered in its own home repo.
 # "Twin main" is the twin's default branch on GitHub; "public main" the public repo's.
 # This script is the ONLY writer to a public repo: its pushes go through public_push and its API writes through
 # public_send, both below, both refusing any repo but the roster's publishes_to. public_push never forces, except the one
@@ -66,7 +68,7 @@
 # The license gate: when the roster names a "license", prepare and request refuse a publish whose public tree does not
 # carry it (license.sh check, the one owner of license checks, on the publish commit).
 # The scrub gate (scrub_patterns + scrub_scan in lib.sh, the one owner of what may not leave the twin; the roster's
-# "scrub" and "scrub_allow" are parsed by roster_scrub, lib.sh). The content classes read the added lines of each TEXT file; a
+# "scrub", "scrub_allow" and "scrub_allow_words" are parsed by roster_scrub, its "vendored" by roster_vendored, lib.sh). The content classes read the added lines of each TEXT file; a
 # binary file (a NUL byte in its first 8000 bytes, git's test) is not read and is named on stderr. A hit is any of:
 #   private repo   an owner/repo slug (a URL included) of a private repo, any case: every repo the roster names that is
 #                  private, and every private repo of every owner the roster names (repo, publishes_to, board, seat
@@ -80,10 +82,14 @@
 #   record path    a records/ directory under org/ or docs/ (the dated records; RECORD_PATH_RE, lib.sh)
 #   words          a stretch of 5 consecutive words with at least 2 outside the common-word list (WORDS_*, lib.sh), case,
 #                  whitespace and punctuation folded, of the words on a closed row of the twin (the close comment's verbatim
-#                  words, decision rows and PR rows), except a close on the row's own approving phrase; the roster's
-#                  scrub_allow_words phrases are allowed
+#                  words, decision rows and PR rows), except a close on the row's own approving phrase. The roster's
+#                  scrub_allow_words: a phrase of 5 words or more drops every stretch inside it; a shorter phrase adds its
+#                  words to the common-word list (they no longer count toward the 2), and nothing else
 #   roster scrub   a regex of the roster's "scrub" list: a string on every text file, message and body; a
 #                  {"pattern", "paths"} entry only on text files whose path matches one of its globs
+#   vendored       under a directory of the roster's top-level "vendored" (byte-exact upstream copies; roster_vendored,
+#                  lib.sh) the private repo, private name, words and roster scrub classes are not applied to file content;
+#                  local path, BEAST- line, record path and path name still are
 #   path name      every added or changed path: a secret-shaped file name (wallet.json, .env, .env.*, *.pem, *.key,
 #                  id_rsa*, id_ed25519*, *.p12, *.pfx, keystore*.json, credentials*.json), and the private repo,
 #                  private name and roster scrub classes applied to the path itself
@@ -123,7 +129,7 @@ if [[ "${1:-}" == scan ]]; then
   [[ -n "$s_base" || -n "$s_tree" ]] || scan_usage "name --base <ref> or --tree <dir>"
   [[ -z "$s_base" || -z "$s_tree" ]] || scan_usage "--base and --tree exclude each other"
   [[ -z "$s_pat" || -z "$s_roster" ]] || scan_usage "--roster derives the patterns, --patterns-file reads them: name one"
-  s_tmp="$(mktemp -d)"; trap 'rm -rf "$s_tmp"' EXIT
+  s_tmp="$(mktemp -d)"; on_exit 'rm -rf "$s_tmp"'
   if [[ -z "$s_pat" ]]; then
     s_pat="$s_tmp/patterns.json"
     ( scrub_patterns "$s_roster" ) > "$s_pat" || { echo "daita-beast: publish.sh scan: cannot derive the pattern bag (named above)" >&2; exit 2; }
@@ -507,7 +513,7 @@ case "$cmd" in
       # the amend: re-gate, force-update the PR branch (leased on the PR's head), retitle the PR, one line on the row
       [[ -n "$seat" && ( -z "$body" || -f "$body" ) ]] || die "usage: publish.sh request <slug> --amend --seat <SEAT> [--body-file <f>]"
       [[ -z "$ms" ]] || die "--milestone belongs to the first request: an amend keeps the row where it is"
-      seat="$(seat_rostered "$seat")" || exit 1
+      seat="$(seat_id "$seat")" || exit 1
       row="$(slug_requested "$slug")" || exit 1
       br="publish/$slug"
       G rev-parse --verify -q "refs/heads/$br" >/dev/null || die "no branch $br in $root (publish.sh prepare $slug --amend rebuilds it)"
@@ -548,7 +554,7 @@ case "$cmd" in
       exit 0
     fi
     [[ -n "$seat" && -n "$body" && -f "$body" ]] || die "usage: publish.sh request <slug> --seat <SEAT> --body-file <f> [--milestone \"<title>\"]"
-    seat="$(seat_rostered "$seat")" || exit 1
+    seat="$(seat_id "$seat")" || exit 1
     decider="$(roster_decider)" || exit 1
     [[ -z "$ms" ]] || milestone_title_check "$ms"
     milestone_require "$TWIN" "$ms" >/dev/null || exit 1   # the row's milestone, checked before anything is pushed
@@ -596,7 +602,7 @@ case "$cmd" in
       esac
     done
     [[ -n "$words" && -n "$by" ]] || die "usage: publish.sh merge <slug> --words \"<verbatim>\" --by <SEAT> [--record <url | commit — path>]"
-    by="$(seat_rostered "$by")" || exit 1
+    by="$(seat_id "$by")" || exit 1
     kind="$(answer_kind "$words" "publish $slug")"
     case "$kind" in
       approve|reject) ;;

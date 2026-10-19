@@ -49,19 +49,7 @@ wrapup_row_title() { echo "Decision: Wrap up $1"; }
 wrapup_phrase() { echo "wrap up $1"; }
 lc() { tr 'A-Z' 'a-z' <<< "$1"; }
 
-# contents_path <path>: the path percent-encoded segment by segment, for a contents API URL.
-contents_path() { jq -rn --arg p "$1" '$p | split("/") | map(@uri) | join("/")'; }
-
-# default_branch <repo>
-default_branch() { gh_get "repos/$1" | jq -er '.default_branch' || die "cannot read the default branch of $1"; }
-
-# gh_status_of <path>: "200" when the GET answers, else the HTTP status GitHub gave (404, 410, …), for an existence check.
-gh_status_of() {
-  local err; err="$(mktemp)"
-  if gh_get "$1" >/dev/null 2>"$err"; then rm -f "$err"; echo 200; return 0; fi
-  sed -nE 's/.*HTTP ([0-9]{3}).*/\1/p' "$err" | head -1 | grep . || { cat "$err" >&2; rm -f "$err"; die "GET $1 failed without an HTTP status (named above)"; }
-  rm -f "$err"
-}
+# contents_path, default_branch and gh_status_of live in lib.sh (the workstream block render shares them).
 
 # ---- the plan: the one owner of its shape --------------------------------------------------------------------
 # plan_build <repo> <title> <carry | "">: the plan as JSON on stdout. Reads only; every read through gh_get.
@@ -168,8 +156,8 @@ for p in dict.fromkeys(out):
         else {del: {id, url, on: $tr, why: (.first | .[:60])}} end' <<< "$cs" > "$tmp/t"
     jq -c 'select(.del) | .del' "$tmp/t" >> "$tmp/comments"
     jq -c 'select(.keep) | .keep' "$tmp/t" >> "$tmp/keep"
-  done < <(jq -r --arg r "$(lc "$repo")" '[.seats[]? | select((.repo // "" | ascii_downcase) == $r and .tracking != null) | .tracking] | unique | .[]' "$(roster_path)" \
-           | while IFS= read -r t; do read -r tr_r tr_n < <(parse_issue_ref "$t"); [[ "$(lc "$tr_r")" == "$(lc "$repo")" ]] && echo "$tr_r#$tr_n"; done)
+  done < <(jq -r --arg r "$(lc "$repo")" '[.seats[]? | select((.repo // "" | ascii_downcase) == $r) | .workstream] | unique | .[]' "$(roster_path)" \
+           | while IFS= read -r w; do t="$(workstream_issue "$w")" || exit 1; [[ "$(lc "${t%%#*}")" == "$(lc "$repo")" ]] && echo "$t"; done)
   # where open items go
   if [[ $open_n -gt 0 && -z "$carry" ]]; then
     carry="$(milestone_all "$repo" open | jq -r --arg t "$title" '[.[] | select(.title != $t)] | sort_by(.due_on // "9999") | .[0].title // empty')" || exit 1
@@ -513,14 +501,12 @@ PY
       "$here/milestone.sh" close "$title" --repo "$repo" ${cargs[@]+"${cargs[@]}"} || die "the milestone was not closed (named above): rerun wrapup.sh run, which skips what is done"
     else echo "milestone \"$title\" already closed"; fi
     # (5) the tracking issue's one summary (not posted twice by a rerun)
-    tracking="$(jq -r --arg g "$(seat_login "$by")" --arg l "$(seat_label "$by")" '.seats[] | select(.github == $g and .label == $l) | .tracking // empty' "$(roster_path)")"
-    if [[ -n "$tracking" ]]; then
-      read -r tr_r tr_n < <(parse_issue_ref "$tracking")
-      coord_write_guard "$tr_r" "$by"
-      summ="milestone $title closed: $rel, $nfold rows folded$([[ "$ndrop" -eq 0 ]] || echo ", $ndrop dropped")"
-      had="$(issue_comments "$tr_r" "$tr_n" | jq -r --arg b "$summ" '[.[] | select(.body == $b) | .html_url] | .[0] // empty')" || die "cannot read $tracking"
-      if [[ -n "$had" ]]; then echo "summary: already posted $had"; else echo "summary: $(issue_comment "$tr_r" "$tr_n" "$summ")"; fi
-    else echo "daita-beast: $by has no tracking issue in the roster: no summary comment posted" >&2; fi
+    tracking="$(seat_tracking "$by")" || exit 1
+    read -r tr_r tr_n < <(parse_issue_ref "$tracking")
+    coord_write_guard "$tr_r" "$by"
+    summ="milestone $title closed: $rel, $nfold rows folded$([[ "$ndrop" -eq 0 ]] || echo ", $ndrop dropped")"
+    had="$(issue_comments "$tr_r" "$tr_n" | jq -r --arg b "$summ" '[.[] | select(.body == $b) | .html_url] | .[0] // empty')" || die "cannot read $tracking"
+    if [[ -n "$had" ]]; then echo "summary: already posted $had"; else echo "summary: $(issue_comment "$tr_r" "$tr_n" "$summ")"; fi
     # (6) the row closed on the words (the board republishes)
     "$here/decision.sh" close "$repo#$row" --words "$words" --record "$rec" --by "$by" --next "start the next milestone; run the KB syncs printed below"
     # (7) the DeSciX KB manifests whose sources cover a changed file

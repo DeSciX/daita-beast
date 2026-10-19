@@ -2,7 +2,7 @@
 name: Workstream
 about: The tracking issue of a workstream (one GitHub Project). Status reports are comments here.
 title: "WS: <name>"
-labels: workstream
+labels: workstream, ws:<slug>
 assignees: ''
 ---
 
@@ -12,8 +12,8 @@ assignees: ''
 ## Project
 <URL of the GitHub Project that holds this workstream's items>
 
-## Coordinating repo
-<owner/repo whose issues, PRs and comments hold the details>
+## Master repo
+<owner/repo: this issue's repo, the master of the workstream; its CLAUDE.md carries the rendered seat map>
 
 ## Repos involved
 <one per line: owner/repo — its role in this workstream>
@@ -22,4 +22,5 @@ assignees: ''
 <what "done" is, measurable>
 
 ## Seats
-<label — role — github login>
+| Seat | Repo | Home | Agent | Account | Address | Seen |
+|---|---|---|---|---|---|---|

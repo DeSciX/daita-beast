@@ -3,7 +3,7 @@
 #   notes.sh <LABEL | id> show
 #   notes.sh <LABEL | id> set --text-file <f>
 #   notes.sh <LABEL | id> append --text "<line>"
-# The notes are ONE comment on the seat's tracking issue (roster "tracking") whose first line is
+# The notes are ONE comment on the seat's tracking issue (its workstream's, seat_tracking) whose first line is
 # `BEAST-NOTES seat=<id>`, written by the seat's login. It is created on the first set or append and edited in
 # place after that; two such comments are a defect this script names and refuses to choose between.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -12,8 +12,7 @@ need gh jq
 seat="${1:-}"; cmd="${2:-}"; shift 2 || true
 [[ -n "$seat" && -n "$cmd" ]] || die "usage: notes.sh <seat> show | set --text-file <f> | append --text \"<line>\""
 id="$(seat_rostered "$seat")" || exit 1
-tracking="$(jq -r --arg g "$(seat_login "$id")" --arg l "$(seat_label "$id")" '.seats[] | select(.github == $g and .label == $l) | .tracking // empty' "$(roster_path)")"
-[[ -n "$tracking" ]] || die "seat $id has no tracking issue in $(roster_path): the notes live on it (join.sh $id --tracking <owner/repo#N>)"
+tracking="$(seat_tracking "$id")" || exit 1
 rn="$(parse_issue_ref "$tracking")" || exit 1; read -r repo number <<< "$rn"
 [[ "$cmd" == show ]] || coord_write_guard "$repo" "$id"
 header="BEAST-NOTES seat=$id"

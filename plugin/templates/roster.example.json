@@ -5,11 +5,11 @@
   "seats": [
     {
       "label": "<LABEL>",
-      "role": "<what this seat owns>",
-      "repo": "<owner/repo it works in>",
-      "lane": "app",
       "github": "<login>",
-      "tracking": "<owner/repo#N>",
+      "repo": "<owner/repo: this roster's own repo; a seat of another repo lives in that repo's roster and on the workstream issue>",
+      "lane": "app",
+      "agent": "<name of <repo>/.claude/agents/<name>.md, or daita-beast:seat>",
+      "workstream": "<slug of the workstream whose tracking issue carries the labels workstream and ws:<slug>>",
       "home": { "kind": "checkout", "branch": null }
     }
   ],
@@ -27,7 +27,7 @@
     "source": {
       "repo": "<owner/repo of the canonical source>",
       "path": "<path of the source in it>",
-      "render": "pandoc -f latex -t markdown_strict --wrap=none"
+      "render": "pandoc -f latex -t markdown_strict --wrap=none -L \"$BEAST_SCRIPTS/pandoc/latex-crossrefs.lua\""
     }
   }
 }

@@ -111,6 +111,8 @@ EOF
         END { if (on) print ENVIRON["WL"] }' "$tmp" > "$tmp.w" && mv "$tmp.w" "$tmp"
     fi
     body="$(cat "$tmp")"
+    ask_inline_check "new decision '$title'" "$title
+$body"
     waits_on_parse "new decision '$title'" "$body" >/dev/null || exit 1
     for h in "Decision" "Unblocks" "Waits" "Recommendation" "Approve with" "Record"; do
       section_required "$h" "$body" "new decision '$title'" >/dev/null

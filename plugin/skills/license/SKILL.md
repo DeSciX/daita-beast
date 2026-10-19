@@ -23,6 +23,6 @@ Each item prints `ok` or `MISS`: the file is present; its body after the header 
 ```
 ${CLAUDE_PLUGIN_ROOT}/scripts/license.sh audit
 ```
-It prints one table (repo | license file | body matches | header clean | manifests | twin seat) and exits 1 when any row misses. The twin seat is the rostered seat whose private twin publishes to that repo; `-` means no rostered twin publishes it.
+It prints one table (repo | license file | body matches | header clean | manifests | twin seat) and exits 1 when any row misses. The twin seat is the rostered seat whose private twin publishes to that repo; `-` means no rostered twin publishes it. A repo the roster's license `exempt` lists (under its own license, e.g. a fork of an upstream project) shows `exempt` and is never a miss; an exempt entry that names no public repo of the owners fails the audit.
 
 When the roster has `license`, `publish.sh prepare` and `request` run the same check on the publish commit and refuse a public tree that misses. A twin fixes a miss in itself: render the file, set the manifests, commit on main, then `publish.sh prepare <slug> --paths LICENSE.md package.json <plugin manifests> --message-file <f>` and the publish steps (`/daita-beast:publish`). For a review across all public repos, hire the `license-reviewer` agent.

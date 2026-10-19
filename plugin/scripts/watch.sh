@@ -8,7 +8,7 @@
 # Event lines (stdout):
 #   BEAST-EVENT kind=NEW seat=<id> state=<open|closed> <title> <url>            a decision concerning the seat appeared
 #   BEAST-EVENT kind=DECIDED seat=<id> <title> <url> :: <first line of the close comment>   the word came
-#   BEAST-EVENT kind=UPDATED seat=<id> <title> <url>                             a new comment that is not seat bookkeeping (acks, status, notes; label or body edits are silent)
+#   BEAST-EVENT kind=UPDATED seat=<id> <title> <url>                             a new comment that is not bookkeeping (lib.sh BOOKKEEPING_FIRST_LINE_RE: acks, status, notes, addresses, the Cowork stamp, close and amend lines; label, body and comment edits are silent)
 #   BEAST-WATCH <message>   (stderr)                                            the watcher itself (API failure, retried)
 # One REST search per poll whatever the seat count, from a high-water mark: each seat keeps its snapshot
 # (~/.beast/watch/<login>/<LABEL>.json) and the start time of its last good poll (<LABEL>.mark, with the query
@@ -105,10 +105,10 @@ poll() {
           echo "BEAST-EVENT kind=DECIDED seat=$seat $title $url :: $word" ;;
         NEW) echo "BEAST-EVENT kind=NEW seat=$seat state=$state $title $url" ;;
         UPDATED)
-          # Only news is an event: the new comments, minus seat bookkeeping (BEAST-ACK / BEAST-STATUS / BEAST-NOTES
-          # first lines, and close comments, which DECIDED already carries).
+          # Only news is an event: the new comments, minus bookkeeping (BOOKKEEPING_FIRST_LINE_RE, lib.sh: acks, status,
+          # notes, addresses, the Cowork stamp, close comments, which DECIDED already carries, and amend lines).
           read -r repo number < <(parse_issue_ref "$url")
-          news="$(issue_comments "$repo" "$number" 2>/dev/null | jq --argjson d "${delta:-1}" --arg amend "$AMEND_LINE_RE" '[.[-$d:][] | ((.body // "") | split("\n")[0]) | select(test("^(BEAST-ACK|BEAST-STATUS|BEAST-NOTES) |^(Closed|Rejected) on the (decider.s )?word") or test($amend) | not)] | length' 2>/dev/null || echo 1)"
+          news="$(issue_comments "$repo" "$number" 2>/dev/null | jq --argjson d "${delta:-1}" --arg bk "$BOOKKEEPING_FIRST_LINE_RE" '[.[-$d:][] | ((.body // "") | split("\n")[0]) | select(test($bk) | not)] | length' 2>/dev/null || echo 1)"
           if [[ "$news" -gt 0 ]]; then echo "BEAST-EVENT kind=UPDATED seat=$seat $title $url"; fi ;;
       esac
     done
@@ -124,4 +124,5 @@ while true; do
   poll
   [[ $once -eq 1 ]] && exit 0
   sleep "$interval"
+  run_cache_clear   # a new poll asks GitHub again: the run's memoized searches are the last poll's
 done

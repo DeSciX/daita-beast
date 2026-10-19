@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # resume.sh — everything a seat needs after a compaction or reload, from GitHub and the roster.
 #   resume.sh <LABEL | login/LABEL>
-# Prints: the roster map with live addresses; the seat's last handoff (its newest
+# Prints: the seat map of every open workstream with the seats' addresses (seats.sh list); the seat's last handoff (its newest
 # BEAST-STATUS seat=<id> comment on any workstream tracking issue of the roster's owners); decisions for the
 # seat closed since its last inbox sweep; open decisions that wait on it. A seat's working state
 # lives in those comments, never in a session's context, so this is the whole resume. Then the seat's
@@ -35,11 +35,7 @@ else
 fi
 
 echo; echo "== notes of $seat (BEAST-NOTES on its tracking issue; notes.sh $seat set|append)"
-if [[ -n "$(jq -r --arg g "$(seat_login "$seat")" --arg l "$(seat_label "$seat")" '.seats[] | select(.github == $g and .label == $l) | .tracking // empty' "$(roster_path)")" ]]; then
-  "$here/notes.sh" "$seat" show
-else
-  echo "(no tracking issue in the roster for $seat, so no notes)"
-fi
+"$here/notes.sh" "$seat" show
 
 echo; echo "== inbox: rows naming $seat whose latest event is newer than its ack (ack each once acted on)"
 "$here/decision.sh" inbox "$seat"

@@ -123,7 +123,7 @@ What you wait on:"
     echo "$head_line — report for @$l, $stamp"; earned "$l" ""
   done
   [[ $post -eq 1 ]] || { echo; echo "(printed only: --post --by <SEAT> sends each seat its section on its desk and keeps the summary on the milestone)"; exit 0; }
-  miss=""; for id in "${targets[@]}"; do f="$(desk_find "$id")" || exit 1; [[ -n "$f" ]] || miss="$miss $id"; done
+  miss=""; for id in "${targets[@]}"; do f="$(desk_find "$id" "$(seat_repo "$id")")" || exit 1; [[ -n "$f" ]] || miss="$miss $id"; done
   [[ -z "$miss" ]] || die "nothing posted: seat(s) without a desk:$miss — desk.sh open <SEAT> for each, then rerun"
   coord_write_guard "$repo" "$by"
   for i in "${!targets[@]}"; do "$here/desk.sh" msg "${targets[$i]}" --from "$by" --text "${sections[$i]}" >/dev/null || die "the report to ${targets[$i]} was not posted (named above)"; echo "posted to the desk of ${targets[$i]}"; done

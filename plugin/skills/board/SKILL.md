@@ -27,3 +27,5 @@ Hand the person the two URLs (the search and the pinned issue) rather than file 
 The decider's own page in claude.ai or Cowork is published from `templates/board.html` by `/daita-beast:board-ui` (that session needs the `github` connector and the Artifact tool); this skill renders the same rows in a terminal.
 
 The generated issue carries two tables: pending (open rows, with a Seats column: ✓ and the ack state per seat when its newest ack is at or after the row's latest event, — when not) and decided (rows closed in the last 7 days with the words from the close comment and the Acks column; rows not yet acked by every seat sort first). A row closed by mistake is reopened with a comment; the decided table drops it on the next publish.
+
+Without a shell (Cowork, claude.ai), use the `connector` skill: its recipe of the same name, or its list of the acts it cannot do.

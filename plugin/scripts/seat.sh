@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
-# seat.sh — a seat's roster row and its home: the directory its sessions run in, so its memory, its
-# CLAUDE.md and its working tree never mix with another seat's.
-#   seat.sh new <LABEL> --repo-path <checkout> --role "<text>" --tracking <owner/repo#N> [--kind checkout|worktree|wrapper | --kind subdir --dir <dir>]
-#       from the repo's main checkout. Adds the roster row {github: gh login, label, role, repo, lane (CLAUDE.md
-#       LANE:), tracking, home: {kind, branch} | {kind: subdir, dir}} and creates the home. Kind, when not given:
+# seat.sh — a seat's roster row and its home: the directory the seat works in once seated (join.sh, from any
+# directory), so its CLAUDE.md and its working tree never mix with another seat's.
+#   seat.sh new <LABEL> --repo-path <checkout> --agent <name> --workstream <slug> [--kind checkout|worktree|wrapper | --kind subdir --dir <dir>]
+#       from the repo's main checkout. Refuses a public or public-intended repo before any write. Adds the roster row
+#       {github: gh login, label, repo, lane (CLAUDE.md LANE:), agent (the role: <repo>/.claude/agents/<name>.md, or
+#       daita-beast:seat), workstream (the slug whose tracking issue carries the labels workstream and ws:<slug>),
+#       home: {kind, branch} | {kind: subdir, dir}}, creates the home, then adds the seat to the workstream issue's
+#       `## Seats` table (workstream.sh seat-add) and renders the master's CLAUDE.md block (workstream.sh render): one
+#       act writes the row, the home, the table and the master block. Kind, when not given:
 #       checkout when no other seat of this login in this repo is homed in the checkout; else worktree; else (the
 #       repo has submodules or nested git repos, which a worktree would not carry) wrapper. subdir is only explicit:
 #       --dir is a directory inside the checkout (relative to it) that has its own CLAUDE.md and is not a repo root.
 #       A roster row written before homes (no "home") of this repo is given its home by the same command.
-#   seat.sh where <LABEL | id>     the home path and kind on this machine
-#   seat.sh retire <LABEL | id>    role becomes "retired: <date>"; nothing is removed
+#   seat.sh where <LABEL | id>     the home path and kind on this machine, from any directory (seat_locate)
+#   seat.sh retire <LABEL | id>    removes the seat from its workstream's `## Seats` table and sets "retired": "<date>"
+#                                  on the roster row; the home, the branch and the comments are kept
 # The home path is derived by seat_home_path (lib.sh), never stored in the roster.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 need jq git
@@ -36,13 +41,14 @@ case "$cmd" in
   new)
     need gh
     label="${1:-}"; shift || true
-    [[ "$label" =~ $SEAT_LABEL_RE ]] || die "usage: seat.sh new <LABEL> --repo-path <checkout> --role \"<text>\" --tracking <owner/repo#N> [--kind checkout|worktree|wrapper | --kind subdir --dir <dir>] (LABEL: upper-case letters, digits, _ or -)"
-    role=""; tracking=""; kind=""; target=""; dir=""
+    [[ "$label" =~ $SEAT_LABEL_RE ]] || die "usage: seat.sh new <LABEL> --repo-path <checkout> --agent <name> --workstream <slug> [--kind checkout|worktree|wrapper | --kind subdir --dir <dir>] (LABEL: upper-case letters, digits, _ or -)"
+    agent=""; ws=""; kind=""; target=""; dir=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --repo-path) target="$2"; shift 2 ;;
-        --role) role="$2"; shift 2 ;;
-        --tracking) tracking="$2"; shift 2 ;;
+        --agent) agent="$2"; shift 2 ;;
+        --workstream) ws="$2"; shift 2 ;;
+        --role|--tracking) die "$1 is gone: the role is an agent file (--agent <name>) and the tracking issue is found by its labels (--workstream <slug>)" ;;
         --kind) kind="$2"; shift 2 ;;
         --dir) dir="$2"; shift 2 ;;
         *) die "unknown argument $1" ;;
@@ -53,7 +59,7 @@ case "$cmd" in
     [[ -z "$dir" || "$kind" == subdir ]] || die "--dir is only for --kind subdir (got --kind ${kind:-none}): a subdir home is never picked automatically"
     # The target repo is a parameter, never the shell's cwd by accident: a seat is scoped deliberately.
     [[ -n "$target" ]] || die "seat.sh new needs --repo-path <the main checkout of the repo this seat works in>; scope it first (the seat skill's scoping step)"
-    [[ -d "$target/.git" || -f "$target/.git" ]] || die "--repo-path $target is not a git checkout"
+    checkout_require_root "$target"
     cd "$target"
     root="$(repo_main_root)"
     [[ "$(cd "$(repo_root)" && pwd -P)" == "$(cd "$root" && pwd -P)" ]] || die "run seat.sh new from the repo's main checkout $root, not from $(repo_root)"
@@ -61,6 +67,8 @@ case "$cmd" in
     [[ -f "$roster" ]] || die "no roster at $roster — run $here/bootstrap.sh for this repo first"
     roster_check_unique "$roster"
     remote="$(repo_slug "$root")" || exit 1
+    why="$(repo_public_why "$remote")" || exit 1
+    [[ -z "$why" ]] || die "refused: $remote is $why. A seat's repo is private: its rows, desk and status are coordination writes, which never go to a public repo (the twin's roster names the public one in \"publishes_to\")"
     me="$(user_login)" || die "cannot read the gh login (gh auth status)"
     id="$me/$label"
     sel='.seats[] | select(.github == $g and .label == $l)'
@@ -71,7 +79,7 @@ case "$cmd" in
       # recorded kind; the roster is not written.
       rk="$(jq -r .home.kind <<< "$row")"
       [[ -z "$kind" || "$kind" == "$rk" ]] || die "seat $id is recorded with home kind $rk, not $kind: change the roster row first if the seat is moving"
-      [[ -z "$role" && -z "$tracking" ]] || die "seat $id already exists: --role and --tracking change it through join.sh --role / --tracking, not seat.sh new"
+      [[ -z "$agent" && -z "$ws" ]] || die "seat $id already exists: --agent and --workstream change it through join.sh --agent / --workstream, not seat.sh new"
       rd="$(jq -r '.home.dir // empty' <<< "$row")"
       [[ "$rk" != subdir || -n "$dir" ]] || dir="$rd"
       kind="$rk"; materialize=1
@@ -80,10 +88,17 @@ case "$cmd" in
       [[ "$(jq -r .repo <<< "$row")" == "$remote" ]] || die "seat $id is already in $roster, working in $(jq -r .repo <<< "$row"): a label is unique per login"
       legacy=1
     else
-      [[ -n "$role" && -n "$tracking" ]] || die "a new seat needs --role \"<what it owns>\" and --tracking <owner/repo#N>"
+      [[ -n "$agent" && -n "$ws" ]] || die "a new seat needs --agent <name> (its role: $remote/.claude/agents/<name>.md, or daita-beast:seat) and --workstream <slug> (an open issue labelled workstream and ws:<slug>; workstream.sh new opens one)"
     fi
-    if [[ -n "$tracking" ]]; then
-      tracking="$(tracking_ref "$tracking")" || exit 1
+    if [[ $legacy -eq 1 ]]; then
+      [[ -n "$agent" ]] || agent="$(jq -r '.agent // empty' <<< "$row")"
+      [[ -n "$ws" ]] || ws="$(jq -r '.workstream // empty' <<< "$row")"
+      [[ -n "$agent" && -n "$ws" ]] || die "seat $id's row has no agent or workstream yet: pass --agent <name> --workstream <slug>"
+    fi
+    if [[ $materialize -eq 0 ]]; then
+      [[ "$ws" =~ $WS_SLUG_RE ]] || die "--workstream '$ws' is not a slug (a-z, 0-9, -)"
+      seat_agent_check "$remote" "$agent" || exit 1
+      tracking="$(workstream_issue "$ws")" || exit 1
     fi
     lane="$(sed -n 's/^LANE: *\([a-z]*\).*/\1/p' "$root/CLAUDE.md" 2>/dev/null | head -1)"
     [[ -n "$lane" ]] || die "cannot read the lane: $root/CLAUDE.md has no 'LANE: <platform|rnd|app>' line"
@@ -95,7 +110,7 @@ case "$cmd" in
       rootp="$(cd "$root" && pwd -P)"; dirp="$(cd "$root/$dir" && pwd -P)"
       [[ "$dirp" == "$rootp"/* ]] || die "--dir $dir resolves to $dirp, not to a directory inside the checkout $rootp (the checkout itself is --kind checkout)"
       dir="${dirp#"$rootp"/}"
-      [[ ! -e "$dirp/.git" ]] || die "--dir $dir is a repo root ($dirp/.git): a subdir home is a directory of this checkout, never another repo's checkout"
+      [[ "$(checkout_root "$dirp")" != "$dirp" ]] || die "--dir $dir is a repo root ($dirp): a subdir home is a directory of this checkout, never another repo's checkout"
       top="$(git -C "$dirp" rev-parse --show-toplevel 2>/dev/null)" && top="$(cd "$top" && pwd -P)" || die "--dir $dir is not inside a git working tree"
       [[ "$top" == "$rootp" ]] || die "--dir $dir is inside the repo at $top, not in the checkout $rootp: a subdir home is a directory of this checkout"
       [[ -f "$dirp/CLAUDE.md" ]] || die "--dir $dir has no CLAUDE.md: a subdir home is a directory with its own CLAUDE.md (the seat's Beast block is written there)"
@@ -140,17 +155,17 @@ case "$cmd" in
     if [[ "$kind" == subdir ]]; then homej="$(jq -nc --arg d "$dir" '{kind:"subdir", dir:$d}')"
     else homej="$(jq -nc --arg k "$kind" --arg b "$branch" '{kind:$k, branch:(if $b == "null" then null else $b end)}')"; fi
     if [[ $legacy -eq 1 ]]; then
-      jq --arg g "$me" --arg l "$label" --argjson h "$homej" --arg r "$role" --arg t "$tracking" \
-        "($sel) |= (.home = \$h | (if \$r != \"\" then .role = \$r else . end) | (if \$t != \"\" then .tracking = \$t else . end))" "$roster" > "$roster.tmp" && mv "$roster.tmp" "$roster"
-      echo "roster: home recorded on $id${role:+, role updated}${tracking:+, tracking $tracking}"
+      jq --arg g "$me" --arg l "$label" --argjson h "$homej" --arg a "$agent" --arg w "$ws" \
+        "($sel) |= (.home = \$h | .agent = \$a | .workstream = \$w)" "$roster" > "$roster.tmp" && mv "$roster.tmp" "$roster"
+      echo "roster: home recorded on $id (agent $agent, workstream $ws)"
     else
-      jq --arg l "$label" --arg r "$role" --arg repo "$remote" --arg lane "$lane" --arg g "$me" --arg t "$tracking" --argjson h "$homej" \
-        '.seats += [{label:$l, role:$r, repo:$repo, lane:$lane, github:$g, tracking:$t, home:$h}]' "$roster" > "$roster.tmp" && mv "$roster.tmp" "$roster"
-      echo "roster: added $id (repo $remote, lane $lane, tracking $tracking, home $homej)"
+      jq --arg l "$label" --arg repo "$remote" --arg lane "$lane" --arg g "$me" --arg a "$agent" --arg w "$ws" --argjson h "$homej" \
+        '.seats += [{label:$l, github:$g, repo:$repo, lane:$lane, agent:$a, workstream:$w, home:$h}]' "$roster" > "$roster.tmp" && mv "$roster.tmp" "$roster"
+      echo "roster: added $id (repo $remote, lane $lane, agent $agent, workstream $ws, tracking $tracking, home $homej)"
     fi
     fi
     roster_check_unique "$roster"
-    tracking="$(jq -r --arg g "$me" --arg l "$label" "$sel | .tracking // empty" "$roster")"
+    ws="$(roster_field "$id" workstream)"; agent="$(roster_field "$id" agent)"
 
     # The home.
     case "$kind" in
@@ -171,19 +186,24 @@ case "$cmd" in
     mkdir -p "$home/.beast"
     if [[ "$kind" == wrapper ]]; then
       jq -n --arg id "$id" --arg k "$kind" --arg root "$root" '{id:$id, kind:$k, root:$root}' > "$home/.beast/seat.json"
-      claude_block_write "$home/CLAUDE.md"
     else
       jq -n --arg id "$id" --arg k "$kind" '{id:$id, kind:$k}' > "$home/.beast/seat.json"
       if [[ "$kind" == subdir ]]; then gitignore_seat_json "$root" "$dir/.beast/seat.json"; else gitignore_seat_json "$home"; fi
     fi
     echo "seat.json: $home/.beast/seat.json"
+    checkouts_record "$root"
+    # The seat map: the workstream issue's `## Seats` table (the one owner), then the master's CLAUDE.md block.
+    if [[ $materialize -eq 0 ]]; then
+      homeword="$(ws_home_word "$kind" "$([[ "$kind" == subdir ]] && echo "$dir" || { [[ "$kind" == worktree ]] && echo "$branch" || true; })")" || exit 1
+      if ws_seats_parse "$ws" | grep -q "^$id	"; then echo "table: $id is already in the \`## Seats\` table of workstream $ws"
+      else "$here/workstream.sh" seat-add "$ws" "$id" --repo "$remote" --home "$homeword" --agent "$agent" || die "the roster row and the home are written, the \`## Seats\` table is not (named above): rerun $here/workstream.sh seat-add $ws $id --repo $remote --home \"$homeword\" --agent $agent, then workstream.sh render $ws"; fi
+      "$here/workstream.sh" render "$ws" || die "the \`## Seats\` table is written, the master's CLAUDE.md block is not (named above): rerun $here/workstream.sh render $ws"
+    fi
+    [[ "$kind" != wrapper ]] || claude_block_write "$home/CLAUDE.md" "$id"
     echo
-    echo "== open a session in the home of $id"
-    case "$kind" in
-      wrapper) echo "  $home/claude.sh     (a wrapper is opened with its launcher; a VS Code folder on the wrapper does not load the repo's agents)" ;;
-      *)       echo "  VS Code: File > Open Folder > $home    or a terminal: cd $home && claude" ;;
-    esac
-    echo "  then the session's first act: $here/join.sh $label --address \"<ListAgents name [ref]>\""
+    echo "== take the seat: start a session anywhere in the workspace and run"
+    echo "  $here/join.sh $label --address \"<ListAgents name [ref]>\"     (it prints SEATED $id at $home; the home is the seat's root from then on)"
+    [[ "$kind" != wrapper ]] || echo "  optional, for terminal users: $home/claude.sh starts a session in the wrapper with the repo's agents and skills (claude --add-dir)"
     case "$kind" in
       wrapper) echo "  commit $roster" ;;
       subdir)  echo "  commit $roster and $root/.gitignore if changed" ;;
@@ -191,20 +211,25 @@ case "$cmd" in
     esac
     ;;
   where)
-    id="$(seat_rostered "${1:-}")" || exit 1
+    loc="$(seat_locate "${1:-}" "$PWD")" || exit 1
+    id="${loc%%$'\t'*}"; cd "${loc#*$'\t'}"
     kind="$(seat_home_kind "$id")" || exit 1
     home="$(seat_home_path "$id")" || exit 1
     echo "home $home"
-    if [[ "$kind" == legacy ]]; then echo "kind checkout (no home recorded in the roster: record it with $here/seat.sh new $(seat_label "$id") --kind checkout)"
+    if [[ "$kind" == legacy ]]; then echo "kind checkout (no home recorded in the roster: record it with $here/seat.sh new $(seat_label "$id") --repo-path $(pwd -P) --kind checkout)"
     else echo "kind $kind"; fi
-    [[ -d "$home" ]] || echo "absent on this machine"
+    [[ -d "$home" ]] || echo "absent on this machine: $here/seat.sh new $(seat_label "$id") --repo-path $(pwd -P) creates it"
     ;;
   retire)
+    need gh
     id="$(seat_rostered "${1:-}")" || exit 1
     roster="$(roster_path)"
-    jq --arg g "$(seat_login "$id")" --arg l "$(seat_label "$id")" --arg r "retired: $(date -u +%Y-%m-%d)" \
-      '(.seats[] | select(.github == $g and .label == $l) | .role) = $r' "$roster" > "$roster.tmp" && mv "$roster.tmp" "$roster"
-    echo "$id retired in $roster (role \"retired: $(date -u +%Y-%m-%d)\"); its home, branch and comments are kept"
+    ws="$(roster_field "$id" workstream)"
+    if ws_seats_parse "$ws" | grep -q "^$id	"; then "$here/workstream.sh" seat-remove "$ws" "$id" || exit 1; "$here/workstream.sh" render "$ws" || exit 1
+    else echo "table: $id is not in the \`## Seats\` table of workstream $ws"; fi
+    jq --arg g "$(seat_login "$id")" --arg l "$(seat_label "$id")" --arg d "$(date -u +%Y-%m-%d)" \
+      '(.seats[] | select(.github == $g and .label == $l) | .retired) = $d' "$roster" > "$roster.tmp" && mv "$roster.tmp" "$roster"
+    echo "$id retired in $roster (\"retired\": \"$(date -u +%Y-%m-%d)\"); its home, branch and comments are kept"
     ;;
-  *) die "usage: seat.sh new <LABEL> --repo-path <checkout> --role \"<text>\" --tracking <owner/repo#N> [--kind checkout|worktree|wrapper | --kind subdir --dir <dir>] | where <seat> | retire <seat>" ;;
+  *) die "usage: seat.sh new <LABEL> --repo-path <checkout> --agent <name> --workstream <slug> [--kind checkout|worktree|wrapper | --kind subdir --dir <dir>] | where <seat> | retire <seat>" ;;
 esac
