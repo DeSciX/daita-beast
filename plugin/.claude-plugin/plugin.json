@@ -1,7 +1,7 @@
 {
   "name": "daita-beast",
   "description": "Beast: GitHub-native coordination and contribution tracking for agent teams on DeSciX. A workstream is a GitHub Project, a pending decision is an assigned issue, an award is the owner's comment on a PR, the ledger is computed from GitHub; seats resolve each other through a repo-scoped roster and a scheduled relay tells a seat when a decision for it changed. Runs on Claude Code local (scripts, relay), Claude Code cloud (REST-only scripts from a committed pointer skill) and Cowork / Claude.ai chat (the protocol as GitHub connector recipes); the install skill detects the surface. GitHub keeps the permissions.",
-  "version": "1.5.1",
+  "version": "1.5.3",
   "author": {
     "name": "DeSciX",
     "url": "https://github.com/DeSciX"
