@@ -26,7 +26,8 @@
 #       REST API (git trees and blobs; no clone), with the same checks. Prints one table: repo | license file | body
 #       matches | header clean | manifests | twin seat (the rostered seat whose repo is the private twin publishing to
 #       it). A repo the roster's license "exempt" lists (under its own license: a fork of an upstream project) is read no
-#       further and listed as "exempt", never a miss. Exit 1 when any row misses or cannot be read, or an exempt entry
+#       further and listed as "exempt", never a miss; an archived repo (read-only on GitHub, no license can be placed) is
+#       listed as "archived", never a miss. Exit 1 when any row misses or cannot be read, or an exempt entry
 #       names no public repo of the owners (a stale exemption).
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 need gh jq git python3
@@ -261,6 +262,10 @@ case "$cmd" in
         seat="$(jq -r --arg r "$(tr 'A-Z' 'a-z' <<< "$r")" '.[$r] // "-"' <<< "$twins")"
         if grep -qixF -- "$r" <<< "$L_EXEMPT"; then
           printf '%s\t%s\t-\t-\t-\t%s\n' "$tag" "exempt (its own license)" "$seat" >> "$rows"; seen_exempt+="$r"$'\n'; continue
+        fi
+        if [[ "$arch" == true ]]; then
+          # GitHub makes an archived repo read-only: no license can be placed on it; named, never a miss
+          printf '%s\t%s\t-\t-\t-\t%s\n' "$tag" "archived (read-only on GitHub)" "$seat" >> "$rows"; continue
         fi
         if ! tree="$(gh_get "repos/$r/git/trees/$(uri "$db")?recursive=1" 2>"$TMP/err")"; then
           # an empty repo has no default branch to read (GitHub answers 404 or 409 and lists it with size 0)
