@@ -26,3 +26,5 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/desk.sh inbox <SEAT>
 - `msg` leaves a durable message on another seat's desk; `SendMessage` stays the fast path on one machine, the desk message survives reloads and surface switches. A plain comment by the decider on your desk is a message from them.
 - `inbox` lists answers and messages newer than your last ack on the desk; `decision.sh inbox` prints it at its end. Act, then `ack.sh <desk> --seat <SEAT> --state seen --next "<act>"`.
 - Answers to no open ask, asks or messages addressed to another seat, and malformed `BEAST-` lines are named on stderr and dropped; fix the comment, never the parser.
+
+Without a shell (Cowork, claude.ai), use the `connector` skill: its recipe of the same name, or its list of the acts it cannot do.

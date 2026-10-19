@@ -5,7 +5,7 @@ description: Publish the decisions board as a claude.ai artifact for one decider
 
 # board-ui — the decider's board in claude.ai
 
-The page is `${CLAUDE_PLUGIN_ROOT}/templates/board.html`; its spec is `docs/board-ui.md`. Publish the template as it is. Never rewrite it from the spec, and never edit it in the session: a change to the page is a commit to the template and the spec together.
+The page is `${CLAUDE_PLUGIN_ROOT}/templates/board.html`; its spec is `docs/board-ui.md`. The template on main is the page's only source: a fix is made in the template and then published, never edited on the live page alone. Publish the template as it is, except its first line, the stamp (step 4). Never rewrite it from the spec, and never edit it in the session: a change to the page is a commit to the template and the spec together.
 
 Each decider gets their own private copy. The page embeds no data; it reads and writes GitHub as whoever opens it.
 
@@ -33,13 +33,15 @@ Load `artifact-capabilities`. Read this session's definitions of the five tools 
 |---|---|---|
 | `get_me` | `{}` | `login` |
 | `search_issues` | `{query: "is:open label:decision assignee:<login>", perPage: 100, sort: "updated", order: "desc", fields: [...]}` | `items[]`: `number`, `title`, `body`, `html_url`, `labels` (strings), `comments`, `updated_at`, `repository_url` |
-| `issue_read` | `{method: "get_comments", owner, repo, issue_number, perPage: 100}` | `comments[]`: `body`, `created_at`, `html_url`, `user.login` |
+| `issue_read` | `{method: "get_comments", owner, repo, issue_number, perPage: 20, page}` | a bare comment array (the shape inside a page) or `comments[]`: `body`, `created_at`, `html_url`, `user.login` |
 | `add_issue_comment` | `{owner, repo, issue_number, body}` | `html_url` and `created_at` when present; otherwise the issue URL |
 | `get_file_contents` | `{owner, repo, path}` plus `sha` or `ref` | the content block of type `resource`, field `resource.text` |
 
 These shapes were observed on 2026-10-10 and 2026-10-11 against the connector at `api.githubcopilot.com/mcp`.
 
 ## 4. Publish
+
+The template's first line is the stamp, `<!-- board.html @ @@COMMIT@@ -->`. Fill it before publishing: `list_commits` `{owner: "DeSciX", repo: "daita-beast", path: "plugin/templates/board.html", perPage: 1, fields: ["sha"]}` gives the template's newest commit on main; the line becomes `<!-- board.html @ <that sha> -->`. That is the only edit made to the template at publish; a template whose first line is not the stamp is reported to seat BEAST, not patched. The `cowork-tick` skill reads the stamp off the published page and republishes when main moved.
 
 Publish `${CLAUDE_PLUGIN_ROOT}/templates/board.html` with:
 
@@ -50,7 +52,11 @@ icon: "checklist"
 
 `server` is the connector's display name as claude.ai shows it. If the decider's connector is named differently, the template's `SERVER` constant and this declaration must both carry that name: report it to seat BEAST as a template parameter, do not fork the page.
 
-To update an existing board, find it with the Artifact tool's list action, read it, and publish the template to that same URL, so the decider's link does not change.
+To update an existing board (a republish):
+
+1. Fetch `plugin/templates/board.html` at a named commit of main: `get_file_contents` with `owner`, `repo`, `path` and `sha: <commit>`. Name that commit in the hand-over; it is the stamp's value.
+2. Find the board with the Artifact tool's list action and read it.
+3. Publish the fetched file, byte-exact but for the filled stamp, to that same URL, so the decider's link does not change. Omit `capabilities` on the redeploy, which keeps the ones the page has.
 
 ## 5. Hand over and test
 

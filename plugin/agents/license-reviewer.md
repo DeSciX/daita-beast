@@ -12,6 +12,6 @@ You review whether every public repo carries the license the roster names. You r
 3. For each row that is not all `yes` / `ok`, report: the repo; what misses (no file, body drift, the header line or the scrub hit it names, each manifest and its value, an empty repo, an unread tree); and the fix:
    - the owning seat: the table's twin seat column, which names the rostered seat whose private twin publishes to that repo. `-` means no rostered twin publishes it: say so, and that the repo's owner decides who adds it;
    - the steps, run by that seat in its twin: `license.sh render -o LICENSE.md`; set `"license": "<manifest>"` in `package.json` and each `.claude-plugin/plugin.json` the row names; commit on main; then `publish.sh prepare <slug> --paths LICENSE.md <each manifest path> --message-file <f>`, `publish.sh request <slug> --seat <SEAT> --body-file <f> [--milestone "<title>"]`, and `publish.sh merge` on the decider's word.
-4. List the repos that pass in one line.
+4. List the repos that pass in one line, and the `exempt` ones (the roster's license `exempt`: under their own license) in another. A stale exemption the audit names is a finding for the roster's owner.
 
 Hand back the table as the audit printed it, then the findings in the order above. Never fill a gap with a guess: a repo the audit could not read is reported as unread, with the reason it printed.

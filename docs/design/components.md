@@ -1,0 +1,175 @@
+# Components
+
+The catalogue of the plugin as built. Paths are relative to `plugin/`. "lib.sh" lists the domain functions a script calls besides the GitHub I/O every script shares (`gh_get`, `gh_get_all`, `gh_send`, `issue_*`, `issues_list`, `parse_issue_ref`, `roster_path`); the I/O functions are described once, under `lib.sh`.
+
+## lib.sh: the one owner
+
+`scripts/lib.sh` is sourced by every script. Its functions are internal and change with refactors; the stable contract for an outside tool is `publish.sh scan` (`docs/protocol.md`, Publishing). The regexes named below are owned there and nowhere else: a doc restates none of them.
+
+| Area | Functions | What it owns |
+|---|---|---|
+| GitHub reads | `gh_request`, `gh_get`, `gh_get_all`, `row_read`, `issue_comments`, `search_issues`, `search_seat_issues`, `issues_list`, `issues_list_shows`, `milestone_all`, `contents_path`, `default_branch`, `gh_status_of` | the one HTTP GET, conditional on `~/.beast/cache/<login>/` (ETag or Last-Modified, written atomically, a corrupt entry named and replaced); a 403 with no quota left named with its reset time; every page of a list (100 a page, a full page followed by the next); search never cached between runs, memoized within one, every page, fails past 1000; waiting for the issues list to show a create; a file's contents, a repo's default branch, a path's HTTP status |
+| The run cache | `BEAST_WS_CACHE`, `on_exit`, `run_cache_clear` | one search per query per run: the directory the first script of a run makes, exports and deletes at exit (every EXIT cleanup chains through `on_exit`); `search_issues` memoizes one result per query in it, `ws_seats_all` the one seat table (`ws_seats_write` forgets it), `workstream_candidates <slug>` reads the all-workstreams result when it is there; `watch.sh`'s loop clears it before each poll |
+| A checkout | `checkout_root`, `checkout_require_root`, `checkout_is_main`, `repo_root`, `repo_main_root` | the one test of "inside a checkout" (`git rev-parse --show-toplevel`), of "a checkout's root", and of "the repo's main checkout" (git dir equals common dir: a plain checkout or a submodule's, not a linked worktree); the main checkout from a linked worktree or a wrapper through the common dir's `core.worktree` or the directory holding `.git`; no script tests `-d .git` |
+| GitHub writes | `gh_send_try`, `gh_send`, `issue_edit_body`, `label_ensure`, `label_ensure_template`, `pin_issue`, `project_cmd` | the one write (POST, PATCH, PUT, DELETE), failing loud naming the call; a body edit; label creation; GraphQL-only acts that degrade (pin warns) or die by name (Projects) |
+| Call log | `BEAST_CALL_LOG` in `gh_request`, `gh_send_try` | one line per request: time, status, `charged=yes or no`, quota, path |
+| Seat identity | `SEAT_ID_RE`, `SEAT_IDENTITY_RE`, `SEAT_TOKEN_RE`, `AGENT_NAME_RE`, `seat_identity_of`, `seat_identity`, `seat_short`, `seat_id`, `seat_id_local`, `seat_resolve`, `seat_rostered`, `seat_display`, `seat_login`, `seat_label`, `roster_check_unique`, `roster_seat_ids`, `roster_row`, `roster_field`, `seat_label_terms`, `row_seat_ids`, `seat_comment_tokens` | the identity `<slug>/<LABEL>/<login>` derived from a row's `github`, `label` and `workstream`; the short id inside a workstream; a bare LABEL resolved through this roster, then every workstream's table; the one roster row check (own repo only, `agent` and `workstream` required, `role` and `tracking` refused naming the key, `retired` a date); display shortening |
+| Workstreams | `WS_SLUG_RE`, `workstream_label_ensure`, `workstream_candidates`, `workstream_issue`, `workstream_master`, `seat_tracking` | the `ws:<slug>` label; the one open issue labelled `workstream` and `ws:<slug>` among the roster's owners, the search's candidates re-read live; its repo as the master; a seat's tracking issue by its row's `workstream` |
+| The `## Seats` table | `WS_SEATS_HEADER`, `WS_HOME_RE`, `ws_home_word`, `ws_home_parse`, `ws_seats_table_parse`, `ws_seats_parse`, `ws_seats_render`, `ws_seats_write`, `ws_seats_all`, `section`, `section_replace` | one parser by shape (dies naming the line), one renderer (Account, Address, Seen from the `BEAST-ADDRESS` comments), one writer (behind the guard); every seat of every open workstream, the one enumeration of all seats |
+| Addresses | `ADDRESS_HEADER_RE`, `ADDRESS_FRESH_S`, `claude_account`, `address_header`, `address_age`, `seat_addresses_of`, `seat_address_read`, `sessions_path`, `sessions_key_check` | the `BEAST-ADDRESS` comment's shape and freshness (24 h); this machine's Claude account from `~/.claude.json`; every seat's address on one issue, one seat's; the machine-local cache, keyed by the identity only (a key of another shape is refused before a write and dropped, named, by `seats.sh` at every run) |
+| Roles | `seat_agent_path`, `seat_agent_check` | where a seat's agent file is: the plugin's `agents/<name>.md` for `daita-beast:<name>`, else `<repo>/.claude/agents/<name>.md` in a local checkout or through the contents API; dies naming a file that does not exist |
+| Seat homes | `seat_home_path_of`, `seat_home_path`, `seat_home_kind`, `seat_json_id`, `seat_repo`, `seat_locate`, `seat_homes_on_machine`, `beast_checkouts`, `checkouts_record`, `vscode_workspace_folders`, `automemory_dir` | deriving a home from the roster; `seat_repo`, the one owner of which repo holds a seat's desk and milestones (this roster's row, else the Repo cell of its `## Seats` row: a seat of any repo); finding a seat on this machine by LABEL, short id or identity, reading a row only from a roster that passes `roster_check_unique` (a failing checkout named once, not searched); the machine index; the VS Code workspace files that list the launch folder |
+| The plugin on a machine | `plugin_root`, `plugin_root_recorded`, `plugin_root_record`, `plugin_json_path` | the scripts path: `$CLAUDE_PLUGIN_ROOT`, else `~/.beast/plugin.json` (one writer, one reader) |
+| The generated blocks | `fill_template`, `claude_block_render`, `claude_block_write`, `block_replace`, `block_write`, `CLAUDE_BLOCK_BEGIN_RE`, `ws_block_markers`, `ws_block_render`, `ws_block_write_local`, `ws_block_write_remote`, `protocol_repo` | the Beast block of a home's CLAUDE.md (identity, role, the workstream's table); the workstream block of a master's CLAUDE.md, locally or through the contents API (sha read first, 409 exits 1, `--pr` a branch and a pull request); the one replace shape of every block; the protocol pointer |
+| The seat-to-seat tag | `MSG_HEADER_RE`, `msg_header` | the first line of a direct `SendMessage` and of a desk message; the page's `MSG_RE` is its twin |
+| Bookkeeping | `BOOKKEEPING_FIRST_LINE_RE`, `comment_is_bookkeeping` | the one list of first lines that are never news for the relay (acks, status, notes, addresses, the Cowork stamp, close comments, amend lines) |
+| The queue | `answer_kind`, `approve_phrase`, `row_phrase`, `row_events`, `seat_acks`, `row_close_comment`, `row_mark_rejected`, `row_after_close`, `row_answer_url`, `amend_line`, `row_amended_at`, `AMEND_LINE_RE`, `ask_inline_check`, `BOARD_ROW_LABELS`, `RELAY_ROW_LABELS`, `roster_decider` | the four answers, a row's latest event, acks, the close comment, the standing answer, the amend line, the refusal of content that points elsewhere |
+| Privacy | `roster_repo`, `repo_public_why`, `roster_pair_check`, `coord_write_guard` | the twin pair; the guard before every coordination write, the seat map and the master block included |
+| Scrub and license | `roster_scrub`, `roster_vendored`, `roster_license`, `roster_repo_owners`, `roster_public_owners`, `scrub_patterns`, `scrub_scan`, `WORDS_MIN`, `WORDS_MIN_RARE`, `WORDS_TOKEN_RE`, `WORDS_COMMON`, `RECORD_PATH_RE` | what may not leave a twin, the vendored directories, and the license object; the scrub's owner set (`roster_repo_owners`: `repo`, `publishes_to`, `board`, seat repos) and the audit's (`roster_public_owners`: those plus every `public_intended` owner) |
+| Desks | `ASK_HEADER_RE`, `ask_header`, `ask_next_n`, `desk_find`, `desk_parse` | the ask header; the desk found by its labels in a given repo (`desk_find <id> <repo>`, the repo from `seat_repo`); the one desk parser (asks, answers, withdrawals, the tag line; a malformed `BEAST-MSG` line older than the seat's last ack counted as history, one newer dropped loud) |
+| Dependencies | `WAITS_ON_RE`, `waits_on_ref`, `waits_on_line`, `waits_on_parse`, `deps_declared`, `dep_state` | the `Waits on:` shape and its measure |
+| Milestones | `milestone_title_check`, `milestone_date_check`, `milestone_get`, `milestone_field`, `milestone_desc`, `milestone_write`, `milestone_create`, `milestone_require`, `milestone_set`, `milestone_days`, `milestone_slip`, `milestone_due_flags` | the milestone shape, the 12:00 UTC write and read-back, the requirement, due flags |
+| Awards | `award_policy_token`, `repo_permission` | a filled award policy, a caller's repo role |
+
+## Scripts
+
+| Script | Purpose and verbs | lib.sh | Writes |
+|---|---|---|---|
+| `join.sh` | take or retake a seat from any directory: `join.sh <LABEL | login/LABEL | slug/LABEL/login> [--address "<name [ref]>"] [--agent <name>] [--workstream <slug>]`; prints `SEATED <id> at <home>`, then `role: <agent> at <path>` | `seat_locate`, `seat_home_path`, `seat_home_kind`, `seat_json_id`, `roster_check_unique`, `roster_field`, `seat_identity_of`, `workstream_issue`, `seat_agent_check`, `seat_agent_path`, `checkouts_record`, `claude_block_write`, `automemory_dir` | roster (`agent`, `workstream`), `~/.beast/checkouts.json`, the `BEAST-ADDRESS` comment and `sessions.json` (through `seats.sh record`), the home's CLAUDE.md block; a cloud clone's `seat.json` |
+| `seat.sh` | `new <LABEL> --repo-path <checkout> --agent <name> --workstream <slug> [--kind checkout|worktree|wrapper | --kind subdir --dir <dir>]` (one act: row, home, table row, master block), `where <seat>`, `retire <seat>` | `checkout_require_root`, `checkout_root`, `repo_public_why`, `seat_home_path_of`, `seat_home_path`, `seat_home_kind`, `seat_locate`, `seat_json_id`, `roster_check_unique`, `checkouts_record`, `ws_home_word`, `ws_seats_parse`; through `workstream.sh seat-add|seat-remove|render` | roster row; the home (worktree on `seat/<LABEL>`, wrapper with `CLAUDE.md` and `claude.sh`); `.beast/seat.json`; `.gitignore` entry; the `## Seats` row and the master's block |
+| `seats.sh` | `record <seat> "<name [ref]>"`, `list`, `address <seat>` (line 1 the address, then account, machine, age, `path: direct` or `path: desk`), `forget <seat>` | `seat_identity`, `claude_account`, `address_header`, `address_age`, `seat_address_read`, `seat_addresses_of`, `ws_seats_all`, `ws_seats_write`, `sessions_path`, `sessions_key_check`, `msg_header` | the seat's one `BEAST-ADDRESS` comment (created, then edited in place); the re-rendered `## Seats` cells; `~/.beast/sessions.json` |
+| `resume.sh` | after a compaction or reload: the seat map of every open workstream (`seats.sh list`), newest handoff, decisions meanwhile, open ones, notes | `seat_rostered`, `seat_comment_tokens`, `roster_user_terms`, `search_issues`; through `seats.sh list` | nothing |
+| `status.sh` | `BEAST-STATUS` comment on a tracking issue, `--state working|blocked|done|handoff` | `seat_id`, `coord_write_guard` | one comment |
+| `notes.sh` | `show`, `set --text-file`, `append --text` on the one `BEAST-NOTES` comment | `seat_rostered`, `seat_tracking`, `coord_write_guard` | one comment, edited in place |
+| `ack.sh` | `BEAST-ACK` on a row or desk, `--state seen, executed or blocked` | `seat_rostered`, `coord_write_guard` | one comment |
+| `decision.sh` | `new`, `close`, `record`, `inbox` | `coord_write_guard`, `section_required`, `approve_phrase`, `ask_inline_check`, `milestone_require`, `milestone_set`, `waits_on_*`, `seat_id`, `seat_label_ensure`, `label_ensure_template`, `issues_list_shows`, `row_close_comment`, `row_mark_rejected`, `row_after_close`, `search_seat_issues`, `row_read`, `row_events`, `seat_acks`, `milestone_due_flags`, `project_cmd` | the row, its labels and milestone; the close comment and state; the board (through `row_after_close`) |
+| `pr.sh` | `request <pr> --seat`, `close <pr> --merge or --rejected` | `coord_write_guard`, `roster_decider`, `row_phrase`, `milestone_require`, `seat_label_ensure`, `row_close_comment`, `row_mark_rejected`, `row_after_close` | labels, assignee, milestone; the merge (REST `PUT pulls/{n}/merge`) or the unmerged close; the close comment |
+| `desk.sh` | `open`, `ask`, `answer <SEAT>` (a seat of any repo), `withdraw`, `msg <TO> --from <SEAT> --text [--re <ref>]` (`<TO>` a seat of any repo, `--from` one of this roster), `publish`, `inbox` | `seat_rostered`, `seat_id`, `seat_repo`, `desk_find`, `desk_parse`, `ask_header`, `ask_next_n`, `ask_inline_check`, `msg_header`, `seat_identity`, `coord_write_guard`, `roster_decider`, `milestone_require`, `waits_on_*`, `seat_acks`, `issues_list_shows` | the desk issue, its comments (the tag line on a message), its generated body |
+| `board.sh` | render the decider's board; `--publish --repo`, `--web` | `search_issues`, `row_read`, `section_required`, `row_phrase`, `row_events`, `seat_acks`, `seat_display`, `milestone_due_flags`, `coord_write_guard`, `pin_issue` | the body of "Pending decisions (generated)" (created and pinned once) |
+| `watch.sh` | one poll for every roster seat: `--roster [--once] [--interval]` | `roster_seat_ids`, `seat_label_terms`, `roster_user_terms`, `search_issues`, `comment_is_bookkeeping`, `run_cache_clear` (before each poll of the loop form) | `~/.beast/watch/<login>/<LABEL>.json` and `.mark`; event lines on stdout |
+| `relay.sh` | the scheduler's entry: `--repo [--model] [--permission-mode] [--dry-run]`; sends only to seats whose address is direct from this machine | `checkout_require_root`; through `watch.sh` and `seats.sh address` (one run cache shared with both) | `~/.beast/relay.log`; starts the messenger |
+| `install-relay.sh` | schedule `relay.sh` from the plugin root: launchd, systemd user timer or cron; `--status`, `--uninstall` | `plugin_root`, `checkout_require_root` | the scheduler job; logs under `~/.beast/` |
+| `permissions.sh` | `permissions.sh <repo root> [--write]`: the `permissions.allow` rules a seat needs (`gh issue|api|search|project|label|pr`, `gh repo view`, git read verbs, each `Bash(<prefix>:*)`) spliced textually into `<repo>/.claude/settings.json`; prints the diff, writes only with `--write`, "nothing to add" when present | none | `<repo>/.claude/settings.json`, every other byte kept |
+| `workstream.sh` | `new --slug <slug> --owner --title --repo --northstar-file --milestone …`, `seat-add <slug> <login/LABEL> --repo --home --agent`, `seat-remove <slug> <login/LABEL>`, `seats <slug>`, `render <slug> [--pr]` | `workstream_issue`, `workstream_label_ensure`, `workstream_master`, `milestone_create`, `milestone_title_check`, `milestone_date_check`, `coord_write_guard`, `repo_public_why`, `seat_agent_check`, `ws_seats_parse`, `ws_seats_render`, `ws_seats_write`, `beast_checkouts`, `ws_block_write_local`, `ws_block_write_remote`, `project_cmd` | milestones, a private Project, the tracking issue with its labels and empty table; the `## Seats` table; the master's CLAUDE.md block (local checkout, contents API, or a PR) |
+| `milestone.sh` | `new`, `list`, `move --why`, `close [--carry]` | the `milestone_*` functions, `waits_on_*`, `desk_parse`, `ask_header`, `coord_write_guard` | GitHub milestones; carried items; edited ask headers |
+| `deps.sh` | `deps.sh <SEAT>`: each declared dependency and its state | `deps_declared`, `dep_state`, `seat_repo` | nothing |
+| `report.sh` | period activity JSON; `milestone <title> [--post --by or --outside-notes]` | `deps_declared`, `dep_state`, `milestone_*`, `desk_find`, `seat_repo`, `seat_resolve`, `award_policy_token`, `coord_write_guard`, `search_issues` | desk messages (through `desk.sh msg`) and the milestone's `Report:` line |
+| `publish.sh` | `prepare [--amend]`, `scrub`, `request [--amend]`, `merge`, `pull`, `release`, `scan` | `roster_pair_check`, `scrub_patterns`, `scrub_scan`, `roster_scrub`, `roster_license`, `row_answer_url`, `row_amended_at`, `amend_line`, `answer_kind`, `milestone_require`, `coord_write_guard`; its own `public_info`, `public_fetch`, `public_push`, `public_send`, `publish_view`, `publish_base`, `scrub_run`, `license_gate` | branch `publish/<slug>`; the public branch, PR, merge and release; the twin row and its amend line; the merge commit on twin `main` |
+| `license.sh` | `render [-o]`, `check <dir or tree-ish>`, `audit` | `roster_license`, `roster_public_owners`, `scrub_patterns`, `scrub_scan`, `on_exit` | the rendered file (`-o`); never GitHub |
+| `wrapup.sh` | `plan`, `request`, `brief`, `notes`, `run` | `row_answer_url`, `row_phrase`, `answer_kind`, `row_close_comment`, `desk_parse`, `milestone_*`, `seat_tracking`, `contents_path`, `default_branch`, `coord_write_guard`; its own `plan_build`, `plan_check`, `plan_from_row`, `wrapup_delete` | the plan file and its commit; the row; the release (through `publish.sh`); deletes; the summary comment |
+| `bootstrap.sh` | make one repo a coordinated workspace in one pass: `--repo --path --seat [--orchestrator <LABEL> --workstream <slug>] [--board] [--workspace] [--install-plugins] [--kb] [--token]` | `checkout_require_root`, `roster_check_unique`, `checkouts_record` | through `init-repo.sh`; roster `repo`, `board`, `people` (and an orchestrator row, agent `daita-beast:seat`, in the named workstream); a `.code-workspace` file; a KB manifest skeleton; `.claude/skills/beast/SKILL.md` |
+| `init-repo.sh` | labels, issue templates, roster skeleton, award policy with `--token` | `checkout_require_root`, `roster_seat_ids`, `seat_label_ensure` | labels; `.github/ISSUE_TEMPLATE/*`; `.beast/roster.json`; `.beast/award-policy.md` |
+| `relabel.sh` | move bare `seat:<LABEL>` labels to `seat:<login>/<LABEL>`; dry run unless `--apply` | `seat_id`, `seat_label_ensure`, `roster_check_unique`, `search_issues` | labels |
+| `award.sh` | one `BEAST-AWARD` comment plus `awarded`; admin or maintainer only | `award_policy_token`, `repo_permission`, `label_ensure_template` | one comment, one label |
+| `bounty.sh` | an issue labelled `bounty` with its sections | `award_policy_token`, `label_ensure_template`, `project_cmd` | one issue |
+| `ledger.sh` | a month's awards from `BEAST-AWARD` comments; exit 2 when anything was dropped | `repo_permission` | `<out>/<month>.jsonl`, `<out>/<month>.md` |
+| `permit.sh` | PreToolUse hook (below) | `plugin_root_recorded` | nothing |
+| `seat-hello.sh` | SessionStart hook (below) | `plugin_root`, `seat_homes_on_machine`, `seat_home_path`, `seat_json_id`, `seat_identity_of`, `workstream_issue`, `seat_address_read`, `address_age`, `vscode_workspace_folders`, `roster_seat_ids` | nothing (context only) |
+| `ask-guard.sh` | Stop hook (below) | none (reads the transcript) | nothing |
+| `realign/surface_candidates.sh` | read-only drift-candidate finder over tracked files | none | nothing |
+| `realign/check_archive_boundary.sh` | a live reference into an archive directory is a violation; report, `--strict`, `--staged` | none | nothing |
+| `realign/check_branch_base.sh` | read-only branch and worktree hygiene report | none | nothing |
+| `realign/check_memory_drift.sh` | agent-memory bloat and contradiction signals; `--strict` | none | nothing |
+| `realign/pre-commit` | blocks a commit that adds an archive-boundary violation | none | nothing |
+| `pandoc/latex-crossrefs.lua` | the license render filter: title as H1, numbered headings, `\ref` as plain text | none | stdout of the render |
+
+## Skills
+
+Each skill is `skills/<name>/SKILL.md`; the verb skills wrap one script, and each carries one line pointing at the `connector` recipe of the same name for a surface without a shell.
+
+| Skill | Trigger | Does |
+|---|---|---|
+| `install` | "install beast", "set up beast here" | detects the surface from evidence and walks only that surface's numbered checklist, each step with its act, gate and evidence: local (tools, marketplace install, permissions, the plugin record, bootstrap, workstream, seat, join, relay, fixture, the decider's connector; the VS Code multi-root paragraph), cloud (the clone, every wake, the limits), cowork (install, access, board page, scheduled tick, a seat here) |
+| `seat` | "make a new seat", "where does X live", "retire this seat" | scopes the seat with the person first (repo, home kind, specialists, the role as an agent file, the workstream slug), then `seat.sh new --agent --workstream`, `where`, `retire` |
+| `join` | first act of every session, "rejoin", "I'm back" | `ListAgents`, then `join.sh <SEAT> --address … [--agent] [--workstream]`; the home as root |
+| `seats` | "who is X right now" | `seats.sh record`, `list`, `address`: the direct-or-desk rule and the tag line |
+| `resume` | "what was I doing" | `resume.sh` |
+| `status` | "post status", "blocked on X" | `status.sh` |
+| `decision` | "file this for the owner's word", "close the decision", "my inbox" | `decision.sh new`, `close`, `record`, `inbox` |
+| `respond` | the decider says approve, revise or reject; a seat gets an event | the four answers and how the hearing seat acts |
+| `ack` | "ack this", "mark executed" | `ack.sh` |
+| `pr` | "this PR needs review", "merge it" | `pr.sh request`, `close` |
+| `desk` | "ask on the desk", "message seat Y" | `desk.sh` |
+| `board` | "what is pending on me" | `board.sh` |
+| `board-ui` | "publish the board page" (Claude.ai or Cowork with the GitHub connector and the Artifact tool) | publishes `templates/board.html` byte-exact from a named commit, its first line filled with that commit's sha |
+| `connector` | a Beast verb asked for with connector tools and no Bash | the protocol as twelve numbered GitHub connector recipes (board, decision, assign, pr, answer, status, ack, inbox, resume, close, desk, workstream seat map) and the list of what cannot be done there |
+| `cowork-tick` | the prompt of a Cowork scheduled task, `/daita-beast:cowork-tick <owner/repo>`; "run my tick" | the decider's digest when something moved since the `BEAST-COWORK` stamp, the stamp edited in place, and the board page republished when the template's commit on main differs from the page's first line |
+| `workstream` | "open a workstream" | `workstream.sh new --slug`, `seat-add`, `seat-remove`, `seats`, `render` |
+| `milestone` | "set the milestones", "M2 slips a week" | `milestone.sh` |
+| `deps` | "what am I waiting on" | `deps.sh` |
+| `report` | "monthly report", milestone participant report | `report.sh`, rendered by the `reporter` agent |
+| `publish` | "publish this to the public repo" | `publish.sh` |
+| `license` | "which public repos lack our license" | `license.sh` |
+| `wrapup` | "wrap up M4", "clean the board" | `wrapup.sh` |
+| `realign` | "realign", "fold the decisions into the docs" | the delete-don't-annotate procedure; scope (a) a personal system, (b) a wrap-up's fold-in |
+| `relay` | "install the relay", "is the relay running" | `install-relay.sh` |
+| `init-repo` | "set this repo up for beast" | `init-repo.sh` |
+| `award`, `bounty`, `ledger` | awards and bounties | `award.sh`, `bounty.sh`, `ledger.sh` |
+
+## Agents
+
+| Agent | Model | Tools | Role |
+|---|---|---|---|
+| `seat` | the session's | the session's | the generic orchestrator role, `daita-beast:seat`: a seat whose roster row names it runs as this agent (`claude --agent daita-beast:seat` from its home); its body points at the home's Beast block as the owner of the obligations and adds nothing to it (inbox first every wake, a row before any question, status at seams, builders in worktrees, a handoff before compaction). A repo's own agent specializes it with its domain and one line `Seat role: daita-beast:seat` |
+| `relay-messenger` | Haiku | SendMessage | started only by `relay.sh`; sends each addressed seat its event line verbatim; reports queued or error; decides nothing, reads nothing |
+| `relay-installer` | Sonnet | Bash, Read | detects the scheduler, installs the relay, proves it with a fixture (NEW then DECIDED in the log); changes no script |
+| `seat-clerk` | Sonnet | Bash, Read | reads a seat's inbox, handoff and notes; returns per-row acts, draft acks, a draft handoff and memory triage; posts nothing |
+| `license-reviewer` | Sonnet | Bash, Read, Grep, Glob | runs `license.sh audit` and `check`; reports each miss with its owning seat and publish steps; writes nothing |
+| `moderator` | Sonnet | Bash, Read, Grep | triages new issues and PRs; applies only `bug`, `feature`, `question`; posts one `MODERATOR-DRAFT` comment per item; never awards |
+| `reporter` | Sonnet | Bash, Read | renders `report.sh` JSON and posts it as a status comment |
+
+## Hooks (`hooks/hooks.json`)
+
+| Event | Script | Does |
+|---|---|---|
+| PreToolUse (Bash) | `permit.sh` | allows a command whose whole text is one of the plugin's own scripts with plain arguments, under `$CLAUDE_PLUGIN_ROOT` or the root `~/.beast/plugin.json` records, optionally after `cd <absolute dir> && `; says nothing about a command carrying a semicolon, ampersand, pipe, backtick, `$(`, a redirect or a newline, so the normal permission flow applies to it. A plugin cannot ship permission rules; this is the in-plugin route for its scripts, and `permissions.sh` writes the repo's rules for `gh` and git. |
+| SessionStart | `seat-hello.sh` | opens every context line with the scripts path (or the install hint); in a home names the seat's identity, role, first act, recorded address with its age and the refresh line (`ListAgents`, then `seats.sh record`); elsewhere lists the seats a session can take; leads with the handoff after a compaction; never fails a session |
+| Stop | `ask-guard.sh` | in a seated session (the transcript carries join's `SEATED` line), a turn that ends asking the decider something with no `decision.sh new`, `record` or `desk.sh ask` run in it is blocked once, with the instruction to file and reply with the link; the stop after a block is never blocked; a fault blocks nothing |
+
+There is no PreCompact hook: Claude Code discards its `systemMessage` and `continue` fields.
+
+## Templates (`templates/`)
+
+| Template | Used by | Becomes |
+|---|---|---|
+| `claude-block.md` | `lib.sh::claude_block_render` (join, seat new) | the generated Beast block in a home's CLAUDE.md: the seat's identity, its role and agent path, its workstream, master and tracking issue, the workstream's `## Seats` table, the rules; its `Scripts:` line is machine-neutral |
+| `workstream-block.md` | `lib.sh::ws_block_render` (`workstream.sh render`, `seat.sh new`, `seat.sh retire`) | the workstream's block in the master repo's CLAUDE.md, between markers carrying the slug: the tracking issue, the master, the rendered `## Seats` table |
+| `board.html` | `board-ui` skill; `cowork-tick` reads its stamp back | the decider's board page; the only source of the live page; its first line is the commit stamp the publish fills |
+| `roster.example.json` | `init-repo.sh` | `.beast/roster.json` skeleton: a seat row with `agent`, `workstream` and `home` |
+| `labels.json` | `lib.sh::label_ensure_template` | the labels: `decision`, `workstream`, `hands`, `blocked`, `needs-review`, `desk`, `rejected`, `bounty`, `awarded` (the `ws:<slug>` label is made by `lib.sh::workstream_label_ensure`) |
+| `cloud-skill.md` | `bootstrap.sh` | `.claude/skills/beast/SKILL.md`, the committed pointer a cloud session loads |
+| `decision.md`, `workstream.md`, `bounty.md` | `init-repo.sh` | `.github/ISSUE_TEMPLATE/*`; `workstream.md` carries the labels `workstream, ws:<slug>`, the `## Master repo` section and the empty `## Seats` table |
+| `award-policy.md` | `init-repo.sh --token` | `.beast/award-policy.md`, written only filled |
+
+## Tests and CI
+
+- `tests/regex-mirror.test.mjs`: extracts `lib.sh`'s regexes (`ASK_HEADER_RE`, `WAITS_ON_RE`, `MSG_HEADER_RE`) and the page's JS twins from their source files and runs both on one fixture list; any line read differently fails, named.
+- `tests/seats-model.test.mjs`: the seat model's pure parsers and identity forms through bash with no network: the `## Seats` table parser (one shape, dies naming the line), the home word, the three identity forms resolving to one row of a fixture roster, the roster row check (`role` and `tracking` refused, `agent` and `workstream` required, no peer rows), `section_replace` and `block_replace`.
+- `tests/latex-crossrefs.test.mjs`: the license filter on LaTeX fixtures, including the failure on an undefined or stray label.
+- `.github/workflows/test.yml`: Node 22, `jq`, `pandoc`, `node --test plugin/tests/*.test.mjs` on every push and pull request. Locally: `npm test`.
+
+## Roster fields (`.beast/roster.json`)
+
+The roster is read from the repo's main checkout (`lib.sh::roster_path` through `repo_main_root`), never a worktree. It lists this repo's own seats only; which seats are in a workstream is the workstream issue's `## Seats` table.
+
+| Field | Meaning | Read by |
+|---|---|---|
+| `repo` | the private home repo of this checkout's seats (the twin); every seat row's `repo` equals it | `lib.sh::roster_repo`, `roster_check_unique`, `roster_pair_check`, `coord_write_guard`, `scrub_patterns`; `decision.sh new` default; `publish.sh`; `wrapup.sh`; `milestone.sh`; `report.sh` |
+| `publishes_to` | the public repo the twin publishes to | `lib.sh::roster_pair_check`, `scrub_patterns`; `publish.sh`; `license.sh audit` (twin seat column); `wrapup.sh run` (release target) |
+| `public_intended` | owners or repos that are or will be public | `lib.sh::repo_public_why`, `scrub_patterns` (excepted), `roster_public_owners` (its owners join the audit's set); `license.sh audit` |
+| `board` | where the generated board is published | `lib.sh::board_repo`; `decision.sh close`, `pr.sh close`; `bootstrap.sh`; `relabel.sh`; `cowork-tick` |
+| `coordinates` | one line: what this repo coordinates | `bootstrap.sh` |
+| `relay.permissionMode` | the seats' permission mode, which the messenger must match | `install-relay.sh` |
+| `scrub` | extra regexes, optionally scoped by path globs | `lib.sh::roster_scrub` |
+| `scrub_allow` | private repo bare names that are ordinary words | `lib.sh::roster_scrub` |
+| `scrub_allow_words` | phrases of closed-row words that may publish: 5 words or more drop the stretches inside; shorter, their words count as common | `lib.sh::roster_scrub`; `lib.sh::scrub_scan` |
+| `vendored` | directories of byte-exact upstream copies: manifests not checked, private-name classes not applied | `lib.sh::roster_vendored`; `license.sh`; `lib.sh::scrub_scan` |
+| `license` (`name`, `file`, `manifest`, `source{repo, path, render, checkout}`, `exempt`) | the license of every public repo of the owners | `lib.sh::roster_license`; `license.sh`; `publish.sh::license_gate` |
+| `seats[].label`, `seats[].github` | together the short id `<github>/<label>`, unique per login | every script (`lib.sh::roster_seat_ids`, `seat_id`, `roster_check_unique`) |
+| `seats[].workstream` | the slug whose tracking issue (labels `workstream`, `ws:<slug>`) the seat reports on; with the id, the seat's identity `<slug>/<label>/<github>` | `lib.sh::seat_identity_of`, `seat_tracking`; `join.sh`, `seat.sh`, `seat-hello.sh`, `notes.sh`, `wrapup.sh`, the generated block |
+| `seats[].agent` | the role: `<name>` for `<repo>/.claude/agents/<name>.md`, or `daita-beast:seat` | `lib.sh::seat_agent_path`, `roster_check_unique`; `join.sh`, `seat.sh`, `seat-hello.sh`, the `## Seats` row, the generated block |
+| `seats[].repo` | the repo the seat works in: the roster's own (a row naming another repo is refused); for a seat of another repo the fact is the Repo cell of its `## Seats` row | `lib.sh::seat_repo`, `roster_check_unique`, `coord_write_guard`, `roster_repo_owners`; `board.sh` due flags; `deps.sh` |
+| `seats[].lane` | the lane read from the repo CLAUDE.md `LANE:` line at seat creation | `seats.sh`, the generated block |
+| `seats[].home` | `{kind, branch}` or `{kind: subdir, dir}`; absent on a row written before homes (read as a checkout home) | `lib.sh::seat_home_path`, `seat_home_kind`, `seat_locate`; `join.sh`; `seat.sh` |
+| `seats[].retired` | a date `YYYY-MM-DD`, set by `seat.sh retire`; the hook lists no retired seat | `lib.sh::roster_check_unique`, `seat_homes_on_machine`; `seat-hello.sh` |
+| `people[].github`, `.name`, `.role` | people; exactly one `role` naming "owner" is the default decider, whose `name` the block shows | `lib.sh::roster_decider` (`pr.sh`, `desk.sh`, `publish.sh`, `wrapup.sh`); `bootstrap.sh`; the generated block |

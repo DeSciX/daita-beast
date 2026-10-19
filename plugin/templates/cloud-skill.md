@@ -13,6 +13,6 @@ Scripts: `$HOME/daita-beast/plugin/scripts/<verb>.sh`. Each verb's text: `$HOME/
 
 A seat whose roster home is a worktree runs in the cloud on its branch `seat/<LABEL>` (open the session on that branch); `join.sh` accepts the repo at that branch as its home.
 
-First acts, every wake, in this order: `seats.sh record <LABEL> "<ListAgents name>"`, `decision.sh inbox <LABEL>` (board rows and your desk, computed from acks on GitHub, nothing local), act, then `ack.sh <row> --seat <LABEL> --state seen|executed|blocked --next "…"` for each row and for your desk; `resume.sh <LABEL>`. Board or desk: a code change is a PR (`pr.sh request`), an act without code a decision (`decision.sh new`), a question across the desk an ask (`desk.sh ask`).
+First acts, every wake, in this order: `decision.sh inbox <LABEL>` (board rows and your desk, computed from acks on GitHub, nothing local), act, then `ack.sh <row> --seat <LABEL> --state seen|executed|blocked --next "…"` for each row and for your desk; `resume.sh <LABEL>`. Board or desk: a code change is a PR (`pr.sh request`), an act without code a decision (`decision.sh new`), a question across the desk an ask (`desk.sh ask`).
 
 Limits of this surface: GitHub REST only (Projects verbs refuse, board pinning warns), only repositories attached to this session, nothing is pushed in (the inbox at each wake is the whole hearing), no relay. On a local machine install the plugin instead: `/plugin marketplace add DeSciX/DAITA`, `/plugin install daita-beast@daita`, then `/daita-beast:install`.

@@ -20,7 +20,7 @@ jq -r '.[] | [.name, .color, .description] | @tsv' "$templates/labels.json" | wh
 done
 
 if [[ -n "$path" ]]; then
-  [[ -d "$path/.git" ]] || die "$path is not a git checkout"
+  checkout_require_root "$path"   # a plain checkout or a submodule's (its .git is a file): lib.sh is the one owner of the test
   mkdir -p "$path/.github/ISSUE_TEMPLATE" "$path/.beast"
   for t in decision.md workstream.md bounty.md; do
     if [[ -f "$path/.github/ISSUE_TEMPLATE/$t" ]]; then echo "template $t present"; else cp "$templates/$t" "$path/.github/ISSUE_TEMPLATE/$t"; echo "template $t written"; fi

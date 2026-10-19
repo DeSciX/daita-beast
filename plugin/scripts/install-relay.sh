@@ -6,10 +6,11 @@
 #   install-relay.sh --status [--scheduler …]
 # The scheduler defaults by host: Darwin → launchd; Linux with a user systemd → systemd; else cron.
 # One job per machine (net.descix.daita-beast.relay); it runs as the logged-in user, whose gh and claude
-# credentials it uses. Logs: ~/.beast/relay.log (every tick), ~/.beast/relay.launchd.log or
+# credentials it uses, and runs relay.sh from the installed plugin (lib.sh plugin_root; the status line names it). Logs: ~/.beast/relay.log (every tick), ~/.beast/relay.launchd.log or
 # ~/.beast/relay.sched.log (the scheduler's own stdout/stderr).
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$here/lib.sh"
 label="net.descix.daita-beast.relay"
 repo=""; interval=120; model="haiku"; pmode=""; action="install"; scheduler=""
 while [[ $# -gt 0 ]]; do
@@ -32,6 +33,10 @@ if [[ -z "$scheduler" ]]; then
   esac
 fi
 case "$scheduler" in launchd|systemd|cron) ;; *) echo "scheduler must be launchd, systemd or cron" >&2; exit 1 ;; esac
+# The job runs the plugin this machine is installed with (lib.sh plugin_root: $CLAUDE_PLUGIN_ROOT, else the root
+# ~/.beast/plugin.json records), never a path derived from where this script was invoked.
+relay=""
+if [[ "$action" == install ]]; then relay="$(plugin_root)/scripts/relay.sh"; [[ -x "$relay" ]] || die "install-relay.sh: $relay is not an executable script"; fi
 mkdir -p "$HOME/.beast"
 plist="$HOME/Library/LaunchAgents/$label.plist"
 unit_dir="$HOME/.config/systemd/user"
@@ -50,7 +55,7 @@ case "$scheduler:$action" in
   launchd:uninstall)
     launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true; rm -f "$plist"; echo "uninstalled $label (launchd)" ;;
   launchd:install)
-    [[ -n "$repo" && -d "$repo/.git" ]] || { echo "--repo must be a git checkout" >&2; exit 1; }
+    [[ -n "$repo" ]] || { echo "--repo must be a git checkout" >&2; exit 1; }; checkout_require_root "$repo"
     # The messenger's permission mode must equal the seats' (a receiver holds a message from a sender in
 # another mode): --permission-mode, else the roster's relay.permissionMode, else fail loud.
 if [[ "$action" == "install" && -z "$pmode" ]]; then
@@ -66,7 +71,7 @@ case "${pmode:-default}" in default|acceptEdits|auto|bypassPermissions|dontAsk|p
 <plist version="1.0"><dict>
   <key>Label</key><string>$label</string>
   <key>ProgramArguments</key><array>
-    <string>$here/relay.sh</string><string>--repo</string><string>$repo</string><string>--model</string><string>$model</string><string>--permission-mode</string><string>$pmode</string>
+    <string>$relay</string><string>--repo</string><string>$repo</string><string>--model</string><string>$model</string><string>--permission-mode</string><string>$pmode</string>
   </array>
   <key>StartInterval</key><integer>$interval</integer>
   <key>RunAtLoad</key><true/>
@@ -80,7 +85,7 @@ case "${pmode:-default}" in default|acceptEdits|auto|bypassPermissions|dontAsk|p
 EOF
     launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
     launchctl bootstrap "gui/$(id -u)" "$plist"
-    echo "installed $label (launchd): every ${interval}s, repo $repo, model $model, mode $pmode"; echo "log: $HOME/.beast/relay.log" ;;
+    echo "installed $label (launchd): every ${interval}s, repo $repo, model $model, mode $pmode, relay $relay"; echo "log: $HOME/.beast/relay.log" ;;
   systemd:status)
     if systemctl --user is-enabled "$label.timer" >/dev/null 2>&1; then
       echo "installed (systemd): $unit_dir/$label.timer"; systemctl --user list-timers "$label.timer" --no-pager | sed -n '1,2p'
@@ -89,7 +94,7 @@ EOF
     systemctl --user disable --now "$label.timer" 2>/dev/null || true; rm -f "$unit_dir/$label.timer" "$unit_dir/$label.service"
     systemctl --user daemon-reload 2>/dev/null || true; echo "uninstalled $label (systemd)" ;;
   systemd:install)
-    [[ -n "$repo" && -d "$repo/.git" ]] || { echo "--repo must be a git checkout" >&2; exit 1; }
+    [[ -n "$repo" ]] || { echo "--repo must be a git checkout" >&2; exit 1; }; checkout_require_root "$repo"
     [[ "$interval" -ge 60 ]] || { echo "interval must be 60 s or more" >&2; exit 1; }
     need_tools; mkdir -p "$unit_dir"
     cat > "$unit_dir/$label.service" <<EOF
@@ -99,7 +104,7 @@ Description=daita-beast decision relay (one poll; a messenger only on change)
 Type=oneshot
 Environment=PATH=$(path_for_job)
 Environment=HOME=$HOME
-ExecStart=$here/relay.sh --repo $repo --model $model --permission-mode $pmode
+ExecStart=$relay --repo $repo --model $model --permission-mode $pmode
 StandardOutput=append:$HOME/.beast/relay.sched.log
 StandardError=append:$HOME/.beast/relay.sched.log
 EOF
@@ -114,17 +119,17 @@ AccuracySec=10s
 WantedBy=timers.target
 EOF
     systemctl --user daemon-reload && systemctl --user enable --now "$label.timer"
-    echo "installed $label (systemd user timer): every ${interval}s, repo $repo, model $model, mode $pmode"; echo "log: $HOME/.beast/relay.log" ;;
+    echo "installed $label (systemd user timer): every ${interval}s, repo $repo, model $model, mode $pmode, relay $relay"; echo "log: $HOME/.beast/relay.log" ;;
   cron:status)
     if crontab -l 2>/dev/null | grep -qF "$cron_tag"; then echo "installed (cron):"; crontab -l | grep -F "$cron_tag"; else echo "not installed (cron)"; fi; status_common ;;
   cron:uninstall)
     (crontab -l 2>/dev/null | grep -vF "$cron_tag" || true) | crontab -; echo "uninstalled $label (cron)" ;;
   cron:install)
-    [[ -n "$repo" && -d "$repo/.git" ]] || { echo "--repo must be a git checkout" >&2; exit 1; }
+    [[ -n "$repo" ]] || { echo "--repo must be a git checkout" >&2; exit 1; }; checkout_require_root "$repo"
     [[ "$interval" -ge 60 ]] || { echo "interval must be 60 s or more" >&2; exit 1; }
     need_tools
     minutes=$(( (interval + 59) / 60 )); [[ $minutes -ge 1 ]] || minutes=1
-    line="*/$minutes * * * * PATH=$(path_for_job) HOME=$HOME $here/relay.sh --repo $repo --model $model --permission-mode $pmode >> $HOME/.beast/relay.sched.log 2>&1 $cron_tag"
+    line="*/$minutes * * * * PATH=$(path_for_job) HOME=$HOME $relay --repo $repo --model $model --permission-mode $pmode >> $HOME/.beast/relay.sched.log 2>&1 $cron_tag"
     (crontab -l 2>/dev/null | grep -vF "$cron_tag" || true; echo "$line") | crontab -
-    echo "installed $label (cron): every ${minutes} min (cron's floor is one minute), repo $repo, model $model, mode $pmode"; echo "log: $HOME/.beast/relay.log" ;;
+    echo "installed $label (cron): every ${minutes} min (cron's floor is one minute), repo $repo, model $model, mode $pmode, relay $relay"; echo "log: $HOME/.beast/relay.log" ;;
 esac

@@ -19,3 +19,5 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/milestone.sh close "M3 milestones and reports" [--
 - `close` refuses while issues, PRs or open desk asks are filed under it, naming each. `--carry <next>` moves them all to the next open milestone, then closes.
 - After a close, send the participant report: `/daita-beast:report` (`report.sh milestone "<title>" --post --by <SEAT>`).
 - `decision.sh inbox` and `board.sh` show the milestones due within 3 days or overdue, one line each; so does the Cowork page, on the desk chips.
+
+Without a shell (Cowork, claude.ai), use the `connector` skill: its recipe of the same name, or its list of the acts it cannot do.

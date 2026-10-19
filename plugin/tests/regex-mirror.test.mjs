@@ -76,6 +76,21 @@ const WAITS_LINES = [
   "Waits on: acme/BE AST",
 ];
 
+const T = "at=2026-10-16T10:00:00Z";
+const MSG_LINES = [
+  `${P}MSG from=beast/BEAST/acme to=platform/DEVPLANE/acme re=none blocking=no ${T}`,
+  `${P}MSG from=beast/BEAST/acme to=platform/DEVPLANE/acme re=acme/twin#12 blocking=no ${T}`,
+  `${P}MSG from=beast/BEAST/acme to=platform/DEVPLANE/acme re=https://github.com/acme/twin/pull/3 blocking=no ${T}  `,
+  `${P}MSG from=acme/BEAST to=acme/DEVPLANE re=none blocking=no ${T}`,
+  `${P}MSG from=beast/BEAST/acme to=platform/DEVPLANE/acme ${T}`,
+  `${P}MSG from=beast/BEAST/acme to=platform/DEVPLANE/acme re=none blocking=no`,
+  `${P}MSG from=beast/BEAST/acme to=platform/DEVPLANE/acme re=none blocking=yes ${T}`,
+  `${P}MSG from=beast/BEAST/acme to=platform/DEVPLANE/acme re= blocking=no ${T}`,
+  `${P}MSG from=Beast/BEAST/acme to=platform/DEVPLANE/acme re=none blocking=no ${T}`,
+  `${P}MSG from=beast/beast/acme to=platform/DEVPLANE/acme re=none blocking=no ${T}`,
+  `${P}MSG from=beast/BEAST/acme to=platform/DEVPLANE/acme re=none blocking=no ${T} extra`,
+];
+
 // compare <lib regex name> <page regex name> <lines> <group names in the page's capture order>
 function compare(libName, pageName, lines, groups) {
   const libCap = jqCaptures(libRe(libName), lines);
@@ -101,8 +116,12 @@ test("waits-on: lib.sh WAITS_ON_RE and the page's WAITS_RE read every fixture li
   compare("WAITS_ON_RE", "WAITS_RE", WAITS_LINES, ["ref"]);
 });
 
+test("the seat-to-seat tag: lib.sh MSG_HEADER_RE and the page's MSG_RE read every fixture line alike", () => {
+  compare("MSG_HEADER_RE", "MSG_RE", MSG_LINES, ["from", "to", "re", "at"]);
+});
+
 test("the fixtures exercise both outcomes on both shapes", () => {
-  for (const [name, lines] of [["ASK_HEADER_RE", ASK_LINES], ["WAITS_ON_RE", WAITS_LINES]]) {
+  for (const [name, lines] of [["ASK_HEADER_RE", ASK_LINES], ["WAITS_ON_RE", WAITS_LINES], ["MSG_HEADER_RE", MSG_LINES]]) {
     const caps = jqCaptures(libRe(name), lines);
     assert.ok(caps.some((c) => c) && caps.some((c) => !c), `${name}: the fixtures must hold lines that match and lines that do not`);
   }

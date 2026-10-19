@@ -1,15 +1,22 @@
 #!/usr/bin/env bash
-# seats.sh — the repo-scoped seat map. A seat is named by its LABEL (resolved through the roster) or its id <login>/<LABEL>.
-#   record <seat> "<name [ref]>"   write this session's SendMessage address under the seat's id
-#   list                           every roster seat of this repo by id, with its label and live address, if any
-#   address <seat>                 print the address for SendMessage, or exit 1
-#   forget <seat>                  drop a stale address
-# The roster (.beast/roster.json, committed) says who may be addressed from this repo.
-# Addresses (~/.beast/sessions.json, never committed, keyed by seat id) change on every session reload.
-# A key without a login (written before ids) is migrated on read when this roster resolves it; one that
-# does not resolve is left as is and named on stderr.
+# seats.sh — the seat map and the seats' addresses. A seat is named by its LABEL (resolved through the roster, then
+# every workstream's `## Seats` table), its short id <login>/<LABEL>, or its identity <slug>/<LABEL>/<login>.
+#   record <seat> "<name [ref]>"   write this session's SendMessage address: the seat's one BEAST-ADDRESS comment on its
+#                                  workstream tracking issue (created, then edited in place; the one owner), the
+#                                  machine-local cache ~/.beast/sessions.json (keyed by the identity), and the
+#                                  rendered Account/Address/Seen cells of the issue's `## Seats` table
+#   list                           every seat of every open workstream among the roster's owners (ws_seats_all), with
+#                                  its account, address and when it was seen (from the BEAST-ADDRESS comments)
+#   address <seat>                 the seat's address, read live: line 1 the address alone; then its account, machine,
+#                                  age, and which path applies: direct (SendMessage: same Claude account, same machine,
+#                                  recorded within 24h, an approximation of "after its newest session start") or desk
+#                                  (desk.sh msg). Exit 1 when none is recorded.
+#   forget <seat>                  delete a stale address: the comment and the cache entry
+# BEAST-ADDRESS seat=<identity> account=<claude account> address="<name [ref]>" machine=<hostname> at=<UTC>
+# (address_header, seat_address_read in lib.sh). Addresses change on every session reload: a seat records at every
+# join; a reader verifies one by a reply before relying on it.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
-need jq git
+need jq git gh
 
 cmd="${1:-}"; shift || true
 roster="$(roster_path)"
@@ -18,55 +25,93 @@ sessions="$(sessions_path)"
 mkdir -p "$(dirname "$sessions")"
 [[ -f "$sessions" ]] || echo '{}' > "$sessions"
 
-# Migrate bare keys to ids. When both exist, the newer recorded_at wins.
+# The cache is keyed by the identity. A key of an older shape (a bare LABEL, or login/LABEL) is dropped, named: the
+# comment on the tracking issue is the owner, and the next record rewrites the cache.
 while IFS= read -r k; do
   [[ -n "$k" ]] || continue
-  if id="$(seat_id "$k" 2>/dev/null)"; then
-    tmp="$(mktemp)"
-    jq --arg k "$k" --arg id "$id" '
-      (if .[$id] == null or ((.[$k].recorded_at // "") > (.[$id].recorded_at // "")) then .[$id] = .[$k] else . end) | del(.[$k])' "$sessions" > "$tmp" && mv "$tmp" "$sessions"
-    echo "daita-beast: $sessions: migrated key $k -> $id" >&2
-  else
-    echo "daita-beast: $sessions: key $k is not a seat id and does not resolve to one seat of $roster; left as is" >&2
-  fi
-done < <(jq -r 'keys[] | select(contains("/") | not)' "$sessions")
+  tmp="$(mktemp)"; jq --arg k "$k" 'del(.[$k])' "$sessions" > "$tmp" && mv "$tmp" "$sessions"
+  echo "daita-beast: $sessions: dropped the key $k (not <slug>/<LABEL>/<login>; the BEAST-ADDRESS comment is the owner, seats.sh record rewrites the cache)" >&2
+done < <(jq -r --arg re "$SEAT_IDENTITY_RE" 'keys[] | select(test($re) | not)' "$sessions")
 
 case "$cmd" in
   record)
     seat="${1:-}"; addr="${2:-}"
-    [[ -n "$seat" && -n "$addr" ]] || die "usage: seats.sh record <LABEL | login/LABEL> \"<name [ref]>\""
-    id="$(seat_rostered "$seat")" || die "add the seat to $roster first (a roster is the repo's visibility filter)"
+    [[ -n "$seat" && -n "$addr" ]] || die "usage: seats.sh record <LABEL | login/LABEL | slug/LABEL/login> \"<name [ref]>\""
+    id="$(seat_rostered "$seat")" || die "add the seat to $roster first (seat.sh new)"
+    identity="$(seat_identity "$id")" || exit 1
     [[ "$addr" =~ ^([^][$'\n']+)\ \[([0-9a-f]{6})\]$ ]] || die "address '$addr' is not of the shape 'name [ref]' as ListAgents prints it (the name may carry spaces and slashes; the ref is 6 hex digits)"
     name="${BASH_REMATCH[1]}"; ref="${BASH_REMATCH[2]}"
+    slug="${identity%%/*}"
+    tracking="$(workstream_issue "$slug")" || exit 1
+    repo="${tracking%%#*}"; number="${tracking#*#}"
+    coord_write_guard "$repo" "$id"
+    account="$(claude_account)" || exit 1
+    machine="$(hostname -s 2>/dev/null || hostname)"
+    [[ "$machine" =~ ^[^[:space:]]+$ ]] || die "the hostname '$machine' carries whitespace; the address line cannot hold it"
+    at="$(utc_now)"
+    have="$(seat_address_read "$identity")" || exit 1
+    body="$(address_header "$identity" "$account" "$addr" "$machine" "$at")" || exit 1
+    f="$(mktemp)"; printf '%s\n' "$body" > "$f"
+    if [[ -n "$have" ]]; then url="$(comment_edit "$repo" "$(jq -r .id <<< "$have")" "$f")"; what="edited"
+    else url="$(gh_send POST "repos/$repo/issues/$number/comments" -F body=@"$f" | jq -r .html_url)"; what="created"; fi
+    rm -f "$f"
+    sessions_key_check "$identity"
     tmp="$(mktemp)"
-    jq --arg l "$id" --arg n "$name" --arg r "$ref" --arg a "$addr" --arg c "$(pwd)" --arg t "$(utc_now)" \
-       '.[$l] = {name:$n, ref:$r, address:$a, cwd:$c, recorded_at:$t}' "$sessions" > "$tmp" && mv "$tmp" "$sessions"
-    echo "recorded $id -> $addr in $sessions"
+    jq --arg l "$identity" --arg n "$name" --arg r "$ref" --arg a "$addr" --arg acc "$account" --arg m "$machine" --arg c "$(pwd)" --arg t "$at" \
+       '.[$l] = {name:$n, ref:$r, address:$a, account:$acc, machine:$m, cwd:$c, recorded_at:$t}' "$sessions" > "$tmp" && mv "$tmp" "$sessions"
+    echo "recorded $identity -> $addr (account $account, machine $machine): $what $url; cached in $sessions"
+    ws_seats_write "$slug" "$(ws_seats_parse "$slug")" >/dev/null || exit 1
+    echo "the \`## Seats\` table of $tracking re-rendered (Account, Address, Seen are rendered from the comments; the comment is the owner)"
     ;;
   list)
-    printf '| Seat | Label | Role | Repo | Lane | Address | Recorded |\n|---|---|---|---|---|---|---|\n'
-    roster_seat_ids "$roster" | while IFS= read -r id; do
-      l="$(seat_label "$id")"
-      IFS=$'\t' read -r role repo lane < <(jq -r --arg g "$(seat_login "$id")" --arg l "$l" '.seats[] | select(.github == $g and .label == $l) | [.role, .repo, .lane] | @tsv' "$roster")
-      addr=$(jq -r --arg l "$id" '.[$l].address // "unknown"' "$sessions")
-      at=$(jq -r --arg l "$id" '.[$l].recorded_at // "-"' "$sessions")
-      printf '| %s | %s | %s | %s | %s | %s | %s |\n' "$id" "$l" "$role" "$repo" "$lane" "$addr" "$at"
-    done
+    me="$(claude_account 2>/dev/null || echo "")"
+    printf '| Seat | Repo | Home | Agent | Account | Address | Seen |\n|---|---|---|---|---|---|---|\n'
+    cur=""; addrs=""
+    while IFS=$'\t' read -r slug seat repo home agent tracking title; do
+      [[ -n "$slug" ]] || continue
+      if [[ "$slug" != "$cur" ]]; then cur="$slug"; addrs="$(seat_addresses_of "$slug")" || exit 1; fi
+      identity="$(seat_identity_of "$seat" "$slug")"
+      a="$(jq -c --arg s "$identity" 'select(.seat == $s)' <<< "$addrs" | head -1)"
+      if [[ -n "$a" ]]; then
+        acc="$(jq -r .account <<< "$a")"; at="$(jq -r .at <<< "$a")"
+        age="$(address_age "$at")"
+        printf '| %s | %s | %s | %s | %s | %s | %s |\n' "$identity" "$repo" "$home" "$agent" "$acc$([[ -n "$me" && "$acc" == "$me" ]] && echo " (yours)")" "$(jq -r .address <<< "$a" | cell) on $(jq -r .machine <<< "$a")" "$at (${age%%$'\t'*}, ${age#*$'\t'})"
+      else printf '| %s | %s | %s | %s | — | — | — |\n' "$identity" "$repo" "$home" "$agent"; fi
+    done < <(ws_seats_all)
     echo
-    echo "Addresses are re-minted on every reload: verify one by a reply before relying on it."
+    echo "Addresses are re-minted on every reload: verify one by a reply before relying on it. seats.sh address <SEAT> says whether a direct SendMessage applies or the desk (desk.sh msg)."
     ;;
   address)
-    seat="${1:-}"; [[ -n "$seat" ]] || die "usage: seats.sh address <LABEL | login/LABEL>"
-    id="$(seat_rostered "$seat")" || exit 1
-    addr=$(jq -r --arg l "$id" '.[$l].address // empty' "$sessions")
-    [[ -n "$addr" ]] || die "no recorded address for $id — that session has not run seats record since its last reload"
-    echo "$addr"
+    seat="${1:-}"; [[ -n "$seat" ]] || die "usage: seats.sh address <LABEL | login/LABEL | slug/LABEL/login>"
+    identity="$(seat_identity "$seat")" || exit 1
+    a="$(seat_address_read "$identity")" || exit 1
+    [[ -n "$a" ]] || die "no address recorded for $identity (no BEAST-ADDRESS comment on the tracking issue of workstream ${identity%%/*}): that session has not run seats.sh record since its last reload; write to its desk instead (desk.sh msg)"
+    me="$(claude_account)" || exit 1
+    machine="$(hostname -s 2>/dev/null || hostname)"
+    acc="$(jq -r .account <<< "$a")"; m="$(jq -r .machine <<< "$a")"; at="$(jq -r .at <<< "$a")"
+    age="$(address_age "$at")"; fresh="${age#*$'\t'}"
+    jq -r .address <<< "$a"
+    echo "account: $acc ($([[ "$acc" == "$me" ]] && echo "same as yours" || echo "not yours: $me"))"
+    echo "machine: $m ($([[ "$m" == "$machine" ]] && echo "this machine" || echo "not this machine: $machine"))"
+    echo "recorded: $at (${age%%$'\t'*}, $fresh; fresh = within 24h, an approximation of \"after that seat's newest session start\") $(jq -r .url <<< "$a")"
+    why=""
+    [[ "$acc" == "$me" ]] || why="another Claude account"
+    [[ "$m" == "$machine" ]] || why="${why:+$why, }another machine"
+    [[ "$fresh" == fresh ]] || why="${why:+$why, }a stale address"
+    if [[ -z "$why" ]]; then echo "path: direct — SendMessage to the address above, first line $(msg_header "<your identity>" "$identity" "<ref|none>" 2>/dev/null || echo "BEAST-MSG from=<your identity> to=$identity re=<ref|none> blocking=no at=<UTC>")"
+    else echo "path: desk — $why: desk.sh msg $(seat_short "$identity") --from <SEAT> --text \"…\" [--re <ref>] (the durable copy on its desk; it reads it at its next wake)"; fi
     ;;
   forget)
-    seat="${1:-}"; [[ -n "$seat" ]] || die "usage: seats.sh forget <LABEL | login/LABEL>"
-    id="$(seat_id "$seat")" || exit 1
-    tmp="$(mktemp)"; jq --arg l "$id" 'del(.[$l])' "$sessions" > "$tmp" && mv "$tmp" "$sessions"
-    echo "forgot $id"
+    seat="${1:-}"; [[ -n "$seat" ]] || die "usage: seats.sh forget <LABEL | login/LABEL | slug/LABEL/login>"
+    identity="$(seat_identity "$seat")" || exit 1
+    a="$(seat_address_read "$identity")" || exit 1
+    if [[ -n "$a" ]]; then
+      coord_write_guard "$(jq -r '.url | capture("github.com/(?<r>[^/]+/[^/]+)/") | .r' <<< "$a")"
+      comment_delete "$(jq -r '.url | capture("github.com/(?<r>[^/]+/[^/]+)/") | .r' <<< "$a")" "$(jq -r .id <<< "$a")"
+      echo "deleted $(jq -r .url <<< "$a")"
+    fi
+    tmp="$(mktemp)"; jq --arg l "$identity" 'del(.[$l])' "$sessions" > "$tmp" && mv "$tmp" "$sessions"
+    echo "forgot $identity"
     ;;
   *) die "usage: seats.sh record|list|address|forget" ;;
 esac
