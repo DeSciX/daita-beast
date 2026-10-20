@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # bootstrap.sh — make one app repo a Beast-coordinated workspace in one pass.
 #   bootstrap.sh --repo <owner/repo> --path <checkout> --seat <LABEL> [--orchestrator <LABEL> --workstream <slug>] [--board <owner/repo>]
-#                [--workspace <file.code-workspace>] [--install-plugins] [--kb <name>] [--token <SYMBOL>]
+#                [--workspace <file.code-workspace>] [--install-plugins] [--kb <name>] [--token <SYMBOL> --community <owner/repo>]
 # Does, idempotently: labels + issue templates + roster skeleton (init-repo.sh; the award policy only with
-# --token, filled, since the repo takes outside contributions only once it has a token); fills the
+# --token and --community, filled, since the repo takes outside contributions only once it has a token; init-repo.sh
+# owns the rule that the two go together); fills the
 # roster's repo, board and people (and an orchestrator seat of this repo, role daita-beast:seat in the workstream
 # --workstream names, with the lane of the checkout's CLAUDE.md `LANE:` line and no lane key without one, only when
 # --orchestrator names one; the app's own seat is created by seat.sh new once its
@@ -17,7 +18,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 need gh jq git
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-repo=""; path=""; seat=""; orch=""; board=""; ws=""; wslug=""; install=0; kb=""; token=""
+repo=""; path=""; seat=""; orch=""; board=""; ws=""; wslug=""; install=0; kb=""; token=""; community=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo) repo="$2"; shift 2 ;;
@@ -30,10 +31,11 @@ while [[ $# -gt 0 ]]; do
     --install-plugins) install=1; shift ;;
     --kb) kb="$2"; shift 2 ;;
     --token) token="$2"; shift 2 ;;
+    --community) community="$2"; shift 2 ;;
     *) die "unknown argument $1" ;;
   esac
 done
-[[ -n "$repo" && -n "$path" && -n "$seat" ]] || die "usage: bootstrap.sh --repo owner/repo --path <checkout> --seat LABEL [--orchestrator LABEL --workstream <slug>] [--board owner/repo] [--workspace f] [--install-plugins] [--kb name]"
+[[ -n "$repo" && -n "$path" && -n "$seat" ]] || die "usage: bootstrap.sh --repo owner/repo --path <checkout> --seat LABEL [--orchestrator LABEL --workstream <slug>] [--board owner/repo] [--workspace f] [--install-plugins] [--kb name] [--token SYMBOL --community owner/repo]"
 [[ -z "$orch" || -n "$wslug" ]] || die "--orchestrator needs --workstream <slug>: a seat is an identity in one workstream (its tracking issue carries the labels workstream and ws:<slug>)"
 [[ -z "$wslug" || "$wslug" =~ $WS_SLUG_RE ]] || die "--workstream '$wslug' is not a slug (a-z, 0-9, -)"
 checkout_require_root "$path"
@@ -46,7 +48,7 @@ if [[ -n "$orch" && -z "$lane" ]]; then echo "lane: none ($path/CLAUDE.md has no
 [[ -n "$board" ]] || board="$repo"
 
 echo "== labels, templates, roster, policy"
-"$here/init-repo.sh" "$repo" --path "$path" ${token:+--token "$token"}
+"$here/init-repo.sh" "$repo" --path "$path" ${token:+--token "$token"} ${community:+--community "$community"}
 
 roster="$path/.beast/roster.json"
 for l in "$seat" ${orch:+"$orch"}; do [[ "$l" =~ $SEAT_LABEL_RE ]] || die "--seat/--orchestrator take a LABEL (upper-case letters, digits, _ or -), not '$l': the seat is held by $me"; done

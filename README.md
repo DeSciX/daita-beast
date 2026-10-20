@@ -17,6 +17,7 @@ Read [docs/protocol.md](docs/protocol.md) first: a workstream is a GitHub Projec
 | two tiers | the board holds PRs for the decider's review (`needs-review`) and decision issues; each seat's desk holds questions across the desk and messages, never on the board |
 | the board as a queue | every decision is a row before anyone acts; each seat acks on the row (`BEAST-ACK`), its inbox is computed from GitHub alone, the generated board shows pending and decided rows with per-seat ack state |
 | `docs/connector-access.md` | how the GitHub connector sees (or misses) repositories, per account |
+| `docs/guides/` | for an outside organization: `setup-guide.html` (installing Beast on each surface and setting up a project, with a worked example) and `rewards.html` (bounties, awards and the monthly ledger) |
 
 ## Using the plugin
 
@@ -40,7 +41,7 @@ Development, from a checkout: `claude --plugin-dir /path/to/daita-beast/plugin`.
 
 Make a repository a coordinating repo, open its workstream, then seat yourself:
 ```
-plugin/scripts/bootstrap.sh --repo <owner/repo> --path <checkout> --seat <LABEL> [--token <SYMBOL>]
+plugin/scripts/bootstrap.sh --repo <owner/repo> --path <checkout> --seat <LABEL> [--token <SYMBOL> --community <owner/repo>]
 plugin/scripts/workstream.sh new --slug <slug> --owner <owner> --title "WS: <name>" --repo <owner/repo> --northstar-file <f> --milestone "<title>|<YYYY-MM-DD>|<delivers>"
 plugin/scripts/seat.sh new <LABEL> --repo-path <checkout> --agent <name | daita-beast:seat> --workstream <slug>   # after the scoping step of /daita-beast:seat
 plugin/scripts/join.sh <LABEL> --address "<ListAgents name [ref]>"                                                # every session, from any directory

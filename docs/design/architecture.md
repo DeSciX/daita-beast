@@ -136,6 +136,7 @@ flowchart TB
   subgraph HOOKS["hooks.json"]
     H1["PreToolUse: permit.sh"]
     H2["SessionStart: seat-hello.sh"]
+    H4["SessionEnd: seat-bye.sh"]
     H3["Stop: ask-guard.sh"]
   end
 
@@ -169,6 +170,7 @@ flowchart TB
   SETUP --> LIB
   H1 --> L10
   H2 --> LIB
+  H4 --> LIB
   H3 -. "reads the transcript" .- S2
   W2 --> A1
   S2 --> X1
