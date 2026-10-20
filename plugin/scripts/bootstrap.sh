@@ -5,7 +5,8 @@
 # Does, idempotently: labels + issue templates + roster skeleton (init-repo.sh; the award policy only with
 # --token, filled, since the repo takes outside contributions only once it has a token); fills the
 # roster's repo, board and people (and an orchestrator seat of this repo, role daita-beast:seat in the workstream
-# --workstream names, only when --orchestrator names one; the app's own seat is created by seat.sh new once its
+# --workstream names, with the lane of the checkout's CLAUDE.md `LANE:` line and no lane key without one, only when
+# --orchestrator names one; the app's own seat is created by seat.sh new once its
 # workstream exists, which also makes its home); a VS Code workspace file beside the checkout;
 # a KB corpus manifest skeleton when --kb is given and none exists; and, with --install-plugins, the
 # daita marketplace and the daita + daita-beast plugins; and the committed cloud pointer skill
@@ -37,7 +38,11 @@ done
 [[ -z "$wslug" || "$wslug" =~ $WS_SLUG_RE ]] || die "--workstream '$wslug' is not a slug (a-z, 0-9, -)"
 checkout_require_root "$path"
 path="$(cd "$path" && pwd)"
+why="$(repo_public_why_at "$repo" "$path")" || exit 1
+[[ -z "$why" ]] || die "refused: $repo is $why. A coordinating repo is private: bootstrap its private twin and name $repo in that roster's \"publishes_to\"; init-repo.sh $repo sets up a public repo's own labels (bounty, awarded)"
 me="$(user_login)"
+lane="$(checkout_lane "$path")"
+if [[ -n "$orch" && -z "$lane" ]]; then echo "lane: none ($path/CLAUDE.md has no 'LANE: <name>' line; the orchestrator row records no lane)"; fi
 [[ -n "$board" ]] || board="$repo"
 
 echo "== labels, templates, roster, policy"
@@ -46,13 +51,13 @@ echo "== labels, templates, roster, policy"
 roster="$path/.beast/roster.json"
 for l in "$seat" ${orch:+"$orch"}; do [[ "$l" =~ $SEAT_LABEL_RE ]] || die "--seat/--orchestrator take a LABEL (upper-case letters, digits, _ or -), not '$l': the seat is held by $me"; done
 tmp="$(mktemp)"
-jq --arg repo "$repo" --arg board "$board" --arg o "$orch" --arg w "$wslug" --arg me "$me" '
+jq --arg repo "$repo" --arg board "$board" --arg o "$orch" --arg w "$wslug" --arg me "$me" --arg lane "$lane" '
   .repo = $repo | .board = $board
   | .coordinates = (if (.coordinates | startswith("<")) then "this app'"'"'s own workstreams; cross-repo decisions go to the board repo" else .coordinates end)
   | .seats = ([.seats[] | select(((.label|startswith("<")) or ((.agent // "<")|startswith("<")) or (.github|startswith("<"))) | not)]
-      + (if $o == "" then [] else [{label:$o, github:$me, repo:$repo, lane:"platform", agent:"daita-beast:seat", workstream:$w}] end) | unique_by([.github, .label]))
+      + (if $o == "" then [] else [{label:$o, github:$me, repo:$repo} + (if $lane == "" then {} else {lane:$lane} end) + {agent:"daita-beast:seat", workstream:$w}] end) | unique_by([.github, .label]))
   | .people = ([.people[] | select(.github | startswith("<") | not)] + [{github:$me, name:$me, role:"owner"}] | unique_by(.github))' "$roster" > "$tmp" && mv "$tmp" "$roster"
-echo "roster: repo, board and people written${orch:+; orchestrator seat $me/$orch (agent daita-beast:seat, workstream $wslug)}"
+echo "roster: repo, board and people written${orch:+; orchestrator seat $me/$orch (agent daita-beast:seat, workstream $wslug, lane ${lane:-none})}"
 roster_check_unique "$roster"
 checkouts_record "$path"
 
@@ -71,7 +76,7 @@ if [[ -n "$kb" ]]; then
   if [[ -f "$m" ]]; then echo "KB manifest present: $m"; else
     mkdir -p "$path/.descix/manifests"
     jq -n --arg k "$kb" '{kb_name:$k, sync_mode:"local", sources:[{path:"docs", ref:"main", tier:1, doc_type:"documentation"}, {path:"README.md", ref:"main", tier:1, doc_type:"documentation"}]}' > "$m"
-    echo "KB manifest skeleton written: $m (name the sources, commit, then: npx -y -p @descix/cli@3.0.0 descix kb corpus sync -a <app> -k $kb --dry-run)"
+    echo "KB manifest skeleton written: $m (name the sources, commit, then: $(descix_cmd kb corpus sync -a "<app>" -k "$kb" --dry-run))"
   fi
 fi
 
@@ -89,6 +94,6 @@ cat <<EOF
 2. first workstream (its tracking issue is the seat's): $here/workstream.sh new --slug <slug> --owner <org> --title "WS: <name>" --repo $repo --northstar-file <f> --milestone "<title>|<YYYY-MM-DD>|<what it delivers>"
 3. the seat and its home, from $path: $here/seat.sh new $seat --repo-path $path --agent <name | daita-beast:seat> --workstream <slug>
 4. start a session anywhere in the workspace and run: $here/join.sh $seat --address "<ListAgents name [ref]>"   (SEATED at the home; the CLAUDE.md block, address, resume; every session)
-5. DeSciX: /descix-setup (connector + account), then npx -y -p @descix/cli@3.0.0 descix whoami from $path
+5. DeSciX: /descix-setup (connector + account), then $(descix_cmd whoami) from $path
 6. relay: $here/install-relay.sh --status (one per machine; it already covers every roster seat)
 EOF

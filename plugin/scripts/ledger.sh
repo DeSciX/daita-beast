@@ -5,7 +5,11 @@
 # by shape, and keeps a row only when: the shape parses, the token equals --community, the comment was
 # made in --month, and its author is an admin or maintainer of that repo (checked live). Every dropped
 # comment is named on stderr with the reason; the run exits 2 when anything was dropped so a roll-up
-# with silent holes cannot be published by accident.
+# with silent holes cannot be published by accident. An author whose role cannot be read (a 403: the gh login
+# lacks push access) stops the run, naming the repo, the login and the answer; no award is dropped for it.
+# A ledger bound for a public repo lists only public repos: when --out is in a checkout of a public or
+# public-intended repo (repo_public_why_at), a private repo in --repos is refused before anything is read, since its
+# item urls, award reasons and logins would publish. An --out in no checkout is scratch (report.sh reads it there).
 # Outputs <out>/<month>.jsonl (one row per award) and <out>/<month>.md (totals per login).
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 need gh jq
@@ -23,12 +27,24 @@ done
 [[ -n "$community" && -n "$repos" && -n "$month" ]] || die "usage: ledger.sh --community TOKEN --repos a,b --month YYYY-MM [--out dir]"
 [[ "$month" =~ ^[0-9]{4}-[0-9]{2}$ ]] || die "month must be YYYY-MM"
 mkdir -p "$out"
+if root="$(checkout_root "$out" 2>/dev/null)"; then
+  dest="$(repo_slug "$root")" || exit 1
+  dwhy="$(repo_public_why_at "$dest" "$root")" || exit 1
+  if [[ -n "$dwhy" ]]; then
+    priv=""
+    for r in ${repos//,/ }; do
+      rwhy="$(repo_public_why_at "$r" "$root")" || exit 1
+      [[ -n "$rwhy" ]] || priv="$priv $r"
+    done
+    [[ -z "$priv" ]] || die "refused: --out $out is in a checkout of $dest, which is $dwhy, and --repos names private repos:$priv. Their item urls, award reasons and logins would publish: a public ledger lists only public repos' awards"
+  fi
+fi
 rows="$(mktemp)"; dropped=0
 declare -a role_cache=()
 role_of() { # repo login -> admin|maintain|write|read|none
   local key="$1/$2" r
   for e in "${role_cache[@]:-}"; do [[ "${e%%=*}" == "$key" ]] && { echo "${e#*=}"; return; }; done
-  r="$(repo_permission "$1" "$2")"
+  r="$(repo_permission "$1" "$2")" || exit 1
   role_cache+=("$key=$r"); echo "$r"
 }
 
@@ -47,7 +63,7 @@ for repo in ${repos//,/ }; do
       amount="${BASH_REMATCH[1]}"; token="${BASH_REMATCH[2]}"; to="${BASH_REMATCH[3]}"; what="${BASH_REMATCH[4]}"; link="${BASH_REMATCH[6]:-}"
       [[ "${at:0:7}" == "$month" ]] || continue
       if [[ "$token" != "$community" ]]; then echo "DROPPED $url: token $token is not $community" >&2; echo drop >> "$rows.d"; continue; fi
-      role="$(role_of "$repo" "$author")"
+      role="$(role_of "$repo" "$author")" || exit 1   # an unread role stops the run (repo_permission named it)
       case "$role" in admin|maintain) ;; *) echo "DROPPED $url: author $author has role '$role' on $repo (admin or maintain required)" >&2; echo drop >> "$rows.d"; continue ;; esac
       jq -nc --arg repo "$repo" --arg url "$url" --arg to "$to" --arg token "$token" --argjson amount "$amount" --arg what "$what" --arg ref "$link" --arg by "$author" --arg at "$at" \
         '{repo:$repo, item:$url, to:$to, token:$token, amount:$amount, for:$what, ref:$ref, by:$by, at:$at}' >> "$rows"

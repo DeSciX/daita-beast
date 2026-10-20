@@ -22,16 +22,16 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/workstream.sh new --slug <slug> --owner <owner> --
    (two or more open issues for the slug are refused naming them: stop and say so).
 5. **Create the seat.** The seat's repo must be private:
 ```
-${CLAUDE_PLUGIN_ROOT}/scripts/seat.sh new <LABEL> --repo-path <checkout> --agent <name | daita-beast:seat> --workstream <slug> [--kind checkout|worktree|wrapper | --kind subdir --dir <dir>]
+${CLAUDE_PLUGIN_ROOT}/scripts/seat.sh new <LABEL> --repo-path <checkout> --agent <name | daita-beast:seat> --workstream <slug> [--kind checkout|worktree|wrapper | --kind subdir --dir <dir> [--stub]]
 ```
-One act: it adds the roster row (held by the gh login running it; lane from the repo CLAUDE.md `LANE:` line; a label is unique per login; `agent`, `workstream`, `home: {kind, branch}` or `{kind: "subdir", dir}`), creates the home, adds the seat to the workstream issue's `## Seats` table (`workstream.sh seat-add`, the one owner of the seat map) and renders the master repo's CLAUDE.md block (`workstream.sh render`). Without `--kind` it picks:
+One act: it adds the roster row (held by the gh login running it; lane from the repo CLAUDE.md `LANE:` line when it has one, else no lane; a label is unique per login; `agent`, `workstream`, `home: {kind, branch}` or `{kind: "subdir", dir}`), creates the home, adds the seat to the workstream issue's `## Seats` table (`workstream.sh seat-add`, the one owner of the seat map, which renders the master repo's CLAUDE.md block and every home block of the workstream on this machine) and opens the seat's desk (`desk.sh open`; an existing desk is reused). Without `--kind` it picks:
 
 | Kind | Home | When |
 |---|---|---|
 | checkout | the repo's main checkout | no other seat of this login is homed in the checkout |
 | worktree | `<repo-parent>/<repo>.seats/<LABEL>`, branch `seat/<LABEL>` | the checkout is taken, and the repo has no submodules or nested git repos |
 | wrapper | `~/.beast/homes/<login>/<LABEL>/`: a `CLAUDE.md` that imports the repo's and carries the Beast block, and `claude.sh` | the checkout is taken, and the repo has submodules or nested repos (a worktree would not carry them) |
-| subdir | `<checkout>/<dir>`: a directory of the checkout (not a repo root) with its own CLAUDE.md, which gets the Beast block | never picked: only `--kind subdir --dir <dir>`; refused when the dir has no CLAUDE.md, is or is inside another repo, or homes another seat |
+| subdir | `<checkout>/<dir>`: a directory of the checkout (not a repo root) with its own CLAUDE.md, which gets the Beast block | never picked: only `--kind subdir --dir <dir>`; refused when the dir is or is inside another repo or homes another seat, and when it has no CLAUDE.md, naming the stub line; `--stub` writes it (an import of the nearest CLAUDE.md above it, e.g. `@../CLAUDE.md`) |
 
 Every home gets `.beast/seat.json` (`{id, kind}`, plus `root` for a wrapper; the rest is read from the roster). It is machine-local: for checkout and worktree homes `seat.sh` adds `.beast/seat.json` to the home's `.gitignore`, for a subdir home `<dir>/.beast/seat.json` to the checkout's, and says so. It refuses a home path that exists and is not this seat's, a checkout already homing another seat, and a `seat/<LABEL>` branch checked out elsewhere (with or without uncommitted changes).
 
@@ -41,6 +41,6 @@ A roster row written before homes (no `home`) is read as a checkout home, and jo
 
 **Where:** `${CLAUDE_PLUGIN_ROOT}/scripts/seat.sh where <LABEL | login/LABEL>`, from any directory, prints the home path and kind on this machine (found as join finds it; the path is derived from the kind, never stored in the roster), and says when the home is absent here.
 
-**Retire:** `${CLAUDE_PLUGIN_ROOT}/scripts/seat.sh retire <LABEL | login/LABEL>` removes the seat from its workstream's `## Seats` table, re-renders the master block and sets `"retired": "<date>"` on the roster row. The home, the branch and the GitHub comments are kept; remove a worktree by hand (`git worktree remove`) once its branch is merged or abandoned. Commit the roster.
+**Retire:** `${CLAUDE_PLUGIN_ROOT}/scripts/seat.sh retire <LABEL | login/LABEL>` removes the seat from its workstream's `## Seats` table, re-renders the master block and every home block of the workstream on this machine, and sets `"retired": "<date>"` on the roster row. The home, the branch and the GitHub comments are kept; remove a worktree by hand (`git worktree remove`) once its branch is merged or abandoned. Commit the roster.
 
 Without a shell (Cowork, claude.ai), use the `connector` skill: its recipe of the same name, or its list of the acts it cannot do.

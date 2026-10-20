@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # seat-hello.sh — SessionStart hook. In a seat's home (a $PWD/.beast/seat.json naming a roster seat whose derived
-# home, seat_home_path, is $PWD) it adds context naming the seat, its role, its first act and its tracking issue (the
+# home, seat_home_path, is $PWD, and whose row is not retired) it adds context naming the seat, its role, its first act and its tracking issue (the
 # roster and the workstream issue, the owners), its recorded address and its age with the refresh line (ListAgents,
 # then seats.sh record), and when other seats are listable too it names it as this folder's seat, not as certainly
 # this session's. Anywhere else it lists the gh login's seats a session here can take (seat_homes_on_machine:
@@ -21,7 +21,7 @@ src="$(printf '%s' "$input" | jq -r '.source // empty' 2>/dev/null)"
 # hello: the context line, or nothing. Runs in a subshell that sources lib.sh, whose die exits that subshell.
 hello() {
   source "$scripts/lib.sh"
-  local root="" roster here sid="" homeid="" homectx="" homeact="" compacted="" home tracking label login scope where_ list="" id c h k ws ret identity agent a age addr sline coord=""
+  local root="" roster here sid="" sret="" homeid="" homectx="" homeact="" compacted="" home tracking label login scope where_ list="" id c h k ws ret identity agent a age addr sline coord=""
   here="$(pwd -P)"
   # The scripts path, printed at every session start in a coordinated repo (the CLAUDE.md block says so): plugin_root
   # is $CLAUDE_PLUGIN_ROOT, else the root ~/.beast/plugin.json records, else the install hint (its die message).
@@ -30,7 +30,8 @@ hello() {
     roster="$(roster_path)"
     [[ ! -f "$roster" ]] || coord=1
     sid="$(seat_json_id "$PWD")"
-    if [[ -f "$roster" && -n "$sid" && $'\n'"$(roster_seat_ids "$roster")"$'\n' == *$'\n'"$sid"$'\n'* ]] \
+    [[ ! -f "$roster" || -z "$sid" ]] || sret="$(roster_field "$sid" retired)"
+    if [[ -f "$roster" && -n "$sid" && -z "$sret" && $'\n'"$(roster_seat_ids "$roster")"$'\n' == *$'\n'"$sid"$'\n'* ]] \
        && home="$(seat_home_path "$sid" 2>/dev/null)" && [[ "$(cd "$home" 2>/dev/null && pwd -P)" == "$here" ]]; then
       homeid="$sid"; label="$(seat_label "$sid")"
       ws="$(roster_field "$sid" workstream)"; agent="$(roster_field "$sid" agent)"
@@ -60,8 +61,11 @@ hello() {
     return 0
   fi
   [[ -n "$list" ]] || { [[ -z "$coord" ]] || echo "$sline."; return 0; }
+  local why_not=""
+  if [[ -n "$sret" ]]; then why_not=" (its .beast/seat.json names $sid, retired $sret)"
+  elif [[ -n "$sid" ]]; then why_not=" (its .beast/seat.json names $sid, whose home is elsewhere)"; fi
   [[ "$src" != compact ]] || echo "This session was just compacted: if it holds a seat, post that seat's handoff now from the summary ($scripts/status.sh <tracking> --seat <LABEL> --state handoff --next \"<next act>\" --text \"<state, waiting on, branches, gotchas>\"), then rerun its join.sh and reread <home>/CLAUDE.md."
-  echo "$sline. This session runs in $PWD, which is not the home of a Beast seat${sid:+ (its .beast/seat.json names $sid, whose home is elsewhere)}. The seats of $login $where_:${list%;}. This session holds no seat until the person names one; then $how"
+  echo "$sline. This session runs in $PWD, which is not the home of a Beast seat${why_not}. The seats of $login $where_:${list%;}. This session holds no seat until the person names one; then $how"
 }
 
 err="$(mktemp)"

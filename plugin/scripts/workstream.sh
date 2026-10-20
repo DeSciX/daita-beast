@@ -10,11 +10,13 @@
 #       adds the seat to the `## Seats` table (the one owner of which seats are in the workstream). The repo must be
 #       private and not public-intended; the agent must exist (<repo>/.claude/agents/<name>.md, or daita-beast:seat).
 #   workstream.sh seat-remove <slug> <login/LABEL>
+#       seat-add and seat-remove end with the render below (master block and every home block on this machine).
 #   workstream.sh seats <slug>                 prints the table
 #   workstream.sh render <slug> [--pr]         the master repo's CLAUDE.md block for this workstream (one per slug,
 #       between <!-- beast:workstream begin <slug> --> and end markers): into the local checkout of the master when this
 #       machine has one (then prints the commit command), else through the contents API on the default branch (a stale
-#       sha is a 409, exit 1, nothing written), or with --pr on a branch with a pull request.
+#       sha is a 409, exit 1, nothing written), or with --pr on a branch with a pull request; then the Beast block of
+#       every home on this machine of a seat in the table (ws_homes_render, lib.sh).
 # At least one milestone is required: the seat sets out its milestones at the start, so it schedules its own work. Each
 # is a GitHub milestone on --repo, made by milestone_create (lib.sh, the one owner of the shape; milestone.sh new is the
 # same call). They are created before the Project and the tracking issue, so a bad one writes nothing else.
@@ -22,6 +24,32 @@
 # the status reports. The project is created private.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 need gh jq
+
+# render_all <slug> <pr 0|1>: the master's block (into its local checkout when this machine has one, else through
+# GitHub), then every home's Beast block of the workstream on this machine (ws_homes_render). seat-add, seat-remove
+# and render all end here, so a change to the table reaches every block this machine holds.
+render_all() {
+  local slug="$1" pr="$2" master co c out
+  master="$(workstream_master "$slug")" || exit 1
+  coord_write_guard "$master"
+  co=""
+  while IFS= read -r c; do
+    [[ -n "$c" ]] || continue
+    [[ "$(repo_slug "$c" 2>/dev/null | tr 'A-Z' 'a-z')" == "$(tr 'A-Z' 'a-z' <<< "$master")" ]] || continue
+    co="$c"; break
+  done < <(beast_checkouts "$PWD")
+  if [[ -n "$co" && $pr -eq 0 ]]; then
+    [[ -f "$co/CLAUDE.md" ]] || : > "$co/CLAUDE.md"
+    ws_block_write_local "$co/CLAUDE.md" "$slug" || exit 1
+    if [[ -z "$(git -C "$co" status --porcelain -- CLAUDE.md)" ]]; then echo "nothing to commit in $co"
+    else echo "commit it: git -C $co add CLAUDE.md && git -C $co commit -m \"CLAUDE.md: workstream $slug block (workstream.sh render)\""; fi
+  else
+    [[ -z "$co" ]] || echo "(--pr: written through GitHub, not the local checkout $co)"
+    out="$(ws_block_write_remote "$master" "$slug" "$([[ $pr -eq 1 ]] && echo pr)")" || exit 1
+    echo "master $master CLAUDE.md: $out"
+  fi
+  ws_homes_render "$slug" || exit 1
+}
 
 cmd="${1:-}"; shift || true
 case "$cmd" in
@@ -115,7 +143,7 @@ case "$cmd" in
     rows="$(printf '%s\n%s\t%s\t%s\t%s\n' "$rows" "$seat" "$repo" "$home" "$agent" | sed '/^$/d')"
     ref="$(ws_seats_write "$slug" "$rows")" || exit 1
     echo "seat $slug/${seat#*/}/${seat%%/*} added to the \`## Seats\` table of $ref (repo $repo, home $home, agent $agent)"
-    echo "then: workstream.sh render $slug (the master's CLAUDE.md block)"
+    render_all "$slug" 0
     ;;
   seat-remove)
     slug="${1:-}"; seat="${2:-}"
@@ -126,7 +154,7 @@ case "$cmd" in
     grep -q "^$seat	" <<< "$rows" || die "seat $seat is not in the \`## Seats\` table of workstream $slug (its seats: $(cut -f1 <<< "$rows" | tr '\n' ' '))"
     ref="$(ws_seats_write "$slug" "$(awk -F'\t' -v s="$seat" '$1 != s' <<< "$rows")")" || exit 1
     echo "seat $seat removed from the \`## Seats\` table of $ref"
-    echo "then: workstream.sh render $slug (the master's CLAUDE.md block)"
+    render_all "$slug" 0
     ;;
   seats)
     slug="${1:-}"; [[ -n "$slug" ]] || die "usage: workstream.sh seats <slug>"
@@ -137,24 +165,7 @@ case "$cmd" in
     pr=0
     while [[ $# -gt 0 ]]; do case "$1" in --pr) pr=1; shift ;; *) die "unknown argument $1" ;; esac; done
     [[ -n "$slug" ]] || die "usage: workstream.sh render <slug> [--pr]"
-    master="$(workstream_master "$slug")" || exit 1
-    coord_write_guard "$master"
-    co=""
-    while IFS= read -r c; do
-      [[ -n "$c" ]] || continue
-      [[ "$(repo_slug "$c" 2>/dev/null | tr 'A-Z' 'a-z')" == "$(tr 'A-Z' 'a-z' <<< "$master")" ]] || continue
-      co="$c"; break
-    done < <(beast_checkouts "$PWD")
-    if [[ -n "$co" && $pr -eq 0 ]]; then
-      [[ -f "$co/CLAUDE.md" ]] || : > "$co/CLAUDE.md"
-      ws_block_write_local "$co/CLAUDE.md" "$slug" || exit 1
-      if [[ -z "$(git -C "$co" status --porcelain -- CLAUDE.md)" ]]; then echo "nothing to commit in $co"
-      else echo "commit it: git -C $co add CLAUDE.md && git -C $co commit -m \"CLAUDE.md: workstream $slug block (workstream.sh render)\""; fi
-    else
-      [[ -z "$co" ]] || echo "(--pr: written through GitHub, not the local checkout $co)"
-      out="$(ws_block_write_remote "$master" "$slug" "$([[ $pr -eq 1 ]] && echo pr)")" || exit 1
-      echo "master $master CLAUDE.md: $out"
-    fi
+    render_all "$slug" "$pr"
     ;;
   *) die "usage: workstream.sh new --slug <slug> … | seat-add <slug> <login/LABEL> --repo --home --agent | seat-remove <slug> <login/LABEL> | seats <slug> | render <slug> [--pr]" ;;
 esac

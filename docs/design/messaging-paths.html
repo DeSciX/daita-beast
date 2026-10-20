@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Beast Messaging Paths</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1d1c1a;--muted:#6b675f;--line:#e4e0d6;--card:#ffffff;--accent:#2f6f5e;--warn:#9a5b13;--bad:#a23b2c;--gh:#3b5bdb;--dx:#8a3ffc;--cl:#c2541a;--code:#f2efe8}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#17171a;--fg:#ecebe6;--muted:#a19d94;--line:#2f2f35;--card:#1f1f24;--accent:#6cc3a8;--warn:#e0a35a;--bad:#ec7a6a;--gh:#8fa6ff;--dx:#b98cff;--cl:#f08a52;--code:#26262c}}
+:root[data-theme="dark"]{--bg:#17171a;--fg:#ecebe6;--muted:#a19d94;--line:#2f2f35;--card:#1f1f24;--accent:#6cc3a8;--warn:#e0a35a;--bad:#ec7a6a;--gh:#8fa6ff;--dx:#b98cff;--cl:#f08a52;--code:#26262c}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif}
+main{max-width:980px;margin:0 auto;padding:32px 16px 64px}
+h1{font-size:28px;margin:0 0 4px}
+h2{font-size:19px;margin:36px 0 10px;padding-top:8px;border-top:1px solid var(--line)}
+h3{font-size:15px;margin:20px 0 6px}
+p,li{max-width:76ch}
+.sub{color:var(--muted);margin:0 0 20px}
+.tldr{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:14px 18px}
+.tldr li{margin:4px 0}
+code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:13px}
+.tbl{overflow-x:auto;margin:10px 0}
+table{border-collapse:collapse;width:100%;font-size:13.5px;background:var(--card)}
+th,td{border:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:top}
+th{background:var(--code);font-weight:600}
+.tag{display:inline-block;font-size:11.5px;font-weight:600;padding:1px 7px;border-radius:10px;border:1px solid currentColor;white-space:nowrap}
+.gh{color:var(--gh)}.dx{color:var(--dx)}.cl{color:var(--cl)}.ok{color:var(--accent)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+.zero{color:var(--muted)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:10px 0}
+svg text{fill:var(--fg);font-family:inherit}
+svg .m{fill:var(--muted)}
+.note{font-size:13px;color:var(--muted)}
+.opt{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+.opt .card h3{margin-top:0}
+</style>
+</head>
+<body>
+<main>
+<h1>Beast messaging paths</h1>
+<p class="sub">How the decisions board, the relay and the seats talk; which connector each call goes through; and whose identity and money each call spends. As built in daita-beast 1.5.7; measurements taken 2026-10-20.</p>
+
+<div class="tldr"><strong>In short</strong>
+<ul>
+<li><strong>Every Beast message and every board read goes through GitHub, as one GitHub user: the decider's login.</strong> The board page, the seats' scripts and the relay all draw on the same GitHub limits.</li>
+<li><strong>The DeSciX connector is not on the Beast path in 1.5.</strong> No Beast script, skill or page calls it, so DeSciX credits spent on the board are zero for every account. An earlier, platform-backed Beast plugin did call the DeSciX platform from every session start; it is retired.</li>
+<li><strong>The model cost sits on your Claude account.</strong> That covers the seat sessions, their builders, the relay's Haiku messenger and Cowork's republish. GitHub calls cost nothing in money. They cost quota.</li>
+<li><strong>The 403 was GitHub's secondary rate limit,</strong> which trips on bursts, not on totals. At the time the page fired 3 searches every 2 minutes. On top of that came its comment reads, the relay's searches, and the seats' scripts after the day's rejoins, all as the decider's login. The primary limits were far from full: right afterwards, search stood at 2 of 30 a minute and REST at 60 of 5,000 an hour.</li>
+<li><strong>Improvement options</strong> are a separate proposal, kept outside these as-built docs.</li>
+</ul></div>
+
+<h2>The interaction paths</h2>
+<p>Blue arrows are GitHub API calls. Orange are Claude model runs. Grey are local messages. There is no purple: no DeSciX call happens on this path.</p>
+<div class="card">
+<svg viewBox="0 0 940 430" width="100%" role="img" aria-label="Beast message flow between the decider, the board page, GitHub, the relay and the seats">
+<defs>
+<marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="var(--gh)"/></marker>
+<marker id="ac" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="var(--cl)"/></marker>
+<marker id="am" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="var(--muted)"/></marker>
+</defs>
+<g stroke="var(--line)" fill="var(--card)" stroke-width="1.5">
+<rect x="20" y="30" width="190" height="86" rx="8"/>
+<rect x="20" y="170" width="190" height="86" rx="8"/>
+<rect x="375" y="150" width="190" height="126" rx="8"/>
+<rect x="730" y="30" width="190" height="86" rx="8"/>
+<rect x="730" y="170" width="190" height="86" rx="8"/>
+<rect x="730" y="320" width="190" height="86" rx="8"/>
+<rect x="375" y="330" width="190" height="76" rx="8"/>
+</g>
+<text x="115" y="58" text-anchor="middle" font-weight="600">The decider in Cowork</text>
+<text x="115" y="78" text-anchor="middle" class="m" font-size="12">republish, cowork-tick</text>
+<text x="115" y="96" text-anchor="middle" class="m" font-size="12">model on the decider's Claude plan</text>
+<text x="115" y="198" text-anchor="middle" font-weight="600">Board page</text>
+<text x="115" y="218" text-anchor="middle" class="m" font-size="12">claude.ai artifact</text>
+<text x="115" y="236" text-anchor="middle" class="m" font-size="12">no model; connector calls</text>
+<text x="470" y="178" text-anchor="middle" font-weight="600">GitHub</text>
+<text x="470" y="198" text-anchor="middle" class="m" font-size="12">rows, desks, tracking issues</text>
+<text x="470" y="216" text-anchor="middle" class="m" font-size="12">comments are the messages</text>
+<text x="470" y="240" text-anchor="middle" class="m" font-size="12">one quota: user the decider's login</text>
+<text x="470" y="258" text-anchor="middle" class="m" font-size="12">search 30/min, REST 5,000/h</text>
+<text x="825" y="58" text-anchor="middle" font-weight="600">Relay (launchd)</text>
+<text x="825" y="78" text-anchor="middle" class="m" font-size="12">every 120 s, gh as the decider's login</text>
+<text x="825" y="96" text-anchor="middle" class="m" font-size="12">Haiku messenger on events</text>
+<text x="825" y="198" text-anchor="middle" font-weight="600">Seat sessions</text>
+<text x="825" y="218" text-anchor="middle" class="m" font-size="12">Claude Code, scripts via gh</text>
+<text x="825" y="236" text-anchor="middle" class="m" font-size="12">model on the decider's Claude acct</text>
+<text x="825" y="348" text-anchor="middle" font-weight="600">Builders</text>
+<text x="825" y="368" text-anchor="middle" class="m" font-size="12">sub-agents in worktrees</text>
+<text x="825" y="386" text-anchor="middle" class="m" font-size="12">largest Claude cost</text>
+<text x="470" y="358" text-anchor="middle" font-weight="600" fill="var(--dx)">DeSciX platform</text>
+<text x="470" y="378" text-anchor="middle" class="m" font-size="12">not called by Beast 1.5</text>
+<text x="470" y="394" text-anchor="middle" class="m" font-size="12">(app work only, daita plugin)</text>
+<g fill="none" stroke-width="2">
+<path d="M115 116 V168" stroke="var(--cl)" marker-end="url(#ac)"/>
+<path d="M210 200 H372" stroke="var(--gh)" marker-end="url(#ag)"/>
+<path d="M372 226 H212" stroke="var(--gh)" marker-end="url(#ag)"/>
+<path d="M730 74 C640 74 600 110 560 152" stroke="var(--gh)" marker-end="url(#ag)"/>
+<path d="M825 116 V168" stroke="var(--muted)" stroke-dasharray="5 4" marker-end="url(#am)"/>
+<path d="M730 222 H568" stroke="var(--gh)" marker-end="url(#ag)"/>
+<path d="M825 256 V318" stroke="var(--cl)" marker-end="url(#ac)"/>
+<path d="M210 74 C290 74 340 120 380 152" stroke="var(--gh)" marker-end="url(#ag)"/>
+</g>
+<text x="292" y="194" class="m" font-size="11.5">search + read</text>
+<text x="292" y="244" class="m" font-size="11.5">answer comment</text>
+<text x="600" y="96" class="m" font-size="11.5">1 search / tick</text>
+<text x="838" y="146" class="m" font-size="11.5">SendMessage</text>
+<text x="600" y="214" class="m" font-size="11.5">rows, acks, status</text>
+<text x="838" y="294" class="m" font-size="11.5">hires</text>
+<text x="250" y="96" class="m" font-size="11.5">tick, republish</text>
+</svg>
+</div>
+
+<h3>One decision, end to end</h3>
+<ol>
+<li>A seat files a row: <code>decision.sh new</code> creates an issue, as the decider's login via <code>gh</code>.</li>
+<li>The relay's next tick, at most 120 s later, runs one incremental search and diffs it against each seat's snapshot. On a change it starts one Haiku run, which SendMessages a <code>BEAST-EVENT</code> line to each seat with a fresh address.</li>
+<li>The board page finds the row through its own search on the claude.ai GitHub connector, and reads the row's comments.</li>
+<li>The decider answers on the page. The page posts one comment as the decider's login through the connector.</li>
+<li>The relay's next tick sees the comment and messages the seat. The seat acts, using <code>gh</code> as the decider's login, and acks with another comment.</li>
+</ol>
+<p>Seat to seat, nothing goes through GitHub when both sessions share a Claude account and a machine and the address is fresh: it is one local SendMessage tagged <code>BEAST-MSG … blocking=no</code>. Otherwise the line goes to the recipient's desk issue as a comment.</p>
+
+<h2>Who pays for each call</h2>
+<div class="tbl"><table>
+<tr><th>Path</th><th>Connector or client</th><th>GitHub identity and quota</th><th>Claude billing</th><th>DeSciX billing</th></tr>
+<tr><td>Board page reads (rows, desks, comments)</td><td><span class="tag gh">GitHub connector</span> claude.ai artifact runtime</td><td>the decider's login, through the claude.ai GitHub connector's OAuth grant. Search calls carry <code>search_type=semantic</code>.</td><td class="zero">none: no model call</td><td class="zero">none</td></tr>
+<tr><td>Board page answer (Post this comment)</td><td><span class="tag gh">GitHub connector</span></td><td>the decider's login, one comment</td><td class="zero">none</td><td class="zero">none</td></tr>
+<tr><td>Republish the page, cowork-tick</td><td><span class="tag gh">GitHub connector</span> in a Cowork session</td><td>the decider's login</td><td><span class="tag cl">Claude</span> the decider's Claude plan (Cowork)</td><td class="zero">none</td></tr>
+<tr><td>Seat sessions: rows, acks, status, desks, publishes</td><td><code>gh</code> CLI from the plugin scripts</td><td>the decider's login, token <code>gho_…</code> (GitHub CLI OAuth app; scopes repo, project, workflow, read:org, gist, delete_repo)</td><td><span class="tag cl">Claude</span> the decider's Claude account</td><td class="zero">none</td></tr>
+<tr><td>Builders (sub-agents)</td><td><code>gh</code>, git</td><td>the decider's login</td><td><span class="tag cl">Claude</span> the decider's Claude account (largest share)</td><td class="zero">none</td></tr>
+<tr><td>Relay poll</td><td><code>gh</code> from launchd, every 120 s</td><td>the decider's login: about 1 to 2 searches per tick (the incremental row search, plus the workstream list); issue reads are ETag-cached, so a 304 costs no REST quota</td><td class="zero">none</td><td class="zero">none</td></tr>
+<tr><td>Relay messenger</td><td><code>claude -p --model haiku</code>, SendMessage only</td><td class="zero">none</td><td><span class="tag cl">Claude</span> the decider's Claude account, once per tick with an event: 48 runs on 10-18, 32 on 10-19, 13 so far on 10-20</td><td class="zero">none</td></tr>
+<tr><td>Seat to seat, direct</td><td>SendMessage over a local socket</td><td class="zero">none</td><td>the receiving session's tokens only</td><td class="zero">none</td></tr>
+<tr><td>DeSciX connector (<code>daita</code> plugin)</td><td><span class="tag dx">DeSciX connector</span></td><td class="zero">—</td><td>the calling session</td><td>the calling DeSciX user's AI credits, on KB and chat calls. Not used by Beast.</td></tr>
+<tr><td>An earlier platform-backed Beast plugin (retired)</td><td><span class="tag dx">DeSciX MCP</span> fabric verbs: <code>beast_seat_read</code>, <code>fabric_read</code>, <code>fabric_inbox_sweep</code></td><td class="zero">—</td><td>the session</td><td>The session owner's DeSciX AI credits, on DEV, at every session start and compaction.</td></tr>
+</table></div>
+<p class="note">Your four billing buckets, for the Beast path today: platform <span class="zero">none</span>; GitHub user the decider's login <span class="ok">all GitHub quota, no money</span>; Beast app owner credits <span class="zero">none</span>, because Beast 1.5 runs no DeSciX app; individual DeSciX user credits <span class="zero">zero</span> for the board and Beast. All the money is on the Claude side.</p>
+
+<h2>Why the board hit the limit</h2>
+<div class="card">
+<p><strong>What GitHub said:</strong> 403 "You have exceeded a secondary rate limit", on two searches, with "retry after 7s".</p>
+<p><strong>Secondary limits are burst limits.</strong> GitHub applies them to how many requests arrive close together, and searches weigh most. They are separate from the 30-a-minute search limit and the 5,000-an-hour REST limit, neither of which was close:</p>
+<div class="tbl"><table>
+<tr><th>Quota, user the decider's login</th><th>Used</th><th>Limit</th><th>When</th></tr>
+<tr><td>search</td><td>2</td><td>30 per minute</td><td>2026-10-20 17:35Z</td></tr>
+<tr><td>REST (core)</td><td>60</td><td>5,000 per hour</td><td>same</td></tr>
+<tr><td>GraphQL</td><td>6</td><td>5,000 per hour</td><td>same</td></tr>
+</table></div>
+<p><strong>Who was searching as the decider's login around 17:15Z:</strong></p>
+<ul>
+<li>The page: three watches (open rows, decided rows, desks), each refetching every 2 minutes, plus one comment read per row on load. Its own retry asked the runtime to refetch every search at once, which is itself a burst.</li>
+<li>The relay: an incremental search every 2 minutes, plus the workstream list.</li>
+<li>The seats: all six seats rejoined after the 1.5 migration. Each join ran 17 searches until the 1.5 fix cut that to 5, and BEAST was filing, revising and publishing.</li>
+</ul>
+<p><strong>Measured from here:</strong> the search counts per join, the relay cadence, and the quota snapshot above. <strong>Not measured:</strong> whether the claude.ai connector's calls count in the same per-user buckets as <code>gh</code>. GitHub's documentation says a user's tokens share that user's limits. The two-minute test below settles it.</p>
+</div>
+
+<h2>What 1.5.7 changes</h2>
+<ul>
+<li><strong>The page makes one search for rows and desks together</strong> every 2 minutes. It refreshes the decided list every 15 minutes, or when you open that tab. Over a simulated 30 minutes the page made 48 search calls before and 19 now. That comparison is from a stubbed connector.</li>
+<li><strong>On a rate limit the page backs off.</strong> It waits at least 60 s, or what GitHub asks, and doubles the wait on each repeat. It shows one muted line, "GitHub asked the page to slow down; showing the list as of …", instead of red blocks.</li>
+<li><strong>Comments are read again only for rows whose <code>updated_at</code> moved.</strong></li>
+</ul>
+
+<h2>Two-minute check you can run</h2>
+<ol>
+<li>In a terminal, run <code>gh api rate_limit --jq .resources.search</code> and note <code>used</code>.</li>
+<li>Press Refresh on the board page twice.</li>
+<li>Run the command again within the same minute. If <code>used</code> went up by the page's searches, the connector and <code>gh</code> share the decider's login's search bucket. If it didn't, the connector has its own limit and the collisions came from the page alone.</li>
+</ol>
+</main>
+</body>
+</html>

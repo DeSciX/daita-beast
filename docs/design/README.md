@@ -14,6 +14,7 @@ These documents describe the design as built. `docs/protocol.md` is the specific
 1. [architecture.md](architecture.md): the system context; roles, identities, seats and workstreams; the components; where every fact lives; the surfaces.
 2. [flows.md](flows.md): sequence diagrams of every protocol flow, each with its failure behavior.
 3. [components.md](components.md): the catalogue of scripts, skills, agents, hooks, templates and roster fields.
+4. [messaging-paths.html](messaging-paths.html): every call the board, the relay and the seats make, which connector carries it, and whose identity, quota and billing it spends; the rate-limit behaviour.
 4. [learnings.md](learnings.md): the rules the iterations produced, each with why and the measured evidence.
 5. [adopting.md](adopting.md): moving an existing agent-coordination system onto Beast.
 
@@ -24,6 +25,7 @@ These documents describe the design as built. `docs/protocol.md` is the specific
 | `architecture.md` | system context diagram; roles, identities, seats, workstreams and the seat map; component diagram; state table (fact, owner, rendered copies, never); the surfaces table |
 | `flows.md` | joining; adding a seat to a workstream; a decision row end to end; desk ask and the seat-to-seat line (direct or desk); the relay tick; the board page refresh; the Cowork tick; publish; milestones, dependencies and the participant report; wrap-up; license |
 | `components.md` | every script with its verbs, `lib.sh` functions and writes; every skill; every agent; the three hooks; templates; roster fields and their readers |
+| `messaging-paths.html` | the interaction paths (GitHub connector, `gh`, relay, SendMessage; no DeSciX connector); identity and billing per path; GitHub quotas and the secondary limit; the page's read budget and backoff |
 | `learnings.md` | rule / why / evidence, grouped: state, relay cost, silent caps, GitHub timing, privacy of the decider's words, the queue, seating, the live checkout, the board page, connector shapes, scrub tuning, license, gates, one owner per fact across repos |
 | `adopting.md` | mechanism mapping; roles to agent files, workstream slugs and surfaces; migration order with the gate per step; what to delete and when; relay-versus-polling token arithmetic; what differs from a local system |
 
