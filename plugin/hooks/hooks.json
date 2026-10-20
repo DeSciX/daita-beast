@@ -21,13 +21,6 @@
           { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/seat-bye.sh" }
         ]
       }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ask-guard.sh" }
-        ]
-      }
     ]
   }
 }

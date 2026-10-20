@@ -27,17 +27,18 @@ Changing the connector's tool permissions in claude.ai (always allow / needs app
 
 ## 3. Confirm the tool shapes the template was built against
 
-Load `artifact-capabilities`. Read this session's definitions of the five tools and compare with what the template calls. If a name or a required argument differs, stop and report the difference to seat BEAST; do not patch the template in the session.
+Load `artifact-capabilities`. Read this session's definitions of the six tools and compare with what the template calls. If a name or a required argument differs, stop and report the difference to seat BEAST; do not patch the template in the session.
 
 | Tool | Input the page sends | What the page reads from the result |
 |---|---|---|
 | `get_me` | `{}` | `login` |
-| `search_issues` | `{query: "is:open label:decision assignee:<login>", perPage: 100, sort: "updated", order: "desc", fields: [...]}` | `items[]`: `number`, `title`, `body`, `html_url`, `labels` (strings), `comments`, `updated_at`, `repository_url` |
+| `search_issues` | `{query: "is:open assignee:<login> label:decision,desk", perPage: 100, sort: "updated", order: "desc", fields: [...]}` (scoped to is:issue: it never returns a PR) | `items[]`: `number`, `title`, `body`, `html_url`, `labels` (strings), `comments`, `updated_at`, `repository_url` |
+| `search_pull_requests` | `{query: "is:open assignee:<login> label:needs-review", perPage: 100, sort: "updated", order: "desc", fields: [...]}` | the same `items[]` fields, for the PRs |
 | `issue_read` | `{method: "get_comments", owner, repo, issue_number, perPage: 20, page}` | a bare comment array (the shape inside a page) or `comments[]`: `body`, `created_at`, `html_url`, `user.login` |
 | `add_issue_comment` | `{owner, repo, issue_number, body}` | `html_url` and `created_at` when present; otherwise the issue URL |
 | `get_file_contents` | `{owner, repo, path}` plus `sha` or `ref` | the content block of type `resource`, field `resource.text` |
 
-These shapes were observed on 2026-10-10 and 2026-10-11 against the connector at `api.githubcopilot.com/mcp`.
+The shapes of `get_me`, `search_issues`, `issue_read`, `add_issue_comment` and `get_file_contents` were observed on 2026-10-10 and 2026-10-11 against the connector at `api.githubcopilot.com/mcp`; `search_pull_requests` is called with `search_issues`'s arguments and read the same way, and was not yet observed from a page. A search the connector refuses fails the whole list in the banner, naming the tool.
 
 ## 4. Publish
 
@@ -46,7 +47,7 @@ The template's first line is the stamp, `<!-- board.html @ @@COMMIT@@ -->`. Fill
 Publish `${CLAUDE_PLUGIN_ROOT}/templates/board.html` with:
 
 ```
-capabilities: {mcp: {servers: [{server: "github", tools: ["get_me", "search_issues", "issue_read", "add_issue_comment", "get_file_contents"]}]}, user: {}}
+capabilities: {mcp: {servers: [{server: "github", tools: ["get_me", "search_issues", "search_pull_requests", "issue_read", "add_issue_comment", "get_file_contents"]}]}, user: {}}
 icon: "checklist"
 ```
 
@@ -56,7 +57,7 @@ To update an existing board (a republish):
 
 1. Fetch `plugin/templates/board.html` at a named commit of main: `get_file_contents` with `owner`, `repo`, `path` and `sha: <commit>`. Name that commit in the hand-over; it is the stamp's value.
 2. Find the board with the Artifact tool's list action and read it.
-3. Publish the fetched file, byte-exact but for the filled stamp, to that same URL, so the decider's link does not change. Omit `capabilities` on the redeploy, which keeps the ones the page has.
+3. Publish the fetched file, byte-exact but for the filled stamp, to that same URL, so the decider's link does not change, with the `capabilities` above: they are the template's tool list, and a page whose grant lacks a tool it calls (a page published before the template called `search_pull_requests`) fails its board list naming that tool.
 
 ## 5. Hand over and test
 

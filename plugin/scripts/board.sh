@@ -4,8 +4,9 @@
 # A row is open, assigned to <login> (default: the gh user), and labelled `decision` (an issue: an act
 # without code) or `needs-review` (a pull request for the decider's review; pr.sh request). A decision row is
 # parsed by SHAPE from the issue body (## Decision / Unblocks / Waits / Recommendation / Approve with /
-# Record); a body missing a section fails this script, naming the issue. A PR row needs only its title and
-# its phrase (row_phrase). Desks (label `desk`) carry neither label and are never rows.
+# Record); a body missing a section fails this script, naming the issue. A PR row is its title, the
+# PR_ROW_SECTIONS of its body (## Unblocks / Recommendation, written by pr.sh request; missing fails the same way)
+# and its phrase (row_phrase). Desks (label `desk`) carry neither label and are never rows.
 # Between the open table and the decided table: the roster's home repos' milestones due within 3 days or overdue.
 # --publish rewrites the body of the issue titled "Pending decisions (generated)" in --repo (created
 # and pinned when absent). --web prints the saved-search URL that IS the board.
@@ -60,7 +61,17 @@ while IFS=$'\t' read -r num url_ full; do
   count=$((count+1))
   who="$full#$num"
   if jq -e '.pull_request != null' <<< "$live" >/dev/null; then
-    row="| PR | [$who]($url_) | $(jq -r .title <<< "$live" | cell) | — | — | — | $(row_phrase "$who" "$live" | cell) | —"
+    # A PR row: its title, the PR_ROW_SECTIONS of its body (pr.sh request writes them; one missing fails like a
+    # decision row's) in the Unblocks and Recommendation columns, its phrase; it has no Waits and no Record.
+    for h in "${PR_ROW_SECTIONS[@]}"; do
+      if text="$(section_required "$h" "$body" "$who (rerun pr.sh request with --unblocks and --recommendation)" 2>/tmp/board.err)"; then
+        text="$(printf '%s' "$text" | cell)"
+      else
+        cat /tmp/board.err >&2; errors=$((errors+1)); text="(missing: $h)"
+      fi
+      case "$h" in Unblocks) pu="$text" ;; Recommendation) pr_="$text" ;; *) die "board.sh has no column for the PR section '$h'" ;; esac
+    done
+    row="| PR | [$who]($url_) | $(jq -r .title <<< "$live" | cell) | $pu | — | $pr_ | $(row_phrase "$who" "$live" | cell) | —"
   else
     row="| decision | [$who]($url_)"
     for h in "${ROW_SECTIONS[@]}"; do

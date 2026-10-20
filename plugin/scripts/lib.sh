@@ -1180,36 +1180,6 @@ parse_issue_ref() {
   fi
 }
 
-# row_refs_state <default repo | ""> <ref>...: whether each ref names an OPEN row, one line per ref,
-# "<ref>\t<owner/repo#N | ->\t<state>". A ref is an issue or pull request url, owner/repo#N, or #N, read in <default repo>.
-# The state is open (an open issue or PR carrying a row label, RELAY_ROW_LABELS: a decision, a PR for review, a desk),
-# closed, not-a-row, missing (HTTP 404 or 410) or unresolved (#N with no default repo). One GET per distinct owner/repo#N,
-# remembered for the call. Any other GitHub failure dies, named by gh_request: a fault is never read as an answer.
-row_refs_state() {
-  [[ $# -ge 1 ]] || die "row_refs_state takes <default repo | \"\"> <ref>..."
-  local def="$1" ref full repo n err st info memo=$'\n'; shift
-  err="$(mktemp)"
-  for ref in "$@"; do
-    full=""
-    if [[ "$ref" =~ ^#([0-9]+)$ ]]; then [[ -z "$def" ]] || full="$def#${BASH_REMATCH[1]}"
-    else read -r repo n < <(parse_issue_ref "$ref") || { rm -f "$err"; exit 1; }; full="$repo#$n"; fi
-    if [[ -z "$full" ]]; then printf '%s\t-\tunresolved\n' "$ref"; continue; fi
-    st="$(printf '%s' "$memo" | awk -F'\t' -v k="$full" '$1 == k {print $2; exit}')"
-    if [[ -z "$st" ]]; then
-      repo="${full%#*}"; n="${full##*#}"
-      if info="$(gh_get "repos/$repo/issues/$n" 2> "$err")"; then
-        st="$(jq -r --arg l "$RELAY_ROW_LABELS" '($l | split(",")) as $rl
-          | if ([.labels[]?.name] | any(. as $x | $rl | index($x))) | not then "not-a-row" else .state end' <<< "$info")" \
-          || { rm -f "$err"; die "row_refs_state: GitHub's answer for $full is not an issue"; }
-      elif grep -qE 'HTTP (404|410)\)' "$err"; then st="missing"
-      else cat "$err" >&2; rm -f "$err"; die "row_refs_state: cannot read $full (named above)"; fi
-      memo+="$full"$'\t'"$st"$'\n'
-    fi
-    printf '%s\t%s\t%s\n' "$ref" "$full" "$st"
-  done
-  rm -f "$err"
-}
-
 # Extract the text under a "## <Heading>" section of a markdown body, up to the next "## ".
 # Usage: section "<heading>" <<< "$body"   (prints nothing if absent; use section_required to fail)
 section() {
@@ -1246,6 +1216,9 @@ PY
 
 # ROW_SECTIONS: a decision row's six body sections, in order (decision.sh new and revise, board.sh). One owner of the list.
 ROW_SECTIONS=("Decision" "Unblocks" "Waits" "Recommendation" "Approve with" "Record")
+# PR_ROW_SECTIONS: the sections a PR on the board carries in its body, written by pr.sh request (--unblocks,
+# --recommendation) and read by board.sh; the page's PR_SECTIONS is held equal to it (plugin/tests/board-page.test.mjs).
+PR_ROW_SECTIONS=("Unblocks" "Recommendation")
 
 # Same, but exits 1 naming the issue when the section is absent or empty.
 section_required() {
@@ -1761,11 +1734,14 @@ project_cmd() {
 
 # ---- the queue: answers, acks, events (one owner; the page's answerKind/deriveRow are the JS twins) ----
 
-# answer_kind "<body>" "<phrase>": approve | revise | reject | "" — the decider's four forms, first line only.
+# answer_kind "<body>" "<phrase>": approve | revise | reject | "" — the decider's answer forms, read on the first line
+# (right-trimmed): the phrase, "<phrase> — <comment>", a bare approve/approved, "revise: <what>", "reject: <why>". Any
+# other comment is not an answer, whoever wrote it: it never takes a row out of the decider's turn. An empty phrase (a
+# row without one) matches only the bare forms. The page's answerKind is held to this by plugin/tests/board-page.test.mjs.
 answer_kind() {
   local b; b="$(printf '%s' "$1" | sed -n '1p' | sed 's/[[:space:]]*$//')"
   local phrase="$2"
-  if [[ "$b" == "$phrase" || "$b" == "$phrase — "* ]] || [[ "$b" =~ ^[Aa]pproved?$ ]]; then echo approve
+  if [[ -n "$phrase" && ( "$b" == "$phrase" || "$b" == "$phrase — "* ) ]] || [[ "$b" =~ ^[Aa]pproved?$ ]]; then echo approve
   elif [[ "$b" =~ ^reject:[[:space:]]*[^[:space:]] ]]; then echo reject
   elif [[ "$b" =~ ^revise:[[:space:]]*[^[:space:]] ]]; then echo revise
   else echo ""; fi

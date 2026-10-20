@@ -137,7 +137,6 @@ flowchart TB
     H1["PreToolUse: permit.sh"]
     H2["SessionStart: seat-hello.sh"]
     H4["SessionEnd: seat-bye.sh"]
-    H3["Stop: ask-guard.sh"]
   end
 
   subgraph AG["Agents"]
@@ -171,7 +170,6 @@ flowchart TB
   H1 --> L10
   H2 --> LIB
   H4 --> LIB
-  H3 -. "reads the transcript" .- S2
   W2 --> A1
   S2 --> X1
   S1 --> P1
@@ -240,7 +238,7 @@ The protocol is the same on every surface; what differs is how GitHub is reached
 |---|---|---|---|
 | Install | marketplace plugin, then `/daita-beast:install`: tools, the install gate, `permissions.sh` (the repo's `.claude/settings.json`), `plugin_root_record` (`~/.beast/plugin.json`), bootstrap, workstream, seat, join, relay, fixture | nothing installs: the repo's committed `.claude/skills/beast/SKILL.md` (from `templates/cloud-skill.md`) clones the plugin and runs its scripts | Customize › Plugins; the `connector` skill is the protocol as connector calls; `board-ui` publishes the page; a scheduled task runs `cowork-tick` |
 | GitHub | `gh` as the person | the sandbox proxy, REST only, attached repos only | the GitHub connector, installed per account |
-| Permissions | `permissions.allow` rules for `gh` and git read verbs in the repo's `.claude/settings.json`; the plugin's scripts by the PreToolUse hook; a seat's asks to the board by the Stop hook | the session's own | the connector's consent |
+| Permissions | `permissions.allow` rules for `gh` and git read verbs in the repo's `.claude/settings.json`; the plugin's scripts by the PreToolUse hook | the session's own | the connector's consent |
 | Hears a decision | the relay, on direct addresses only | pulls: the inbox at every wake | a seat pulls the inbox recipe; the decider's tick posts a digest and republishes the page |
 | Seats and addresses | `join.sh` records the address; `ListAgents` names the session | no `ListAgents`: the seat works from its inbox; no address is recorded | no `ListAgents` and no shell: the seat map is read from the table, a seat here is reached by its desk |
 | Scripts path | `lib.sh::plugin_root` | the pointer skill's clone | none |
