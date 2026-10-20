@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Beast Token Rewards</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1d1c1a;--muted:#6b675f;--line:#e4e0d6;--card:#ffffff;--accent:#2f6f5e;--warn:#9a5b13;--bad:#a23b2c;--gh:#3b5bdb;--dx:#8a3ffc;--cl:#c2541a;--code:#f2efe8}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#17171a;--fg:#ecebe6;--muted:#a19d94;--line:#2f2f35;--card:#1f1f24;--accent:#6cc3a8;--warn:#e0a35a;--bad:#ec7a6a;--gh:#8fa6ff;--dx:#b98cff;--cl:#f08a52;--code:#26262c}}
+:root[data-theme="dark"]{--bg:#17171a;--fg:#ecebe6;--muted:#a19d94;--line:#2f2f35;--card:#1f1f24;--accent:#6cc3a8;--warn:#e0a35a;--bad:#ec7a6a;--gh:#8fa6ff;--dx:#b98cff;--cl:#f08a52;--code:#26262c}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif}
+main{max-width:980px;margin:0 auto;padding:32px 16px 64px}
+h1{font-size:28px;margin:0 0 4px}
+h2{font-size:19px;margin:36px 0 10px;padding-top:8px;border-top:1px solid var(--line)}
+h3{font-size:15px;margin:20px 0 6px}
+p,li{max-width:76ch}
+.sub{color:var(--muted);margin:0 0 20px}
+.tldr{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:14px 18px}
+.tldr li{margin:4px 0}
+code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:13px}
+pre{background:var(--code);border:1px solid var(--line);border-radius:6px;padding:10px 12px;overflow-x:auto;font-size:13px;line-height:1.45}
+pre code{background:none;padding:0}
+.tbl{overflow-x:auto;margin:10px 0}
+table{border-collapse:collapse;width:100%;font-size:13.5px;background:var(--card)}
+th,td{border:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:top}
+th{background:var(--code);font-weight:600}
+.tag{display:inline-block;font-size:11.5px;font-weight:600;padding:1px 7px;border-radius:10px;border:1px solid currentColor;white-space:nowrap}
+.gh{color:var(--gh)}.dx{color:var(--dx)}.cl{color:var(--cl)}.ok{color:var(--accent)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:10px 0}
+.card.bad{border-left:4px solid var(--bad);color:var(--fg)}
+.card.warn{border-left:4px solid var(--warn);color:var(--fg)}
+.note{font-size:13px;color:var(--muted)}
+ol li,ul li{margin:4px 0}
+.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:12px 0}
+.flow .step{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:13.5px}
+.flow .arr{color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<h1>Token rewards for contributors</h1>
+<p class="sub">How an open-source contribution becomes a recorded award in a DeSciX community's token: bounty, pull request, award, monthly ledger. All of it happens on the public repo, which serves as the bulletin board. As built in daita-beast 1.5.10, checked against the scripts on 2026-10-20. At 20:12 UTC that day the marketplace <code>DeSciX/DAITA</code> pinned daita-beast <code>ref "1.5.9"</code>, tag <code>1.5.9</code> of <code>DeSciX/daita-beast</code>, so a marketplace install is 1.5.9 until the pin moves.</p>
+
+<div class="tldr"><strong>In short</strong>
+<ul>
+<li><strong>An award is a GitHub comment plus a label.</strong> A repo admin or maintainer posts one comment of a fixed shape, <code>BEAST-AWARD amount=… token=… to=@… for="…"</code>, and adds the label <code>awarded</code>. Nothing else records it.</li>
+<li><strong>Only a repo admin or maintainer can award.</strong> The script refuses anyone else. The monthly ledger also drops, loudly, any award comment whose author lacks that role.</li>
+<li><strong>The token is the community's, and the community decides who awards it.</strong> For egpt-frqtl and egpt-godsworld that is <code>EGPT</code>, held by the community repo <code>DeSciX/EGPT</code>. That repo's <code>.beast/awarders.json</code> lists the repos that may award <code>EGPT</code>, and the ledger is committed there. A sub-app has no token of its own.</li>
+<li><strong>Awards are recorded today but not paid.</strong> They stay conceptual until DeSciX's import of the ledger exists. Nothing in Beast touches a blockchain or a wallet.</li>
+<li>Whose GitHub identity and quota each call uses is covered in <a href="../design/messaging-paths.html">Beast messaging paths</a>.</li>
+</ul></div>
+
+<h2 id="path">1. The path</h2>
+<div class="flow">
+<span class="step">Bounty issue<br><span class="note">label <code>bounty</code></span></span><span class="arr">→</span>
+<span class="step">Your PR<br><span class="note"><code>Closes #n</code> or <code>Bounty #n</code></span></span><span class="arr">→</span>
+<span class="step">Merge (or decline)<br><span class="note">by a maintainer, in GitHub</span></span><span class="arr">→</span>
+<span class="step">Award<br><span class="note"><code>BEAST-AWARD</code> + <code>awarded</code></span></span><span class="arr">→</span>
+<span class="step">Monthly ledger<br><span class="note"><code>awards/YYYY-MM.jsonl</code> + <code>.md</code></span></span>
+</div>
+<p>A bounty is optional. A merged PR without a bounty, a review that led to a change, or a good-effort submission that was declined can all be awarded at the owner's discretion, as the repo's award policy says.</p>
+
+<h2 id="contributors">2. For contributors: how to earn and how to submit</h2>
+<ol>
+<li><strong>Find a bounty.</strong> Open issues labelled <code>bounty</code> on the public repo, for example <code>https://github.com/DeSciX/egpt-frqtl/issues?q=is%3Aopen+label%3Abounty</code>. The issue's <code>## Bounty</code> section gives the amount. That amount is a floor, not a cap.</li>
+<li><strong>Submit a pull request</strong> on that repo, one submission per PR, with <code>Closes #&lt;n&gt;</code> or <code>Bounty #&lt;n&gt;</code> in the description. You need no Beast install, no seat and no DeSciX account to submit.</li>
+<li><strong>Wait for the maintainer's decision.</strong> If accepted, the PR is merged and you receive the award. A declined PR is closed and may still receive an effort award.</li>
+<li><strong>The award arrives as a comment.</strong> GitHub notifies you, because the comment mentions <code>@&lt;your login&gt;</code>. Only a comment from a repo admin or maintainer counts. Anyone else can post the same text, but it is dropped from the ledger.</li>
+<li><strong>Check the ledger.</strong> Each month the community owner commits <code>awards/&lt;YYYY-MM&gt;.md</code> to the community repo (for EGPT: <code>DeSciX/EGPT</code>). It lists totals per login and every award.</li>
+</ol>
+<p>You do nothing else to "submit for rewards". Your GitHub login is the key. Linking that login to a wallet is a DeSciX claim flow outside Beast, and it does not exist yet (<a href="#gaps">Gap 4</a>).</p>
+
+<h2 id="maintainers">3. For maintainers: posting bounties, awarding, building the ledger</h2>
+<h3>The award policy (once per repo)</h3>
+<p><code>bounty.sh</code> and <code>award.sh</code> read <code>.beast/award-policy.md</code> from the checkout you run them in. They refuse to run unless the file meets four conditions:</p>
+<ul>
+<li>Its first line names the repo you are awarding on.</li>
+<li>It has a <code>Token:</code> line, and that token matches the one you pass.</li>
+<li>It has a <code>Community: &lt;owner/repo&gt;</code> line naming the repo that holds the token's community.</li>
+<li>It contains no unfilled field.</li>
+</ul>
+<p>For <code>DeSciX/egpt-frqtl</code> the first lines are:</p>
+<pre><code># Award policy — DeSciX/egpt-frqtl
+
+Token: EGPT (conceptual units until the DeSciX DIP import exists).
+Community: DeSciX/EGPT (the repo that holds the EGPT community: its `.beast/awarders.json` lists the repos that may award EGPT; a repo it does not list awards nothing).</code></pre>
+<p>DIP is Digital IP Points, DeSciX's points for contributions that others use, which convert to community-token rewards in airdrops. "The DIP import" is DeSciX reading the ledger's <code>.jsonl</code> into those points; it does not exist yet.</p>
+<p><code>init-repo.sh DeSciX/egpt-frqtl --path &lt;checkout&gt; --token EGPT --community DeSciX/EGPT</code> writes this from the template; <code>--token</code> and <code>--community</code> go together, and one without the other is refused. On a public or public-intended repo it runs in its public mode: it creates only the <code>bounty</code> and <code>awarded</code> labels, writes the bounty issue template and, with <code>--token</code>, the award policy, and refuses on stderr every coordination label, the decision and workstream templates and the roster. It deletes nothing: when the public repo already carries a coordination label it names each one and exits 1. On 2026-10-20 <code>DeSciX/egpt-frqtl</code> carried <code>decision</code>, <code>workstream</code> and a <code>seat:</code> label naming a seat of a private repo, so its owner first deletes each one the refusal names (<code>gh label delete &lt;name&gt; -R DeSciX/egpt-frqtl</code>, after moving any row that carries it to the private twin), then runs <code>init-repo.sh</code>. Keep the policy in the private twin's checkout, where awarding is run. Publish it with <code>publish.sh prepare award-policy --paths .beast/award-policy.md …</code> so that contributors can read the policy each bounty cites.</p>
+
+<h3>Which repos may award the token</h3>
+<p>The community decides. Its repo, the one each policy names on its <code>Community:</code> line, commits <code>.beast/awarders.json</code> on its default branch. For <code>EGPT</code> that repo is <code>DeSciX/EGPT</code>, and its file, read 2026-10-20, is:</p>
+<pre><code>{"token": "EGPT", "awarders": ["DeSciX/EGPT", "DeSciX/egpt-frqtl", "DeSciX/egpt-godsworld", "DeSciX/egpt-lean"]}</code></pre>
+<p>The file has exactly the keys <code>token</code> and <code>awarders</code> (a non-empty list of <code>owner/repo</code>, each once, compared case-insensitively), and it is read through GitHub, never from a local copy. <code>award.sh</code> and <code>bounty.sh</code> refuse a repo the file does not list, naming the community repo and the missing entry (<code>refused: &lt;repo&gt; may not award EGPT. The community repo DeSciX/EGPT lists the repos that may award EGPT in .beast/awarders.json (…)</code>). A community repo without the file refuses every award and bounty of its token. A public ledger checks the same list for every repo in <code>--repos</code>. To let another repo award <code>EGPT</code>, the owner of <code>DeSciX/EGPT</code> adds it to <code>awarders</code>; that repo's own policy cannot grant it. On 2026-10-20 <code>DeSciX/EGPT</code> carried no <code>.beast/awarders.json</code> (HTTP 404), so every <code>EGPT</code> award and bounty is refused until its owner commits one.</p>
+
+<h3>Post a bounty</h3>
+<pre><code>${CLAUDE_PLUGIN_ROOT}/scripts/bounty.sh --repo DeSciX/egpt-frqtl --title "Three.js orbit controls in STUDIO" --amount 500 --token EGPT \
+  --what "Orbit and pan controls for the STUDIO 3D view, using Three.js OrbitControls. Accepted means: merged, with a short demo in the PR."</code></pre>
+<p>This creates an issue titled <code>Bounty: Three.js orbit controls in STUDIO</code> with the label <code>bounty</code> and the sections Bounty, What, How to submit and Decides. Bounties are allowed on a public repo: unlike decisions and status, they are not coordination writes.</p>
+
+<h3>Award</h3>
+<pre><code>${CLAUDE_PLUGIN_ROOT}/scripts/award.sh DeSciX/egpt-frqtl#57 --amount 500 --token EGPT --to @carol-dev \
+  --for "accepted orbit controls (PR #57)" --ref https://github.com/DeSciX/egpt-frqtl/issues/51</code></pre>
+<p>This posts exactly one comment and adds the <code>awarded</code> label:</p>
+<pre><code>BEAST-AWARD amount=500 token=EGPT to=@carol-dev for="accepted orbit controls (PR #57)" ref=https://github.com/DeSciX/egpt-frqtl/issues/51</code></pre>
+<p>It refuses when any of these holds:</p>
+<ul>
+<li>Your role on the repo is not <code>admin</code> or <code>maintain</code>.</li>
+<li>The amount is not a whole number.</li>
+<li>The token is not 2–12 upper-case letters or digits.</li>
+<li>The recipient is not a GitHub login.</li>
+<li><code>--for</code> contains a double quote.</li>
+<li>The policy is missing, names another repo or another token, or has no <code>Community:</code> line.</li>
+<li>The community repo's <code>.beast/awarders.json</code> is missing or does not list the repo.</li>
+</ul>
+<p>The <code>moderator</code> agent can draft a suggested amount as a <code>MODERATOR-DRAFT</code> comment, but it never awards, merges or labels <code>awarded</code>.</p>
+
+<h3>Monthly ledger</h3>
+<pre><code>${CLAUDE_PLUGIN_ROOT}/scripts/ledger.sh --community EGPT --repos DeSciX/egpt-frqtl,DeSciX/egpt-godsworld --month 2026-11 --out ~/code/EGPT/awards
+git -C ~/code/EGPT add awards/2026-11.jsonl awards/2026-11.md &amp;&amp; git -C ~/code/EGPT commit -m "Awards 2026-11"</code></pre>
+<p>It reads every <code>awarded</code> issue and PR in the listed repos and keeps a <code>BEAST-AWARD</code> comment only when all four of these hold:</p>
+<ul>
+<li>The comment parses.</li>
+<li>Its token equals <code>--community</code>.</li>
+<li>It was made in that month (UTC).</li>
+<li>Its author is an admin or maintainer of that repo, checked live.</li>
+</ul>
+<p>Each dropped comment is printed as <code>DROPPED &lt;url&gt;: &lt;reason&gt;</code>, and the run exits 2. A ledger with holes is never published by accident. Never edit the files by hand: award and regenerate.</p>
+<p>Two checks stop the run instead of dropping anything:</p>
+<ul>
+<li><strong>A public ledger lists only public repos the community lists.</strong> When <code>--out</code> is inside a checkout of a public or public-intended repo (here <code>DeSciX/EGPT</code>), every repo in <code>--repos</code> must be public or public-intended too, and listed in that repo's <code>.beast/awarders.json</code> for <code>--community</code>. Either failure is refused, naming the repo, before anything is read (<code>refused: --out … is in a checkout of …, and --repos names private repos: …</code>). A private repo's awards stay in a private ledger, with <code>--out</code> in the private repo's own checkout.</li>
+<li><strong>The role read needs push access.</strong> GitHub answers a role query only to a login with push access on the repo. When the read fails (a 403), the run stops with exit 1 before writing any ledger file, naming the repo, the login and GitHub's answer (<code>cannot read the role of &lt;login&gt; on &lt;repo&gt;: … (a 403 means the gh login lacks push access …)</code>), and no award is dropped for it. Measured 2026-10-20: <code>gh api repos/mrdoob/three.js/collaborators/mrdoob/permission</code> → <code>HTTP 403: Must have push access to view collaborator permission</code>. So the community owner runs the ledger with a login that has push access on every listed repo.</li>
+</ul>
+<p>The <code>.jsonl</code> rows (repo, item, to, token, amount, for, ref, by, at) are what DeSciX is meant to import later. The <code>.md</code> file is the human-readable list.</p>
+
+<div class="tbl"><table>
+<tr><th>Act</th><th>Who</th><th>Where</th></tr>
+<tr><td>Post a bounty</td><td>someone with write access on the repo (<code>bounty.sh</code> ensures the <code>bounty</code> label exists) and the policy in their checkout; the bounty names them under Decides</td><td>the public repo</td></tr>
+<tr><td>Submit</td><td>anyone with a GitHub account</td><td>a PR on the public repo</td></tr>
+<tr><td>Merge</td><td>someone with write access on the public repo, in GitHub (Beast's <code>pr.sh</code> refuses public repos)</td><td>the public repo</td></tr>
+<tr><td>Award</td><td>a repo <code>admin</code> or <code>maintain</code>, on a repo the community lists in <code>.beast/awarders.json</code></td><td>a comment on the PR or issue</td></tr>
+<tr><td>Ledger</td><td>the community owner, with push access on every listed repo (see Monthly ledger)</td><td>committed to the community repo</td></tr>
+</table></div>
+
+<h2 id="threejs">4. Worked example: Three.js, egpt-frqtl STUDIO and Maxi's scenes</h2>
+<p class="note">Hypothetical. Real: <code>mrdoob/three.js</code> (public, owned by the personal account <code>mrdoob</code>), <code>DeSciX/egpt-frqtl</code>, <code>DeSciX/egpt-godsworld</code> and the community repo <code>DeSciX/EGPT</code> (all public). Invented: <code>carol-dev</code>, an outside developer. How the Three.js maintainers set up seats and a private twin is in <a href="setup-guide.html#threejs">Setting up Beast, section 6</a>.</p>
+
+<h3>(c) Where public developers send PRs</h3>
+<div class="tbl"><table>
+<tr><th>Work</th><th>Send the PR to</th><th>What happens next</th></tr>
+<tr><td>A new STUDIO capability</td><td><code>DeSciX/egpt-frqtl</code></td><td>A maintainer merges in GitHub. The project's private twin pulls it in with <code>publish.sh pull</code> before its next publish.</td></tr>
+<tr><td>A new scene for Maxi</td><td><code>DeSciX/egpt-godsworld</code></td><td>Same pattern, through egpt-godsworld's own twin.</td></tr>
+<tr><td>A change to the Three.js library itself</td><td><code>mrdoob/three.js</code></td><td>Three.js's own review process. Beast adds nothing on that repo unless its owner keeps an award policy for it and the community lists it.</td></tr>
+</table></div>
+
+<h3>(d) How each of them earns tokens</h3>
+<ul>
+<li><strong>Carol, an outside developer, on egpt-frqtl or egpt-godsworld:</strong> she follows section 2. The award is in <code>EGPT</code>, posted by an admin or maintainer of that DeSciX repo, and appears in <code>DeSciX/EGPT</code>'s <code>awards/2026-11.md</code>.</li>
+<li><strong>A Three.js maintainer contributing to egpt-frqtl:</strong> the same as Carol. A PR that lands on the public repo is awarded there. Work done only inside the private twin is not on the bulletin board: a ledger written into the public community repo refuses the twin in <code>--repos</code>, so award the public PR or the publish that the work produced.</li>
+<li><strong>A Three.js maintainer awarding others on egpt-frqtl:</strong> only with the <code>maintain</code> or <code>admin</code> role on <code>DeSciX/egpt-frqtl</code>, which a DeSciX organization admin must grant (<a href="#gaps">Gap 2</a>).</li>
+<li><strong>A contributor to <code>mrdoob/three.js</code>:</strong> an <code>EGPT</code> award there needs three things. The owner of <code>DeSciX/EGPT</code> adds <code>mrdoob/three.js</code> to <code>awarders</code>; the repo's owner keeps a policy for it (<code>Token: EGPT</code>, <code>Community: DeSciX/EGPT</code>); and an admin of <code>mrdoob/three.js</code> runs <code>award.sh</code> (<a href="#gaps">Gap 2</a>). The community ledger then lists <code>mrdoob/three.js</code> in <code>--repos</code>, run by a login with push access there.</li>
+</ul>
+
+<p><strong>One award policy per repo, by design.</strong> The policy is read from the root of the checkout you run in and names exactly one repo (<code>plugin/scripts/lib.sh:1268-1270</code>). Each repo that awards keeps its own policy, so awarding on <code>DeSciX/egpt-frqtl</code> and on <code>DeSciX/egpt-godsworld</code> runs from each one's own private twin.</p>
+
+<h2 id="gaps">Gaps: what the hypothetical needs and 1.5.10 does not do</h2>
+<ol>
+<li><strong>Awards are records, not payments.</strong> "Awards are conceptual until the DeSciX DIP import exists; nothing here touches a chain" (<code>plugin/skills/award/SKILL.md:15</code>). The ledger's <code>.jsonl</code> is "what the DeSciX airdrop engagement system imports later" (<code>plugin/skills/ledger/SKILL.md:15</code>).</li>
+<li><strong>Awarding needs a role on the repo the comment lands on.</strong> <code>award.sh</code> refuses unless the caller's role is <code>admin</code> or <code>maintain</code> (<code>plugin/scripts/award.sh:34-36</code>). Three.js maintainers cannot award on <code>DeSciX/*</code> repos without a grant, and DeSciX cannot award on <code>mrdoob/three.js</code>. GitHub's documented permission levels give a personal account's repo only an owner and write collaborators, with no maintain role, so on <code>mrdoob/three.js</code> only <code>mrdoob</code> could award. That last point comes from GitHub's documentation and was not measured here.</li>
+<li><strong>Another organization's token has no DeSciX home.</strong> <code>award.sh</code> accepts any 2–12 character symbol (<code>plugin/scripts/award.sh:27</code>), so with its own community repo and <code>.beast/awarders.json</code> a <code>THREE</code> ledger can be generated. The rule is "community id == token symbol", though (<code>plugin/skills/award/SKILL.md:15</code>), and no DeSciX community exists for it, so nothing would import it.</li>
+<li><strong>Beast has no claim step for contributors.</strong> "The login-to-wallet mapping is the platform's claim flow, not this ledger's" (<code>plugin/skills/ledger/SKILL.md:15</code>).</li>
+<li><strong>The public app repos carry no award policy or bounty template yet.</strong> On 2026-10-20 <code>DeSciX/egpt-frqtl</code> returned 404 for <code>.beast</code> and <code>.github</code> and had no <code>bounty</code> issues, so <code>award.sh</code> there has no policy to read. <code>DeSciX/EGPT</code> carries <code>.beast/awarders.json</code> (above) and no <code>awards/</code> directory yet. Every bounty body says "see .beast/award-policy.md" (<code>plugin/scripts/bounty.sh:32</code>), a file contributors cannot read until it is published.</li>
+</ol>
+
+<h2 id="sources">Sources</h2>
+<p class="note">Paths and line numbers are those of the daita-beast tree at commit <code>81c73e5</code> (<code>plugin/.claude-plugin/plugin.json:4</code>: <code>"version": "1.5.10"</code>).</p>
+<ul class="note">
+<li>award: <code>plugin/scripts/award.sh:1-45</code> (validation <code>:25-29</code>; policy and token authority <code>:31-32</code>; role check <code>:34-36</code>; comment shape <code>:41-42</code>; label <code>:44</code>); <code>plugin/skills/award/SKILL.md:9-15</code>.</li>
+<li>bounty: <code>plugin/scripts/bounty.sh:1-49</code> (policy and token authority <code>:24-25</code>; label <code>:27</code>; body <code>:30-42</code>); <code>plugin/skills/bounty/SKILL.md:9-12</code>; template <code>plugin/templates/bounty.md</code>.</li>
+<li>Token authority: <code>plugin/scripts/lib.sh:1281-1320</code> (<code>AWARDERS_PATH</code> <code>:1284</code>; <code>community_awarders</code> <code>:1290-1312</code>, a missing file refused <code>:1294</code>; <code>award_authority_check</code> <code>:1316-1320</code>); <code>docs/protocol.md:31</code>, <code>:374-378</code>.</li>
+<li>ledger: <code>plugin/scripts/ledger.sh:1-93</code> (public-ledger refusals <code>:32-44</code>, the awarders check <code>:42</code>; role read stops the run <code>:50</code>, <code>:69</code>; keep rules <code>:63-70</code>; outputs <code>:71-90</code>; exit 2 <code>:93</code>); <code>plugin/skills/ledger/SKILL.md:9-15</code>; <code>docs/protocol.md:32</code> and <code>:372-384</code> (Award ledger).</li>
+<li>Award policy: <code>plugin/templates/award-policy.md:1-18</code> (<code>Token:</code> and <code>Community:</code> <code>:3-4</code>); reader <code>plugin/scripts/lib.sh:1266-1279</code> (<code>award_policy</code>); writer <code>plugin/scripts/init-repo.sh:44-48</code>, <code>--token</code> with <code>--community</code> <code>:21-22</code>; public mode <code>:7-10</code>, <code>:25-31</code>, <code>:49-50</code>, <code>:65-71</code>; public label set <code>plugin/scripts/lib.sh:2410</code> (<code>labels_public</code>), <code>:2412</code> (<code>label_is_coordination</code>).</li>
+<li>Labels <code>bounty</code> and <code>awarded</code>, marked <code>"public": true</code>: <code>plugin/templates/labels.json</code>.</li>
+<li>Role read: <code>plugin/scripts/lib.sh:1526-1534</code> (<code>repo_permission</code>); the 403 measured 2026-10-20 as quoted.</li>
+<li>No guard on bounty or award: <code>coord_write_guard</code>'s call list in <code>docs/protocol.md:153</code> does not include them, and neither script calls it (<code>grep -n coord_write_guard plugin/scripts/*.sh</code>). <code>pr.sh</code> refuses public repos: <code>plugin/scripts/pr.sh:16-17</code>.</li>
+<li>Moderator: <code>plugin/agents/moderator.md:3</code>, <code>:14</code>.</li>
+<li>Outside contributors in milestone reports: <code>docs/protocol.md:318-323</code>.</li>
+<li>Public repo state, read 2026-10-20: <code>gh api repos/DeSciX/egpt-frqtl/labels</code>; <code>…/contents/.beast</code> and <code>…/contents/.github</code> → 404; <code>…/issues?labels=bounty&amp;state=all</code> → none; <code>gh api repos/DeSciX/EGPT/contents/.beast/awarders.json</code> → the file quoted in "Which repos may award the token"; <code>gh api repos/DeSciX/EGPT/contents/</code> → no <code>awards</code>; marketplace pin <code>DeSciX/DAITA/.claude-plugin/marketplace.json</code> → daita-beast <code>ref "1.5.9"</code>.</li>
+<li>Identity, quota and billing per call: <a href="../design/messaging-paths.html">docs/design/messaging-paths.html</a>.</li>
+</ul>
+</main>
+</body>
+</html>

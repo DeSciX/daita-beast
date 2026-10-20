@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Beast Setup Guide</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1d1c1a;--muted:#6b675f;--line:#e4e0d6;--card:#ffffff;--accent:#2f6f5e;--warn:#9a5b13;--bad:#a23b2c;--gh:#3b5bdb;--dx:#8a3ffc;--cl:#c2541a;--code:#f2efe8}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#17171a;--fg:#ecebe6;--muted:#a19d94;--line:#2f2f35;--card:#1f1f24;--accent:#6cc3a8;--warn:#e0a35a;--bad:#ec7a6a;--gh:#8fa6ff;--dx:#b98cff;--cl:#f08a52;--code:#26262c}}
+:root[data-theme="dark"]{--bg:#17171a;--fg:#ecebe6;--muted:#a19d94;--line:#2f2f35;--card:#1f1f24;--accent:#6cc3a8;--warn:#e0a35a;--bad:#ec7a6a;--gh:#8fa6ff;--dx:#b98cff;--cl:#f08a52;--code:#26262c}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif}
+main{max-width:980px;margin:0 auto;padding:32px 16px 64px}
+h1{font-size:28px;margin:0 0 4px}
+h2{font-size:19px;margin:36px 0 10px;padding-top:8px;border-top:1px solid var(--line)}
+h3{font-size:15px;margin:20px 0 6px}
+p,li{max-width:76ch}
+.sub{color:var(--muted);margin:0 0 20px}
+.tldr{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:14px 18px}
+.tldr li{margin:4px 0}
+code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:13px}
+pre{background:var(--code);border:1px solid var(--line);border-radius:6px;padding:10px 12px;overflow-x:auto;font-size:13px;line-height:1.45}
+pre code{background:none;padding:0}
+.tbl{overflow-x:auto;margin:10px 0}
+table{border-collapse:collapse;width:100%;font-size:13.5px;background:var(--card)}
+th,td{border:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:top}
+th{background:var(--code);font-weight:600}
+.tag{display:inline-block;font-size:11.5px;font-weight:600;padding:1px 7px;border-radius:10px;border:1px solid currentColor;white-space:nowrap}
+.gh{color:var(--gh)}.dx{color:var(--dx)}.cl{color:var(--cl)}.ok{color:var(--accent)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:10px 0}
+.card.bad{border-left:4px solid var(--bad);color:var(--fg)}
+.card.warn{border-left:4px solid var(--warn);color:var(--fg)}
+.note{font-size:13px;color:var(--muted)}
+ol li,ul li{margin:4px 0}
+</style>
+</head>
+<body>
+<main>
+<h1>Setting up Beast</h1>
+<p class="sub">How to install Beast and set it up for a project, on each surface Claude runs on, with a worked example: the Three.js maintainers adopt Beast to work on egpt-frqtl STUDIO and egpt-godsworld scenes. As built in daita-beast 1.5.10, checked against the scripts on 2026-10-20. At 20:12 UTC that day the marketplace <code>DeSciX/DAITA</code> pinned daita-beast <code>ref "1.5.9"</code>, tag <code>1.5.9</code> of <code>DeSciX/daita-beast</code>, so a marketplace install is 1.5.9 until the pin moves.</p>
+
+<div class="tldr"><strong>In short</strong>
+<ul>
+<li><strong>Beast is a set of conventions on GitHub issues, labels and comments, plus a Claude Code plugin (<code>daita-beast</code>) whose scripts write them.</strong> GitHub holds every state. There is no Beast server.</li>
+<li><strong>All coordination happens in a private repo.</strong> This covers decisions, desks, tracking issues, status and acks. A public repo receives only publishes. The scripts refuse a coordination write to a public repo, and nothing overrides that. A public project such as <code>mrdoob/three.js</code> therefore needs a private <strong>twin</strong>, and the twin is the workstream master.</li>
+<li><strong>The setup order on a machine:</strong> tools, plugin, permissions, plugin record, <code>bootstrap.sh</code>, a workstream, a seat, <code>join</code>, the relay, a test decision. Each step has a check that must pass before the next one.</li>
+<li><strong>Organizations meet through declared owners.</strong> A seat joins a workstream mastered under another GitHub owner when its roster lists that owner in <code>"workstream_owners"</code>, and each organization publishes its own public repos from its own twin. Seats under a second GitHub login are not yet supported; that and the other limits are under <a href="#gaps">Gaps</a> with evidence.</li>
+<li>Whose GitHub identity, quota and Claude account each call uses is covered in <a href="../design/messaging-paths.html">Beast messaging paths</a>. This guide does not repeat it.</li>
+</ul></div>
+
+<h2 id="terms">1. The words this guide uses</h2>
+<div class="tbl"><table>
+<tr><th>Term</th><th>What it is on GitHub or on disk</th></tr>
+<tr><td>Seat</td><td>A role held by one GitHub login under a LABEL (upper case) in one workstream. Its identity is <code>&lt;slug&gt;/&lt;LABEL&gt;/&lt;login&gt;</code>, for example <code>studio/THREE/alice-three</code>. A Claude Code session "takes" a seat with <code>join</code>.</td></tr>
+<tr><td>Roster</td><td><code>.beast/roster.json</code>, committed in a private repo. It lists that repo's own seats, the people (exactly one <code>owner</code>, who is the decider), and optionally <code>publishes_to</code> (the public twin).</td></tr>
+<tr><td>Workstream</td><td>A GitHub Project plus one tracking issue labelled <code>workstream</code> and <code>ws:&lt;slug&gt;</code>. The issue's <code>## Seats</code> table is the one list of seats in the workstream.</td></tr>
+<tr><td>Master repo</td><td>The repo the tracking issue lives in. It must be private.</td></tr>
+<tr><td>Twin</td><td>A private repo whose roster names a public repo in <code>publishes_to</code>. Work happens in the twin, and <code>publish.sh</code> is the only thing that writes to the public repo.</td></tr>
+<tr><td>Decider</td><td>The roster's <code>owner</code>. Decisions and PR reviews are assigned to this person, who answers in a comment such as <code>approve</code>, <code>revise: …</code> or <code>reject: …</code>.</td></tr>
+<tr><td>Home</td><td>The directory a seat works in: the checkout, a worktree, a wrapper or a subdirectory. Two seats never share a home.</td></tr>
+<tr><td>Relay</td><td>An optional per-machine scheduled job. It polls GitHub and messages a seat's session when a decision for that seat changes.</td></tr>
+</table></div>
+
+<h2 id="surface">2. Pick your surface</h2>
+<p>Run <code>/daita-beast:install</code>. It works out which surface you are on from what it finds, then walks only that surface's checklist:</p>
+<div class="tbl"><table>
+<tr><th>What the session has</th><th>Surface</th><th>How GitHub is reached</th></tr>
+<tr><td>A Bash tool, and <code>command -v claude</code> prints a path</td><td><strong>local</strong> (terminal or VS Code)</td><td><code>gh</code> CLI, REST</td></tr>
+<tr><td>A Bash tool, but <code>gh api graphql</code> is refused with <code>HTTP 403: GitHub GraphQL is not available from Claude Code sessions</code> (or <code>GH_TOKEN</code> is <code>proxy-injected</code>)</td><td><strong>cloud</strong> (Claude Code on the web)</td><td>a sandbox proxy: REST only, attached repos only</td></tr>
+<tr><td>No Bash tool, but GitHub connector tools</td><td><strong>cowork</strong> (Cowork or Claude.ai chat)</td><td>the GitHub connector. The recipes are in <code>/daita-beast:connector</code></td></tr>
+</table></div>
+
+<h2 id="local">3. Local: Claude Code on your machine</h2>
+<p>Run the steps in order, and confirm each check before moving on. <code>${CLAUDE_PLUGIN_ROOT}</code> is the installed plugin's directory, which Claude Code sets for you.</p>
+<ol>
+<li><strong>Tools.</strong>
+<pre><code>command -v gh jq git python3
+gh auth status
+gh auth refresh -s project      # only if you will open workstreams (GitHub Projects)</code></pre>
+Check: four paths print, and the status says <code>Logged in</code>.</li>
+<li><strong>Install the plugin</strong> (in Claude Code):
+<pre><code>/plugin marketplace add DeSciX/DAITA
+/plugin install daita-beast@daita
+/plugin install daita@daita     # the DeSciX connector; set it up with /daita:descix-setup</code></pre>
+Check, after the next session start: <code>claude plugin list</code> shows <code>daita-beast@daita</code> at the version the marketplace pins (<code>1.5.9</code> on 2026-10-20). The version on <code>DeSciX/daita-beast</code> main is <code>gh api repos/DeSciX/daita-beast/contents/plugin/.claude-plugin/plugin.json -q .content | base64 -d | jq -r .version</code>.</li>
+<li><strong>Permissions</strong> (once per repo). This adds the 15 <code>gh</code> and git read rules a seat needs to <code>&lt;checkout&gt;/.claude/settings.json</code>. Run it without <code>--write</code> first to see the diff.
+<pre><code>${CLAUDE_PLUGIN_ROOT}/scripts/permissions.sh ~/code/three.js-dev
+${CLAUDE_PLUGIN_ROOT}/scripts/permissions.sh ~/code/three.js-dev --write
+git -C ~/code/three.js-dev add .claude/settings.json &amp;&amp; git -C ~/code/three.js-dev commit -m "Beast permissions"</code></pre>
+Check: a second run prints <code>nothing to add: … already allows the 15 Beast rules</code>.</li>
+<li><strong>Plugin record</strong> (once per machine, and again after every plugin update):
+<pre><code>source ${CLAUDE_PLUGIN_ROOT}/scripts/lib.sh &amp;&amp; plugin_root_record "${CLAUDE_PLUGIN_ROOT}"
+jq -r .version ~/.beast/plugin.json      # must equal the installed version</code></pre></li>
+<li><strong>Bootstrap the repo.</strong> This writes the labels, the issue templates (decision, workstream, bounty), the roster skeleton, and the committed cloud pointer <code>.claude/skills/beast/SKILL.md</code>. It refuses a repo that is public or public-intended, naming the twin rule. Its next-step lines print the DeSciX CLI at the plugin's one pin, <code>npx -y -p @descix/cli@4.2.0 descix …</code>. A <code>LANE: &lt;name&gt;</code> line in the repo's root <code>CLAUDE.md</code> is optional: without one, seat rows are written with no <code>lane</code> key, and <code>seat.sh new</code> prints <code>lane: none (…)</code> (as does <code>bootstrap.sh</code> when given <code>--orchestrator</code>). Pass <code>--token &lt;SYMBOL&gt; --community &lt;owner/repo&gt;</code> only if the repo takes outside contributions for rewards; <code>bootstrap.sh</code> passes both to <code>init-repo.sh</code>, which writes the award policy and is the one place that checks they come together. One without the other is refused: <code>daita-beast: --token and --community go together: the award policy names the token and the community repo that holds its .beast/awarders.json</code>. See <a href="rewards.html">Token rewards</a>.
+<pre><code>${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.sh --repo threejs/three.js-dev --path ~/code/three.js-dev --seat THREE --board threejs/three.js-dev</code></pre>
+Then edit <code>.beast/roster.json</code>. It needs exactly one <code>people[]</code> row whose role contains <code>owner</code> (bootstrap writes you as owner), plus <code>"publishes_to": "mrdoob/three.js"</code> if there is a public twin. Commit <code>.beast/</code>, <code>.github/ISSUE_TEMPLATE/</code> and <code>.claude/skills/beast/</code>. Check: <code>cd ~/code/three.js-dev &amp;&amp; ${CLAUDE_PLUGIN_ROOT}/scripts/seats.sh list</code> runs without a prompt.</li>
+<li><strong>Open the workstream.</strong> Write the goal in the owner's own words to a file, then:
+<pre><code>printf '%s\n' "Three.js capabilities in egpt-frqtl STUDIO, and community scenes for Maxi in egpt-godsworld." &gt; ~/code/three.js-dev/northstar.md
+cd ~/code/three.js-dev &amp;&amp; ${CLAUDE_PLUGIN_ROOT}/scripts/workstream.sh new --slug studio-scenes --owner threejs \
+  --title "WS: STUDIO capabilities and Maxi scenes" --repo threejs/three.js-dev \
+  --northstar-file northstar.md \
+  --milestone "M1 STUDIO capabilities|2026-11-30|Three.js features usable from egpt-frqtl STUDIO" \
+  --repos "threejs/three.js-dev — coordination, mrdoob/three.js — the library"</code></pre>
+Check: the tracking issue carries <code>workstream</code> and <code>ws:studio-scenes</code>, and <code>cd ~/code/three.js-dev &amp;&amp; ${CLAUDE_PLUGIN_ROOT}/scripts/workstream.sh seats studio-scenes</code> prints an empty table.</li>
+<li><strong>Create the seat.</strong> Prefer <code>/daita-beast:seat THREE</code>: it talks the scope through with you first, then runs:
+<pre><code>${CLAUDE_PLUGIN_ROOT}/scripts/seat.sh new THREE --repo-path ~/code/three.js-dev --agent daita-beast:seat --workstream studio-scenes</code></pre>
+That one command writes the roster row (held by your <code>gh</code> login), creates the home, adds the row to the <code>## Seats</code> table, renders the master's CLAUDE.md block and opens the seat's desk. Check: <code>seat.sh where THREE</code> prints the home, and the table shows the row. Commit the roster.</li>
+<li><strong>Join</strong>, in every session, from any directory: <code>/daita-beast:join THREE</code>. It runs <code>join.sh THREE --address "&lt;this session's ListAgents name [ref]&gt;"</code>, filling the address in for you. Check: the first line is <code>SEATED studio-scenes/THREE/&lt;your login&gt; at &lt;home&gt;</code>. From then on every shell command starts with <code>cd &lt;home&gt; &amp;&amp;</code>. Join records that this session holds the seat (<code>session: &lt;id&gt; holds &lt;identity&gt;</code>), and the SessionStart hook rejoins it by itself after a compaction or a resume, and after a restart in the same launch folder once the SessionEnd hook has recorded the earlier session's end; it does not rejoin a seat another session has claimed since (<code>docs/protocol.md:267</code>, "Rejoining").</li>
+<li><strong>Relay</strong> (optional; one per machine). Pick the permission mode your seat sessions run in, then:
+<pre><code>${CLAUDE_PLUGIN_ROOT}/scripts/install-relay.sh --repo ~/code/three.js-dev --permission-mode default
+${CLAUDE_PLUGIN_ROOT}/scripts/install-relay.sh --status
+${CLAUDE_PLUGIN_ROOT}/scripts/relay.sh --repo ~/code/three.js-dev --dry-run     # one poll, sends nothing</code></pre>
+You lose nothing without it. Every seat gets the same inbox from <code>decision.sh inbox THREE</code>.</li>
+<li><strong>Test decision</strong> (needs the relay from step 9). From the seat's home, file a test decision assigned to yourself:
+<pre><code>cd &lt;home&gt; &amp;&amp; ${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh new --repo threejs/three.js-dev --assignee &lt;your login&gt; \
+  --by THREE --seat THREE --title "FIXTURE install $(date -u +%Y-%m-%dT%H:%MZ)" --milestone "M1 STUDIO capabilities" \
+  --decision "Close this fixture." --unblocks "the install check" --waits "nothing" --recommendation "approve" \
+  --approve-with "approve" --record "$(git rev-parse --short HEAD) — .beast/roster.json"</code></pre>
+<code>--by</code> names the filing seat; its <code>seen</code> ack is the row's first comment. <code>--milestone</code> is required while the repo has an open milestone (step 6 made one). Your own filing is never sent back to you: within two relay ticks (about 4 minutes) <code>~/.beast/relay.log</code> says <code>own act, not sent: NEW &lt;url&gt;</code>. Then answer as the decider, with an untagged comment on the row (<code>gh issue comment &lt;url&gt; --body approve</code>). Check: a <code>BEAST-EVENT kind=UPDATED</code> line arrives in the session. Close it:
+<pre><code>cd &lt;home&gt; &amp;&amp; ${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh close &lt;url&gt; --words approve --record &lt;the comment url&gt; --by THREE</code></pre>
+and the log says <code>own act, not sent: DECIDED &lt;url&gt;</code>.</li>
+</ol>
+<p class="note">VS Code with several repos in one window: every session starts in the launch folder, and <code>join</code> finds the seat's home in any folder of that workspace. Run steps 3 and 5 once per repo, and steps 2, 4 and 9 once per machine.</p>
+
+<h2 id="cloud">4. Cloud: Claude Code on the web</h2>
+<p>Plugins are not installed in a cloud session. Instead, the repo carries the committed pointer <code>.claude/skills/beast/SKILL.md</code>, which step 5 above writes. The session clones the plugin and runs its scripts over REST:</p>
+<pre><code>git clone --depth 1 https://github.com/DeSciX/daita-beast "$HOME/daita-beast"
+$HOME/daita-beast/plugin/scripts/decision.sh inbox THREE
+$HOME/daita-beast/plugin/scripts/resume.sh THREE</code></pre>
+<p>Limits that come from the surface, not from Beast:</p>
+<ul>
+<li>GraphQL is blocked, so the workstream and Project verbs refuse there. Open workstreams from a machine.</li>
+<li>Only the repos attached to the session can be reached.</li>
+<li>No relay runs, so the inbox at each wake is how the seat hears anything.</li>
+<li>The proxy appends <code>_Generated by Claude Code_</code> to the issues it creates.</li>
+</ul>
+
+<h2 id="cowork">5. Cowork or Claude.ai chat</h2>
+<ol>
+<li>Customize › Plugins › Add marketplace <code>DeSciX/DAITA</code> › install <code>daita-beast</code> (and <code>daita</code>).</li>
+<li>Run <code>/daita-beast:connector</code>. Its step 0 fetches one known private issue by number to prove access. If it is denied, install the GitHub app on that account or organization; <code>docs/connector-access.md</code> has the details.</li>
+<li><code>/daita-beast:board-ui</code> publishes the decider's board page.</li>
+<li>Create a scheduled task, every 15 minutes or more, whose prompt is exactly <code>/daita-beast:cowork-tick threejs/three.js-dev</code>.</li>
+</ol>
+<p>Roster rows and seat homes are shell acts, so create them from a machine.</p>
+
+<h2 id="threejs">6. Worked example: Three.js adopts Beast</h2>
+<p class="note">Hypothetical: the scenario is invented for this guide, and it implies no endorsement by, or involvement of, the Three.js project, its maintainers or the <code>mrdoob</code> and <code>threejs</code> accounts. Real: <code>mrdoob/three.js</code> (public, owned by the user account <code>mrdoob</code>), <code>DeSciX/egpt-frqtl</code> and <code>DeSciX/egpt-godsworld</code> (public), the private twin of <code>DeSciX/egpt-frqtl</code>, owned by a personal account that is also its decider (written <code>&lt;owner&gt;/&lt;twin&gt;</code> below, its owner <code>&lt;owner&gt;</code>). Invented for the example: the private repo <code>threejs/three.js-dev</code> and the maintainer logins <code>alice-three</code> and <code>bob-three</code>.</p>
+
+<h3 id="a">(a) The Three.js workstream master must be a private twin</h3>
+<p>The maintainers cannot make <code>mrdoob/three.js</code> the master. Every coordination write first passes one guard, <code>coord_write_guard</code>, which refuses any repo that is public on GitHub or listed in the roster's <code>public_intended</code>. Nothing overrides it. The guard, run read-only on 2026-10-20 against a throwaway roster:</p>
+<div class="card bad"><strong>Roster <code>repo</code> set to the public repo</strong>, then <code>coord_write_guard mrdoob/three.js</code> (exit 1):
+<pre><code>daita-beast: refused: mrdoob/three.js is public on GitHub, and the roster …/.beast/roster.json names it as the repo of this roster. Coordination stays private: a seat's home is a private repo (the twin; its roster names the public repo in "publishes_to"). Move the roster row to the twin; no coordination write goes to mrdoob/three.js.</code></pre>
+<strong>Roster <code>repo</code> set to the private twin</strong>, with a write aimed at the public repo (exit 1):
+<pre><code>daita-beast: refused: mrdoob/three.js is public on GitHub. Coordination stays private: decision rows, desks, tracking issues, status, notes, acks, review requests and the board are written only in a private repo; a public repo receives only publishes. Write it in threejs/three.js-dev.</code></pre>
+<span class="note">Control: the same guard on a private repo (the private twin of <code>DeSciX/egpt-frqtl</code>) passed with exit 0.</span></div>
+<p>Other checks enforce the same rule. <code>bootstrap.sh</code> refuses a public repo as the coordinating repo. <code>init-repo.sh</code> gives a public repo only the public labels (<code>bounty</code>, <code>awarded</code>). <code>seat.sh new</code> refuses a public repo as a seat's repo. <code>join</code> refuses a roster whose <code>repo</code> is public, or whose <code>publishes_to</code> is private.</p>
+<p>The setup the maintainers can use:</p>
+<ol>
+<li>An owner of the <code>threejs</code> organization creates the private repo <code>threejs/three.js-dev</code> (<code>gh repo create threejs/three.js-dev --private</code>). Creating a repo is the owner's act; Beast never creates one.</li>
+<li>Run section 3 steps 1–8 in a checkout of it, with <code>"publishes_to": "mrdoob/three.js"</code> in the roster and exactly one owner in <code>people[]</code>.</li>
+<li><strong>Not yet supported (deferred):</strong> seats <code>alice-three/THREE</code> and <code>bob-three/THREE</code>, each maintainer running <code>seat.sh new THREE …</code> under their own <code>gh</code> login. The scripts key a seat by login and label, so two people can each hold a THREE seat, but no run with a second login exists (<a href="#gaps">Gap 1</a>).</li>
+<li>Release to <code>mrdoob/three.js</code> with <code>publish.sh</code> (below). <strong>Only <code>mrdoob</code> can run it</strong>, as a member of the <code>threejs</code> organization. The rule: each organization publishes its own public repos from its own twin, with a login that can list that owner's private repos. This roster names <code>threejs</code> (its <code>repo</code>) and <code>mrdoob</code> (<code>publishes_to</code>, a personal account whose private repos only <code>mrdoob</code> can list), so any other login is refused with that rule, naming the owner and the login. A login that is not an active member of <code>threejs</code> is refused as well: GitHub answers a non-member's private repo listing with HTTP 200 and an empty list (measured 2026-10-20 with a login outside <code>threejs</code>: <code>gh api 'orgs/threejs/repos?type=private'</code> → 200, 0 repos), so the scrub reads the login's membership (<code>user/memberships/orgs/threejs</code>) first. The refusal reads <code>daita-beast: refused: the roster … names the owner threejs (its repo, publishes_to, board or a seat repo), and the gh login &lt;login&gt; cannot list threejs's private repos (&lt;login&gt; is not an active member of the organization threejs (…), and GitHub answers a non-member's private repo listing with an empty list), so the scrub cannot cover them. The rule: each organization publishes its own public repos from its own twin, with a login that can list that owner's private repos. Publish threejs's public repos from threejs's own twin, as a login that can list threejs's private repos</code>.</li>
+</ol>
+<p>Seats from another owner's repos join this workstream when their roster declares <code>threejs</code> in <code>"workstream_owners"</code>; (b) walks the same mechanism in the other direction.</p>
+
+<h3 id="b">(b) The Three.js maintainers join the egpt-frqtl workstream</h3>
+<p>The egpt-frqtl twin <code>&lt;owner&gt;/&lt;twin&gt;</code> is a private twin like the one in (a): its roster names <code>DeSciX/egpt-frqtl</code> in <code>publishes_to</code> and has one owner, <code>&lt;owner&gt;</code>. It masters workstream <code>studio</code>. The Three.js seats stay in their own twin, <code>threejs/three.js-dev</code>, and join <code>studio</code> because their roster declares <code>&lt;owner&gt;</code> in <code>"workstream_owners"</code>. Workstream discovery searches the owners a roster names (<code>repo</code>, <code>board</code>, seat repos) plus its <code>workstream_owners</code>; an owner not declared is never searched. The master stays private: every write to it passes <code>coord_write_guard</code>.</p>
+<p class="note"><strong>Deferred, not yet supported:</strong> steps 2 to 5 act under the Three.js maintainers' own logins, in a repo another login owns. No run with a second login exists (<a href="#gaps">Gap 1</a>); these steps are described from the scripts. Steps 1, 6 and 7 run as <code>&lt;owner&gt;</code> alone.</p>
+<ol>
+<li><strong>Open the workstream in the egpt-frqtl twin</strong>, as <code>&lt;owner&gt;</code>. The workstream's Project is created under <code>--owner</code>, and on a personal account only that user can create it. The owner also creates their own seat, which the publish in step 6 uses:
+<pre><code>cd ~/code/egpt-frqtl-twin &amp;&amp; ${CLAUDE_PLUGIN_ROOT}/scripts/workstream.sh new --slug studio --owner &lt;owner&gt; \
+  --title "WS: STUDIO Three.js capabilities" --repo &lt;owner&gt;/&lt;twin&gt; \
+  --northstar-file northstar.md \
+  --milestone "M1 STUDIO capabilities|2026-11-30|Three.js features usable from STUDIO"
+${CLAUDE_PLUGIN_ROOT}/scripts/seat.sh new LEAD --repo-path ~/code/egpt-frqtl-twin --agent daita-beast:seat --workstream studio</code></pre></li>
+<li><strong>Grant access</strong> (GitHub, not Beast; the owner's act). A joining seat writes the master's <code>## Seats</code> table and CLAUDE.md block and records its address on the tracking issue, so each Three.js login needs write access to the twin:
+<pre><code>gh api -X PUT repos/&lt;owner&gt;/&lt;twin&gt;/collaborators/alice-three
+gh api -X PUT repos/&lt;owner&gt;/&lt;twin&gt;/collaborators/bob-three</code></pre>
+Each call sends an invitation; the access starts only when the invitee accepts it, on GitHub or with <code>gh api user/repository_invitations</code> (to find its id) and <code>gh api -X PATCH user/repository_invitations/&lt;id&gt;</code>. On a personal-account repo an accepted collaborator gets write access. The maintainers need no access to the public repo for this.</li>
+<li><strong>Declare the owner in the Three.js roster.</strong> In <code>threejs/three.js-dev</code>'s <code>.beast/roster.json</code> add, at the top level:
+<pre><code>"workstream_owners": ["&lt;owner&gt;"]</code></pre>
+Commit it. The field is a list of GitHub owner names, each once, none of them an owner the roster already names; anything else stops every lookup, naming the field. Without it, <code>seat.sh new … --workstream studio</code> dies with <code>no open issue labelled workstream and ws:studio among user:threejs: … a tracking issue under another owner is searched only when this roster's "workstream_owners" lists that owner</code>.</li>
+<li><strong>Each maintainer creates a seat in <code>studio</code></strong>, from the Three.js checkout, logged in as themselves:
+<pre><code>cd ~/code/three.js-dev &amp;&amp; ${CLAUDE_PLUGIN_ROOT}/scripts/seat.sh new STUDIO --repo-path ~/code/three.js-dev --agent daita-beast:seat --workstream studio</code></pre>
+The roster row stays in <code>threejs/three.js-dev</code>; the seat appears in <code>studio</code>'s <code>## Seats</code> table on the twin's tracking issue. A login holds a label once per roster, so <code>alice-three</code> takes <code>STUDIO</code> beside her <code>THREE</code> seat in <code>studio-scenes</code>. The identity is <code>studio/STUDIO/alice-three</code>. Commit and push the roster, then <code>/daita-beast:join studio/STUDIO/alice-three</code>.</li>
+<li><strong>Get a PR reviewed in the twin.</strong> The seat works on a branch of the twin and opens a PR on <code>&lt;owner&gt;/&lt;twin&gt;</code>, using the hand-back body: <code>## What</code>, <code>## Evidence</code>, <code>## Review against the engineering rules</code>, <code>## Closes</code>. The seat's own roster names a Three.js owner, so the request names the decider:
+<pre><code>cd &lt;home&gt; &amp;&amp; ${CLAUDE_PLUGIN_ROOT}/scripts/pr.sh request &lt;owner&gt;/&lt;twin&gt;#42 --seat alice-three/STUDIO --assignee &lt;owner&gt; --milestone "M1 STUDIO capabilities"</code></pre>
+This labels the PR <code>needs-review</code> and <code>seat:alice-three/STUDIO</code>, assigns <code>&lt;owner&gt;</code> and posts the requesting seat's <code>seen</code> ack on the PR. The decider answers on the PR with <code>approve</code>, <code>revise: …</code> or <code>reject: …</code>. On approval the seat runs:
+<pre><code>cd &lt;home&gt; &amp;&amp; ${CLAUDE_PLUGIN_ROOT}/scripts/pr.sh close &lt;owner&gt;/&lt;twin&gt;#42 --merge --words "approve" --record https://github.com/&lt;owner&gt;/&lt;twin&gt;/pull/42#issuecomment-… --by alice-three/STUDIO --board &lt;owner&gt;/&lt;twin&gt;</code></pre>
+<span class="note"><code>--record</code> is the URL of the decider's answer comment, copied from the PR. <code>--board</code> names the board to republish; without it <code>pr.sh close</code> republishes the board of the closing seat's own roster.</span></li>
+<li><strong>Publish to <code>DeSciX/egpt-frqtl</code></strong>, as <code>&lt;owner&gt;</code>, from the twin's main checkout and the owner's seat <code>&lt;owner&gt;/LEAD</code>. The rule: each organization publishes its own public repos from its own twin, with a login that can list that owner's private repos. The twin's roster names <code>&lt;owner&gt;</code>, a personal account, so only <code>&lt;owner&gt;</code> can publish it; <code>workstream_owners</code> adds no owner to what a publish lists, so the Three.js seats change nothing here.
+<pre><code>cd ~/code/egpt-frqtl-twin
+${CLAUDE_PLUGIN_ROOT}/scripts/publish.sh prepare studio-three --paths src/studio --message-file msg.txt
+${CLAUDE_PLUGIN_ROOT}/scripts/publish.sh request studio-three --seat &lt;owner&gt;/LEAD --body-file body.md --milestone "M1 STUDIO capabilities"
+# the decider answers on the twin's approval row:  publish studio-three
+${CLAUDE_PLUGIN_ROOT}/scripts/publish.sh merge studio-three --words "publish studio-three" --by &lt;owner&gt;/LEAD
+git -C ~/code/egpt-frqtl-twin push</code></pre>
+<code>prepare</code> builds exactly one new commit on the public main branch; the twin's history never travels. A scrub gate runs inside prepare, request and merge. It refuses private repo names, local paths, <code>BEAST-</code> lines, words from the twin's closed decisions, roster patterns and secret-shaped file names. If it finds anything it lists every hit and creates nothing.</li>
+<li><strong>Bring public contributions back.</strong> In the twin's main checkout, with a clean tree:
+<pre><code>${CLAUDE_PLUGIN_ROOT}/scripts/publish.sh pull</code></pre>
+<code>publish.sh merge</code> refuses while the public main has commits the twin lacks, so pull first. If the pull conflicts it aborts, leaves main unchanged and names the files. A pull that merges ends by telling you to push the twin's main branch: <code>pulled public … into twin …; push it: git push origin ends by telling you to push the twin's main: <code>git push origin main</code>.lt;branchends by telling you to push the twin's main: <code>git push origin main</code>.gt;</code>.</li>
+</ol>
+<p>egpt-godsworld follows the same pattern through its own private twin, which publishes to <code>DeSciX/egpt-godsworld</code>.</p>
+
+<h3 id="c">(c) Public developers</h3>
+<p>Outside developers never touch a twin. They fork and open an ordinary pull request on <code>DeSciX/egpt-frqtl</code>, <code>DeSciX/egpt-godsworld</code> or <code>mrdoob/three.js</code>. Beast puts no review machinery on public PRs: <code>pr.sh</code> refuses a public repo. A maintainer with write access on the public repo reviews and merges in GitHub, and the twin then runs <code>publish.sh pull</code>. Bounties and awards are allowed on public repos, and the public repo serves as the bulletin board. See <a href="rewards.html">Token rewards</a>.</p>
+
+<h2 id="gaps">Gaps: what the hypothetical needs and 1.5.10 does not do</h2>
+<ol>
+<li><strong>Seats under a second GitHub login are not yet supported.</strong> The protocol says "Every seat posts as the decider's login today" (<code>docs/protocol.md:115</code>; <code>pr.sh:6-8</code>), and <code>docs/design/adopting.md:88</code> says seats under a second GitHub login "are designed (the roster's <code>github</code> field differs, and GitHub would send its own notifications) but have not been run with a second login". Steps (a)3 and (b)2 to 5 are deferred until one is run.</li>
+<li><strong>Beast has no command for granting access.</strong> Adding collaborators, creating the twin and creating the public repo are GitHub acts by the owner (<code>plugin/skills/publish/SKILL.md:8</code>: "creating it is its owner's act").</li>
+</ol>
+
+<h2 id="sources">Sources</h2>
+<p class="note">Paths and line numbers are those of the daita-beast tree at commit <code>81c73e5</code> (<code>plugin/.claude-plugin/plugin.json:4</code>: <code>"version": "1.5.10"</code>).</p>
+<ul class="note">
+<li>Surfaces and checklists: <code>plugin/skills/install/SKILL.md:10-57</code> (detection 10-18; local 20-36; cloud 38-45; cowork 47-55); the test decision <code>:33</code>.</li>
+<li>Marketplace pin: <code>DeSciX/DAITA/.claude-plugin/marketplace.json</code>, <code>daita-beast</code> source <code>ref "1.5.9"</code> (read 2026-10-20 20:12 UTC).</li>
+<li>bootstrap: <code>plugin/scripts/bootstrap.sh:1-16</code> (what it writes), <code>:43-44</code> (public repo refused), <code>:46-47</code> (lane), <code>:51</code> (<code>--token</code> and <code>--community</code> passed to init-repo), <code>:53-62</code> (roster fill, owner), <code>:72-75</code> (cloud pointer), <code>:92-101</code> (next steps; the CLI at <code>:81</code>, <code>:99</code>); the two flags together <code>plugin/scripts/init-repo.sh:21</code>; the CLI pin <code>plugin/scripts/lib.sh:16-17</code> (<code>DESCIX_CLI_PKG='@descix/cli@4.2.0'</code>, <code>descix_cmd</code>).</li>
+<li>init-repo, labels and templates: <code>plugin/scripts/init-repo.sh:25-63</code>; <code>plugin/templates/labels.json</code>.</li>
+<li>workstream: <code>plugin/scripts/workstream.sh:56-121</code> (new; guard at <code>:86</code>), <code>:122-147</code> (seat-add: private repo <code>:138-139</code>).</li>
+<li>seat: <code>plugin/scripts/seat.sh:58-92</code> (public refusal <code>:89-90</code>; login <code>:91-92</code>; lane, optional, <code>:122-123</code> and the row <code>:181-183</code>; reader <code>plugin/scripts/lib.sh:89</code> <code>checkout_lane</code>; roster check <code>lib.sh:212</code>); the desk <code>plugin/scripts/seat.sh:226-227</code>; <code>plugin/skills/seat/SKILL.md:24-39</code>.</li>
+<li>join: <code>plugin/scripts/join.sh:3,22</code>, the session claim <code>:95</code>; <code>plugin/skills/join/SKILL.md:8-23</code>; pair check <code>plugin/scripts/lib.sh:2416-2430</code>; a seat id that names several seats stops <code>join</code> at <code>plugin/scripts/lib.sh:832</code>. Rejoining: <code>docs/protocol.md:267-274</code>; the claim <code>plugin/scripts/lib.sh:127-147</code> (<code>sessions_claim</code>, <code>sessions_end</code>); the hooks <code>plugin/hooks/hooks.json</code>, <code>plugin/scripts/seat-hello.sh</code>, <code>plugin/scripts/seat-bye.sh</code>.</li>
+<li>Guard: <code>plugin/scripts/lib.sh:2432-2448</code> (refusal texts <code>:2445</code>, <code>:2447</code>; "There is no override" <code>:2434</code>); call sites listed in <code>docs/protocol.md:153</code>. Measured 2026-10-20, read-only, exit codes as quoted above.</li>
+<li>Seat identity, labels per login, two workstreams: <code>docs/protocol.md:99</code>; a login and label once per roster <code>plugin/scripts/lib.sh:196-216</code>.</li>
+<li>Workstreams under another owner: <code>plugin/scripts/lib.sh:1485-1504</code> (<code>roster_workstream_owners</code>), <code>:1506-1514</code> (<code>workstream_user_terms</code>), <code>:1517</code> (the hint every "not found" ends with); discovery <code>:362-394</code> (query <code>:366</code>, search <code>:370</code>, refusal <code>:394</code>); the roster's own owners <code>:1471-1483</code>; peer rows refused <code>:214</code>; <code>docs/protocol.md:88</code> (Roster), <code>:286</code>; <code>plugin/skills/workstream/SKILL.md:23</code>.</li>
+<li>pr.sh: <code>plugin/scripts/pr.sh:1-20</code>, <code>:44-62</code> (the requester's ack <code>:58-61</code>), <code>:78-108</code>; decider <code>plugin/scripts/lib.sh:2352-2360</code>.</li>
+<li>decision.sh new and <code>--by</code>: <code>plugin/scripts/decision.sh:3-10</code>, <code>:75-76</code>, the filer's ack <code>:160-167</code>.</li>
+<li>publish: <code>plugin/skills/publish/SKILL.md:8-58</code> (owner creates the public repo <code>:8</code>; the publishing rule <code>:33</code>); <code>plugin/scripts/publish.sh:1-60</code>; <code>docs/protocol.md:157-184</code>; the owners a scrub lists <code>plugin/scripts/lib.sh:2132-2149</code> (an org: membership <code>:2142-2143</code>, listing <code>:2144</code>), the refusal <code>:2102-2106</code> (<code>scrub_owner_refusal</code>).</li>
+<li>Relay: <code>plugin/skills/relay/SKILL.md:10-28</code>.</li>
+<li>Account types (read 2026-10-20): <code>gh api users/mrdoob</code> → User; <code>users/threejs</code> → Organization; the egpt-frqtl twin's owner → User. Organization listing by a non-member (read 2026-10-20, before the membership check): <code>gh api 'orgs/threejs/repos?type=private'</code> → HTTP 200, 0 repos.</li>
+<li>Identity, quota and billing per call: <a href="../design/messaging-paths.html">docs/design/messaging-paths.html</a>.</li>
+</ul>
+</main>
+</body>
+</html>

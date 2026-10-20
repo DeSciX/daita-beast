@@ -3,8 +3,9 @@
 # every workstream's `## Seats` table), its short id <login>/<LABEL>, or its identity <slug>/<LABEL>/<login>.
 #   record <seat> "<name [ref]>"   write this session's SendMessage address: the seat's one BEAST-ADDRESS comment on its
 #                                  workstream tracking issue (created, then edited in place; the one owner), the
-#                                  machine-local cache ~/.beast/sessions.json (keyed by the identity), and the
-#                                  rendered Account/Address/Seen cells of the issue's `## Seats` table
+#                                  machine-local cache ~/.beast/sessions.json (keyed by the identity) with this
+#                                  session's claim of the seat (sessions_claim), and the rendered Account/Address/Seen
+#                                  cells of the issue's `## Seats` table
 #   list                           every seat of every open workstream among the workstream owners (the roster's owners plus its "workstream_owners") (ws_seats_all), with
 #                                  its account, address and when it was seen (from the BEAST-ADDRESS comments)
 #   address <seat>                 the seat's address, read live: line 1 the address alone; then its account, machine,
@@ -29,7 +30,7 @@ mkdir -p "$(dirname "$sessions")"
 # comment on the tracking issue is the owner, and the next record rewrites the cache.
 while IFS= read -r k; do
   [[ -n "$k" ]] || continue
-  tmp="$(mktemp)"; jq --arg k "$k" 'del(.[$k])' "$sessions" > "$tmp" && mv "$tmp" "$sessions"
+  sessions_update 'del(.[$k])' --arg k "$k"
   echo "daita-beast: $sessions: dropped the key $k (not <slug>/<LABEL>/<login>; the BEAST-ADDRESS comment is the owner, seats.sh record rewrites the cache)" >&2
 done < <(jq -r --arg re "$SEAT_IDENTITY_RE" 'keys[] | select(test($re) | not)' "$sessions")
 
@@ -56,10 +57,10 @@ case "$cmd" in
     else url="$(gh_send POST "repos/$repo/issues/$number/comments" -F body=@"$f" | jq -r .html_url)"; what="created"; fi
     rm -f "$f"
     sessions_key_check "$identity"
-    tmp="$(mktemp)"
-    jq --arg l "$identity" --arg n "$name" --arg r "$ref" --arg a "$addr" --arg acc "$account" --arg m "$machine" --arg c "$(pwd)" --arg t "$at" \
-       '.[$l] = {name:$n, ref:$r, address:$a, account:$acc, machine:$m, cwd:$c, recorded_at:$t}' "$sessions" > "$tmp" && mv "$tmp" "$sessions"
+    sessions_update '.[$l] = ((.[$l] // {}) + {name:$n, ref:$r, address:$a, account:$acc, machine:$m, cwd:$c, recorded_at:$t})' \
+      --arg l "$identity" --arg n "$name" --arg r "$ref" --arg a "$addr" --arg acc "$account" --arg m "$machine" --arg c "$(pwd)" --arg t "$at"
     echo "recorded $identity -> $addr (account $account, machine $machine): $what $url; cached in $sessions"
+    sessions_claim "$identity" "" "$tracking"
     ws_seats_write "$slug" "$(ws_seats_parse "$slug")" >/dev/null || exit 1
     echo "the \`## Seats\` table of $tracking re-rendered (Account, Address, Seen are rendered from the comments; the comment is the owner)"
     ;;
@@ -110,8 +111,8 @@ case "$cmd" in
       comment_delete "$(jq -r '.url | capture("github.com/(?<r>[^/]+/[^/]+)/") | .r' <<< "$a")" "$(jq -r .id <<< "$a")"
       echo "deleted $(jq -r .url <<< "$a")"
     fi
-    tmp="$(mktemp)"; jq --arg l "$identity" 'del(.[$l])' "$sessions" > "$tmp" && mv "$tmp" "$sessions"
-    echo "forgot $identity"
+    sessions_update 'del(.[$l])' --arg l "$identity"
+    echo "forgot $identity (its address and its session claim on this machine)"
     ;;
   *) die "usage: seats.sh record|list|address|forget" ;;
 esac

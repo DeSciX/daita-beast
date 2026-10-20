@@ -100,10 +100,50 @@ board_repo() {
   echo "$b"
 }
 
-# The machine-local address file (never committed). It is keyed by the identity <slug>/<LABEL>/<login> only:
-# sessions_key_check refuses any other key before seats.sh record writes one, and the reader drops one, named.
+# The machine-local session file (never committed). It is keyed by the identity <slug>/<LABEL>/<login> only:
+# sessions_key_check refuses any other key before a write, and seats.sh drops one, named. An entry holds two facts:
+#   the address cache  {name, ref, address, account, machine, cwd, recorded_at}: seats.sh record, a cache of
+#                      the seat's BEAST-ADDRESS comment (the owner of the address)
+#   the session claim  {session, session_at, launch, tracking, ended_at, previous}: the one owner of which Claude Code
+#                      session on this machine holds the seat. Written by sessions_claim (join.sh, seats.sh record) and
+#                      sessions_end (the SessionEnd hook), read by the SessionStart hook to rejoin (seat-hello.sh).
+#                      previous lists the sessions the claim was taken from, newest last (SESSIONS_PREVIOUS_MAX).
 sessions_path() { echo "${BEAST_SESSIONS_FILE:-$HOME/.beast/sessions.json}"; }
 sessions_key_check() { [[ "${1:-}" =~ $SEAT_IDENTITY_RE ]] || die "refused: '${1:-}' is not <slug>/<LABEL>/<login>; the cache $(sessions_path) is keyed by the identity only"; }
+SESSIONS_PREVIOUS_MAX=5
+
+# sessions_update <jq filter> [jq args]...: the one writer of the session file: the filter applied, written atomically.
+sessions_update() {
+  local f t; f="$(sessions_path)"; mkdir -p "$(dirname "$f")"
+  [[ -s "$f" ]] || echo '{}' > "$f"
+  t="$(mktemp "$f.XXXXXX")"
+  jq "${@:2}" "$1" "$f" > "$t" || { rm -f "$t"; die "the session file $f is not JSON; fix or delete it"; }
+  mv -f "$t" "$f"
+}
+
+# sessions_claim <identity> [<launch dir>] [<tracking ref>]: records that this session ($CLAUDE_CODE_SESSION_ID) holds
+# the seat: session, session_at (now), launch and tracking when given, ended_at cleared; a claim held by another session
+# moves to previous. Prints the line join shows; outside a Claude Code session (no id) it records nothing and says so.
+sessions_claim() {
+  local id="$1" launch="${2:-}" tracking="${3:-}" sid="${CLAUDE_CODE_SESSION_ID:-}"
+  sessions_key_check "$id"
+  if [[ -z "$sid" ]]; then echo "session: none recorded (CLAUDE_CODE_SESSION_ID is unset: not a Claude Code session), so no SessionStart hook rejoins this seat"; return 0; fi
+  sessions_update '.[$k] = ((.[$k] // {}) as $e
+      | $e + {session: $s, session_at: $t}
+      + (if $l != "" then {launch: $l} else {} end) + (if $r != "" then {tracking: $r} else {} end)
+      + {previous: ((($e.previous // []) + (if ($e.session // $s) != $s then [{session: $e.session, session_at: $e.session_at, launch: $e.launch, ended_at: $e.ended_at}] else [] end))[-($n):])}
+      | del(.ended_at))' \
+    --arg k "$id" --arg s "$sid" --arg t "$(utc_now)" --arg l "$launch" --arg r "$tracking" --argjson n "$SESSIONS_PREVIOUS_MAX"
+  launch="$(jq -r --arg k "$id" '.[$k].launch // empty' "$(sessions_path)")"
+  echo "session: $sid holds $id ($(sessions_path)); the SessionStart hook rejoins it after a compaction or a resume, and after a restart in ${launch:-its launch folder (recorded at its next join)} once this session has ended"
+}
+
+# sessions_end <session id>: marks every claim that session holds as ended now (the SessionEnd hook).
+sessions_end() {
+  [[ -n "${1:-}" ]] || die "sessions_end: no session id"
+  [[ -s "$(sessions_path)" ]] || return 0
+  sessions_update 'with_entries(if .value.session == $s then .value.ended_at = $t else . end)' --arg s "$1" --arg t "$(utc_now)"
+}
 
 # ---- the run cache: one search per query per run ---------------------------------------------------------------
 # A run is a top-level script and every script it starts (join.sh starts seats.sh record, resume.sh, seats.sh list,
@@ -526,16 +566,24 @@ address_age() {
 # starts with BEAST-ADDRESS and is not the shape, or that names a seat whose login is not its author, is named on
 # stderr and dropped.
 seat_addresses_of() {
-  local ref r n
+  local ref
   ref="$(workstream_issue "$1")" || exit 1
+  seat_addresses_at "$ref"
+}
+
+# seat_addresses_at <owner/repo#N>: seat_addresses_of for a tracking issue already known (one comments read, no search).
+seat_addresses_at() {
+  local ref="$1" r n
+  [[ "$ref" =~ ^[^/#]+/[^/#]+#[0-9]+$ ]] || die "seat_addresses_at: '$ref' is not owner/repo#N"
   r="${ref%%#*}"; n="${ref#*#}"
-  issue_comments "$r" "$n" | jq -c --arg re "$ADDRESS_HEADER_RE" '
+  local cs; cs="$(issue_comments "$r" "$n")" || die "cannot read the comments of $ref (named above)"
+  jq -c --arg re "$ADDRESS_HEADER_RE" '
     .[] | . as $c | ((.body // "") | split("\n")[0] | sub("\\s+$"; "")) as $f
     | select($f | startswith("BEAST-ADDRESS"))
     | ($f | capture($re) // null) as $a
     | if $a == null then {bad: "malformed BEAST-ADDRESS line: \($c.html_url)"}
       elif ($a.seat | split("/")[2]) != $c.user.login then {bad: "BEAST-ADDRESS for \($a.seat) by \($c.user.login), not the seat'"'"'s login: \($c.html_url)"}
-      else $a + {url: $c.html_url, id: $c.id, by: $c.user.login} end' \
+      else $a + {url: $c.html_url, id: $c.id, by: $c.user.login} end' <<< "$cs" \
     | while IFS= read -r o; do
         if [[ "$(jq -r '.bad // empty' <<< "$o")" != "" ]]; then echo "daita-beast: $ref: $(jq -r .bad <<< "$o"); dropped" >&2; else printf '%s\n' "$o"; fi
       done
@@ -791,8 +839,10 @@ seat_locate() {
 # launch folder's path with every character but A-Z, a-z, 0-9 and - replaced by -. Every seat started in one folder
 # shares it, so it holds only lessons true for all of them and short pointers; a seat's state lives on GitHub.
 
+# claude_project_dir <dir>: Claude Code's project folder for sessions started in <dir> (their transcripts, <id>.jsonl).
+claude_project_dir() { echo "$HOME/.claude/projects/$(printf '%s' "$1" | sed 's#[^A-Za-z0-9-]#-#g')"; }
 # automemory_dir <dir>: Claude Code's auto-memory directory for sessions started in <dir>.
-automemory_dir() { echo "$HOME/.claude/projects/$(printf '%s' "$1" | sed 's#[^A-Za-z0-9-]#-#g')/memory"; }
+automemory_dir() { echo "$(claude_project_dir "$1")/memory"; }
 
 # session_memory_dir <launch dir>: "<dir>\t<how it was found>" of the auto-memory THIS session loads: the project
 # folder holding this session's transcript ($CLAUDE_CODE_SESSION_ID.jsonl), else, outside a Claude Code session or
@@ -2082,11 +2132,16 @@ scrub_patterns() {
   # every private repo of every owner the roster names (repo, publishes_to, board, seat repos, tracking refs): an org's
   # through orgs/<o>/repos?type=private, the gh login's through user/repos; another user's cannot be listed and dies
   # A listing that cannot be made refuses with the publishing rule (scrub_owner_refusal), naming the owner and the login.
-  local lst
+  # An org's listing is trusted only from an active member (user/memberships/orgs/<o>): GitHub answers a non-member's
+  # listing with 200 and an empty list, which would pass the scrub with no private names to check.
+  local lst mem
   while IFS= read -r o; do
     [[ -n "$o" ]] || continue
     type="$(gh_get "users/$o" | jq -r .type)" || die "cannot read the GitHub account $o (named above)"
-    if [[ "$type" == Organization ]]; then lst="$(gh_get_all "orgs/$o/repos?type=private")" || scrub_owner_refusal "$roster" "$o" "$me" "the org's private repo listing failed (named above)"
+    if [[ "$type" == Organization ]]; then
+      mem="$(gh_get "user/memberships/orgs/$o" | jq -r '.state // empty')" || mem=""
+      [[ "$mem" == active ]] || scrub_owner_refusal "$roster" "$o" "$me" "$me is not an active member of the organization $o (user/memberships/orgs/$o: ${mem:-not a member, or the read failed, named above}), and GitHub answers a non-member's private repo listing with an empty list"
+      lst="$(gh_get_all "orgs/$o/repos?type=private")" || scrub_owner_refusal "$roster" "$o" "$me" "the org's private repo listing failed (named above)"
     elif [[ "$(tr 'A-Z' 'a-z' <<< "$o")" == "$(tr 'A-Z' 'a-z' <<< "$me")" ]]; then lst="$(gh_get_all "user/repos?visibility=private&affiliation=owner")" || scrub_owner_refusal "$roster" "$o" "$me" "the login's private repo listing failed (named above)"
     else scrub_owner_refusal "$roster" "$o" "$me" "$o is another user's account, whose private repos no other login can list"; fi
     lst="$(jq -r '.[] | select(.private == true) | .full_name' <<< "$lst")" || die "cannot read the private repo list of $o"

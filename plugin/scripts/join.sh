@@ -6,7 +6,8 @@
 # 1 roster: the seat's row in the roster of the checkout of its own repo; --agent changes its role (the agent file
 #   must exist), --workstream moves it to another workstream (whose tracking issue must exist); its tracking issue is
 #   found by the workstream's labels (workstream_issue). Refused only when the home does not exist here, naming the
-#   clone and seat.sh new steps. The first line printed is "SEATED <id> at <home>"; then "role: <agent> at <path>".
+#   clone and seat.sh new steps. The first line printed is "SEATED <id> at <home>"; then "role: <agent> at <path>";
+#   then the session claim (sessions_claim, lib.sh: this session holds the seat, read by the SessionStart hook to rejoin).
 # 2 address: recorded when --address is given (seats.sh record: the BEAST-ADDRESS comment on the tracking issue).
 # 3 CLAUDE.md: the block between <!-- beast:begin --> and <!-- beast:end --> in the home's CLAUDE.md is regenerated
 #   from templates/claude-block.md for this seat (its identity, its role, its workstream's seat map).
@@ -91,6 +92,7 @@ apath="$(seat_agent_path "$remote" "$agent")" || exit 1
 echo "$identity: repo $remote, workstream $ws, tracking $tracking"
 echo "role: $agent at $apath"
 if [[ "$agent" == daita-beast:* || "$apath" == /* ]]; then echo "  a terminal session runs the role with: cd $home && claude --agent $agent"; fi
+sessions_claim "$identity" "$launch_p" "$tracking"
 
 echo "== 2. address"
 if [[ -n "$address" ]]; then "$here/seats.sh" record "$seat" "$address"; else echo "(no --address: run cd $home && $here/seats.sh record $seat \"<your ListAgents name [ref]>\" or pass --address)"; fi

@@ -27,7 +27,7 @@ These documents describe the design as built. `docs/protocol.md` is the specific
 | `components.md` | every script with its verbs, `lib.sh` functions and writes; every skill; every agent; the three hooks; templates; roster fields and their readers |
 | `messaging-paths.html` | the interaction paths (GitHub connector, `gh`, relay, SendMessage; no DeSciX connector); identity and billing per path; GitHub quotas and the secondary limit; the page's read budget and backoff |
 | `learnings.md` | rule / why / evidence, grouped: state, relay cost, silent caps, GitHub timing, privacy of the decider's words, the queue, seating, the live checkout, the board page, connector shapes, scrub tuning, license, gates, one owner per fact across repos |
-| `adopting.md` | mechanism mapping; roles to agent files, workstream slugs and surfaces; migration order with the gate per step; what to delete and when; relay-versus-polling token arithmetic; what differs from a local system |
+| `adopting.md` | mechanism mapping; roles to agent files, workstream slugs and surfaces; migration order with the gate per step; what to delete and when; relay-versus-polling token arithmetic; what differs from a local system; an outside organization (another owner's workstream through `workstream_owners`, who publishes, who awards a token, and the guides in `docs/guides/`) |
 
 ## Conventions used here
 

@@ -11,7 +11,14 @@
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/seat-hello.sh" }
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/seat-hello.sh", "timeout": 120 }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/seat-bye.sh" }
         ]
       }
     ],
