@@ -7,12 +7,16 @@
 #   $CLAUDE_PLUGIN_ROOT (the running plugin) or the root ~/.beast/plugin.json records (lib.sh plugin_root_recorded,
 #   so a --plugin-dir session may still run the installed plugin's scripts the committed block names), and
 #   the command carries no shell metacharacter (; & | ` $( ) < > newline), so nothing rides along.
+# An input it cannot read is a fault: it says nothing, and logs one line in ~/.beast/hooks.log (lib.sh hook_log).
 set -u
 root="${CLAUDE_PLUGIN_ROOT:-}"
 rec="$( (source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"; plugin_root_recorded) 2>/dev/null )" || rec=""
 [[ -n "$root$rec" ]] || exit 0
 input="$(cat)"
-cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null)" || exit 0
+if ! cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null)"; then
+  ( source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"; hook_log permit fault - "permit.sh: the PreToolUse input is not JSON with tool_input.command (${#input} bytes); said nothing" ) 2>/dev/null || true
+  exit 0
+fi
 [[ -n "$cmd" ]] || exit 0
 # One leading "cd <absolute dir> && ", the dir a plain path (no space, quote or metacharacter), is the seat's home.
 if [[ "$cmd" =~ ^cd\ (/[A-Za-z0-9._/+@,=:-]*)\ \&\&\ (.*)$ ]]; then cmd="${BASH_REMATCH[2]}"; fi

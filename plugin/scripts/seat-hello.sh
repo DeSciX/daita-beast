@@ -28,8 +28,11 @@
 #             session, on this machine or another, so no rejoin; the context names its address, machine and time.
 #             A seat no longer rostered here, or retired, is never rejoined. With no claim for this session or folder
 #             nothing is read and the context is as without a claim.
-# A hook never fails the session: a fault is put into the context, named, and the hook exits 0.
+# A hook never fails the session: a fault is put into the context, named, and the hook exits 0; every fault is also one
+# line in ~/.beast/hooks.log (lib.sh hook_log), which the machine watchdog reads. The watchdog's own session
+# (BEAST_WATCHDOG=1) is not a seat: the hook says nothing there and never rejoins.
 set -u
+[[ "${BEAST_WATCHDOG:-}" != 1 ]] || exit 0
 input="$(cat)"
 scripts="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 src="$(printf '%s' "$input" | jq -r '.source // empty' 2>/dev/null)"
@@ -175,6 +178,13 @@ if [[ -s "$err" && -z "$ctx" ]]; then
   ctx="The Beast SessionStart hook could not name this directory's seat or home: $(tr '\n' ' ' < "$err"). Tell the user."
 fi
 rm -f "$err"
+# Each fault the context names is also logged, one line (the rejoin's failure, the two "could not" faults).
+for m in "$pre" "$ctx"; do
+  case "$m" in
+    *"could not decide whether to rejoin"*|*"could not name this directory's seat"*|*"The automatic rejoin of the Beast seat"*" failed"*)
+      ( source "$scripts/lib.sh"; hook_log seat-hello fault "${sid:--}" "$m" ) 2>/dev/null || true ;;
+  esac
+done
 ctx="$pre$ctx"
 [[ -n "$ctx" ]] || exit 0
 jq -n --arg c "$ctx" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}'

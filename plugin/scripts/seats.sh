@@ -13,6 +13,12 @@
 #                                  recorded within 24h, an approximation of "after its newest session start") or desk
 #                                  (desk.sh msg). Exit 1 when none is recorded.
 #   forget <seat>                  delete a stale address: the comment and the cache entry
+#   touch <identity> --verified "<name [ref]>"
+#                                  re-stamp only the at= of the seat's BEAST-ADDRESS comment, the machine watchdog's one
+#                                  write to a seat's fact: refused unless the comment's address is exactly the verified
+#                                  one (the caller saw it live in ListAgents), was recorded on this machine, and the
+#                                  seat's cached cwd (~/.beast/sessions.json, written by record) is the seat's home on this
+#                                  machine. It edits nothing else and claims no session (no sessions_claim, no cache write).
 # BEAST-ADDRESS seat=<identity> account=<claude account> address="<name [ref]>" machine=<hostname> at=<UTC>
 # (address_header, seat_address_read in lib.sh). Addresses change on every session reload: a seat records at every
 # join; a reader verifies one by a reply before relying on it.
@@ -114,5 +120,32 @@ case "$cmd" in
     sessions_update 'del(.[$l])' --arg l "$identity"
     echo "forgot $identity (its address and its session claim on this machine)"
     ;;
-  *) die "usage: seats.sh record|list|address|forget" ;;
+  touch)
+    identity="${1:-}"
+    [[ "$identity" =~ $SEAT_IDENTITY_RE && "${2:-}" == --verified && -n "${3:-}" ]] || die "usage: seats.sh touch <slug>/<LABEL>/<login> --verified \"<name [ref]>\" (the address the caller saw live in ListAgents)"
+    verified="$3"
+    entry="$(jq -c --arg k "$identity" '.[$k] // {}' "$sessions")"
+    # The claim names the tracking issue it was recorded on (no search); a seat claimed before that field existed is found by its labels.
+    tracking="$(jq -r '.tracking // empty' <<< "$entry")"
+    [[ -n "$tracking" ]] || tracking="$(workstream_issue "${identity%%/*}")" || exit 1
+    a="$(seat_addresses_at "$tracking" | jq -c --arg s "$identity" 'select(.seat == $s)' | jq -sc .)" || exit 1
+    [[ "$(jq length <<< "$a")" -eq 1 ]] || die "refused: $identity has $(jq length <<< "$a") BEAST-ADDRESS comments on $tracking; touch re-stamps exactly one"
+    a="$(jq -c '.[0]' <<< "$a")"
+    [[ "$(jq -r .address <<< "$a")" == "$verified" ]] || die "refused: the recorded address of $identity is \"$(jq -r .address <<< "$a")\", not the verified \"$verified\": a renamed session re-records (seats.sh record), it is never touched"
+    machine="$(hostname -s 2>/dev/null || hostname)"
+    [[ "$(jq -r .machine <<< "$a")" == "$machine" ]] || die "refused: $identity's address was recorded on $(jq -r .machine <<< "$a"), not this machine ($machine)"
+    home="$(seat_home_on_machine "$identity")" || exit 1
+    [[ -n "$home" ]] || die "refused: no roster on this machine names $identity, so its home cannot be checked"
+    cwd="$(jq -r '.cwd // empty' <<< "$entry")"
+    [[ -n "$cwd" && "$(cd "$cwd" 2>/dev/null && pwd -P)" == "$(cd "$home" 2>/dev/null && pwd -P)" ]] || die "refused: $identity's cached cwd ('${cwd:-none}' in $sessions) is not its home $home"
+    repo="${tracking%%#*}"
+    coord_write_guard "$repo"
+    old_at="$(jq -r .at <<< "$a")"; at="$(utc_now)"
+    f="$(mktemp)"
+    { address_header "$identity" "$(jq -r .account <<< "$a")" "$verified" "$machine" "$at" || exit 1
+      issue_comments "$repo" "${tracking#*#}" | jq -r --argjson i "$(jq -r .id <<< "$a")" '.[] | select(.id == $i) | (.body // "") | gsub("\r"; "") | split("\n")[1:] | .[]'; } > "$f" || { rm -f "$f"; exit 1; }
+    url="$(comment_edit "$repo" "$(jq -r .id <<< "$a")" "$f")"; rm -f "$f"
+    echo "touched $identity: at= $old_at -> $at on $url (address \"$verified\" unchanged; no session claimed)"
+    ;;
+  *) die "usage: seats.sh record|list|address|forget|touch" ;;
 esac
