@@ -2,6 +2,8 @@
 
 # DeSciX Community License and Membership Agreement
 
+Version 1, revised 2026-10-19: Section 3.3 (Pre-existing Material Under Separate Licenses) added; no other wording changed.
+
 ## 1 Preamble – The DeSciX Virtual University & App Store: Internal Collaboration, External Value Return
 
 Welcome to the DeSciX Community, a dynamic ecosystem designed as a **virtual university and collaborative app store** for decentralized science (DeSci). This agreement outlines the contractual relationship between its members for the creation, sharing, and utilization of creative works, often referred to as "Intellectual Property" (IP) under relevant laws. Within this framework, certain IP is made available to the members who agree to these terms—the "Community."
@@ -54,7 +56,7 @@ Think of the DeSciX Community as a collaborative **virtual university**. Its gui
 
 Membership in the DeSciX Community grants Members access to the “university’s” resources, including:
 
-1.  The cloud-based DeSciX Platform as a Service (DPaaS) – the core **university infrastructure** – under the terms of the DeSciX Platform as a Service License Agreement (DPLA) (Section 3.3).
+1.  The cloud-based DeSciX Platform as a Service (DPaaS) – the core **university infrastructure** – under the terms of the DeSciX Platform as a Service License Agreement (DPLA) (Section 3.4).
 
 2.  Access for qualifying Members (typically Private COMMUNITIES) to the DeSciX Source Code – foundational **research tools and code libraries** – under the terms of the DeSciX Community Source Code License (Section 3.1), primarily while their COMMUNITY ("College/Department") is in the developmental (Private) stage.
 
@@ -170,6 +172,8 @@ As the DAO Creator of a COMMUNITY, you are initially the Community Managing Dele
 
 “Licensee” means a Member who has satisfied the conditions precedent and has been granted the rights and licenses under this Agreement.
 
+“Pre-existing Material” means any work, file, dataset, document or code that is present in a repository, package or other collection together with Community IP or a Covered Work and that was created by a third party and made available under a license other than this Agreement (an “Original License”), including public-domain and historical primary-source material to which no license attaches.
+
 “Non-Member” means any individual or entity that does not satisfy the definition of DAO Member.
 
 “Community IP” means any copyrighted work, patentable invention, database right, compilation, documentation, dataset, workflow, prompt, model artifact, or other protectable work that is contributed to, hosted by, or made available through the DeSciX ecosystem, or that incorporates, derives from, or aggregates DeSciX Community Software, DPaaS Service Offerings, or other Community contributions.
@@ -198,7 +202,7 @@ As the DAO Creator of a COMMUNITY, you are initially the Community Managing Dele
 
 "Token-Based Transactions" shall refer to the exchange of tokens for services or value within the DeSciX ecosystem, governed by the DeSciX DPoS White Paper.
 
-“DeSciX Community Source and Services Licenses” or “DCSSL” shall collectively refer to the licenses governing participation and IP within the DeSciX Community, primarily the DeSciX Community Source Code License (DCSL - Section 3.1) and the DeSciX Platform as a Service License Agreement (DPLA - Section 3.3). The DCSSL is a term of convenience for referencing these sections of the DCMA and is not intended to supersede or limit the DCMA in any way.
+“DeSciX Community Source and Services Licenses” or “DCSSL” shall collectively refer to the licenses governing participation and IP within the DeSciX Community, primarily the DeSciX Community Source Code License (DCSL - Section 3.1) and the DeSciX Platform as a Service License Agreement (DPLA - Section 3.4). The DCSSL is a term of convenience for referencing these sections of the DCMA and is not intended to supersede or limit the DCMA in any way.
 
 “DeSciX Platform as a Service (DPaaS)” shall refer to the cloud-based infrastructure provided by the DeSciX DAO, serving as the **core technological backbone of the University**.
 
@@ -379,7 +383,17 @@ For GUIs, use an "About box" with similar information.
 
 **Apps; Forking; No Preemption.** App-level terms may not in any way restrict or change the DCMA with respect to DAO Members no extend DAO Membership to non-members except through the DCMA provisions itself (i.e. as a non-limiting example, if you promote your App to non-members a condition of use is becoming a Member). As an App Creator, with respect to your own Content within your App and to the App itself you may offer less restrictive terms to other DAO Members so long as those terms are digitally represented in entitlements system of the DeSciX platform (i.e. you can sell your App to Members but not allow forking and you don’t need to disclose the App’s source code except that the specific COMMUNITY Source you employed). App terms may not bypass Mandatory Tokenized Economics (i.e. as a non-limiting example, you may not "open-source your App" and disclose COMMUNITY Source to Non-Members or give away your App off-platform "for free" while employing COMMUNITY Source).
 
-### 3.3 DeSciX Platform as a Service License Agreement (DPLA)
+### 3.3 Pre-existing Material Under Separate Licenses; No Override Either Way
+
+**Scope.** Where this Agreement is adopted in a repository, package or other collection that also contains Pre-existing Material, this Agreement applies to that Pre-existing Material only to the extent its Original License allows, and otherwise does not apply to it at all. Placement of this Agreement at the root of such a collection, or beside Pre-existing Material, is not a claim of rights over the Pre-existing Material and does not relicense it. The Covered Works and Community IP in the same collection remain governed by this Agreement in full.
+
+**The Original License is not displaced.** Nothing in this Agreement relieves You of any obligation the Original License imposes on Pre-existing Material. By way of example, if Pre-existing Material is licensed under the Mozilla Public License, its file-level copyleft, notice and source-availability obligations continue to bind You for that material; this Agreement neither absolves You of them nor extends them to Covered Works.
+
+**This Agreement is not displaced.** No Original License shall be read to invalidate, override, relicense or extend its terms to any Covered Work or Community IP. If You combine, link or otherwise mix a Covered Work with Pre-existing Material whose Original License would, by its terms, purport to govern the combination or require the Covered Work to be licensed under that Original License (by way of example, the GNU General Public License), You are in breach of this Agreement from the moment of the combination: Your license under this Agreement terminates as to that combination under Clause 7, You lose the protections this Agreement affords Members with respect to it, and the Original License shall not be read to apply to the Covered Work or Community IP, whose terms remain those of this Agreement.
+
+**Marking.** An adopter that places this Agreement in a collection containing Pre-existing Material shall place it within, or clearly identify, the directories or files it covers, so that no Pre-existing Material is represented as licensed under this Agreement.
+
+### 3.4 DeSciX Platform as a Service License Agreement (DPLA)
 
 This DeSciX Platform as a Service License Agreement (DPLA) is a term of convenience for referencing this section of the DCMA and is not intended to supersede or limit the DCMA in any way. The DPLA contains the terms and conditions that govern your access to and use of the Service Offerings (as defined below) and is an agreement between the Licensor(s) and you or the entity you represent. You, or the entity you represent, are a Member of the DeSciX DAO and any relevant COMMUNITY DAO. This agreement is separate and apart from the license associated with the Community Source. This agreement concerns the platform on which the COMMUNITIES provide their respective DApps and services.
 
