@@ -13,7 +13,7 @@ BEAST_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # The published DeSciX CLI every printed descix command runs: the one owner of its version (bootstrap.sh, wrapup.sh
 # and the skills and docs read it here). descix_cmd <args>: the command line, `npx -y -p <pin> descix <args>`.
-DESCIX_CLI_PKG='@descix/cli@4.1.0'
+DESCIX_CLI_PKG='@descix/cli@4.2.0'
 descix_cmd() { printf 'npx -y -p %s descix %s' "$DESCIX_CLI_PKG" "$*"; }
 
 # ---- a checkout: the one owner of "is <dir> a git checkout", "its root" and "is it the repo's main checkout" ------
@@ -244,7 +244,7 @@ seat_id() {
   if short="$(seat_id_local "$x" 2>/dev/null)"; then echo "$short"; return 0; fi
   [[ "$x" =~ $SEAT_LABEL_RE ]] || { seat_id_local "$x"; exit 1; }
   hits="$(ws_seats_all | awk -F'\t' -v l="$x" 'substr($2, index($2, "/") + 1) == l {print $1 "/" l "/" substr($2, 1, index($2, "/") - 1)}')" || exit 1
-  [[ -n "$hits" ]] || die "seat '$x' is not in $(roster_path) and no open workstream's \`## Seats\` table among $(roster_user_terms) lists it"
+  [[ -n "$hits" ]] || die "seat '$x' is not in $(roster_path) and no open workstream's \`## Seats\` table among $(workstream_user_terms) lists it; $WORKSTREAM_OWNERS_HINT"
   [[ "$hits" != *$'\n'* ]] || die "seat label '$x' names several seats: $(tr '\n' ' ' <<< "$hits")— name one by its id"
   seat_short "$hits"
 }
@@ -260,7 +260,7 @@ seat_identity() {
   ws="$(roster_field "$short" workstream)"
   if [[ -n "$ws" ]]; then seat_identity_of "$short" "$ws"; return 0; fi
   hits="$(ws_seats_all | awk -F'\t' -v s="$short" '$2 == s {print $1}')" || exit 1
-  [[ -n "$hits" ]] || die "seat $short is not in $(roster_path) and no open workstream's \`## Seats\` table among $(roster_user_terms) lists it"
+  [[ -n "$hits" ]] || die "seat $short is not in $(roster_path) and no open workstream's \`## Seats\` table among $(workstream_user_terms) lists it; $WORKSTREAM_OWNERS_HINT"
   [[ "$hits" != *$'\n'* ]] || die "seat $short is in several workstreams: $(while IFS= read -r w; do seat_identity_of "$short" "$w"; done <<< "$hits" | tr '\n' ' ')— name one by its composite id"
   seat_identity_of "$short" "$hits"
 }
@@ -304,7 +304,7 @@ seat_tracking() {
 # ---- workstreams: the one owner of "which issue tracks workstream <slug>" and "which seats are in it" --------
 # A workstream has a slug. Its tracking issue carries the labels `workstream` and `ws:<slug>`, in the master repo
 # (the issue's repo: nothing stores the master or the issue number). Discovery is deterministic: exactly one open
-# issue with both labels across the roster's owners. The issue's `## Seats` table is the one owner of which seats
+# issue with both labels across the workstream owners (workstream_user_terms: the roster's owners plus its "workstream_owners"). The issue's `## Seats` table is the one owner of which seats
 # are in the workstream, with their repo, home and agent; every other copy (the master's CLAUDE.md block, each
 # home's Beast block, seats.sh list) is rendered from it.
 
@@ -314,18 +314,19 @@ workstream_label_ensure() {
   label_ensure "$1" "ws:$2" 1D76DB "Tracking issue of workstream $2 (one per slug, open)"
 }
 
-# workstream_candidates [<slug>]: the open workstream issues among the roster's owners (all, or the slug's), one TSV
+# workstream_candidates [<slug>]: the open workstream issues among the workstream owners (workstream_user_terms) (all, or the slug's), one TSV
 # line each: slug, repo, number, title, html_url. The search names candidates (its index lags a write by seconds to
 # minutes); each is re-read live and kept only when open and labelled `workstream` and exactly one `ws:<slug>`;
 # a dropped candidate is named on stderr. An open `workstream` issue with no `ws:` label is not a workstream of
 # this model: named on stderr, never listed.
 workstream_candidates() {
-  local slug="${1:-}" q found r n info labels ws title url
+  local slug="${1:-}" q terms found r n info labels ws title url
   [[ -z "$slug" || "$slug" =~ $WS_SLUG_RE ]] || die "'$slug' is not a workstream slug (a-z, 0-9, -)"
-  q="is:open is:issue label:workstream${slug:+ label:\"ws:$slug\"} $(roster_user_terms)"
+  terms="$(workstream_user_terms)" || exit 1
+  q="is:open is:issue label:workstream${slug:+ label:\"ws:$slug\"} $terms"
   # One search per run: a slug's lookup is a subset of the all-workstreams search, so when that result is already
   # memoized in the run cache (ws_seats_all ran) it is read instead of a second search; the live re-read below filters.
-  if [[ -n "$slug" && -f "$BEAST_WS_CACHE/search-$(beast_sha "is:open is:issue label:workstream $(roster_user_terms)")" ]]; then q="is:open is:issue label:workstream $(roster_user_terms)"; fi
+  if [[ -n "$slug" && -f "$BEAST_WS_CACHE/search-$(beast_sha "is:open is:issue label:workstream $terms")" ]]; then q="is:open is:issue label:workstream $terms"; fi
   found="$(search_issues "$q")" || die "cannot search the workstream issues: $q"
   while IFS=$'\t' read -r r n; do
     [[ -n "$r" ]] || continue
@@ -350,7 +351,7 @@ workstream_issue() {
   [[ "$slug" =~ $WS_SLUG_RE ]] || die "'$slug' is not a workstream slug (a-z, 0-9, -)"
   rows="$(workstream_candidates "$slug")" || exit 1
   n="$(printf '%s' "$rows" | grep -c . || true)"
-  [[ "$n" -ne 0 ]] || die "no open issue labelled workstream and ws:$slug among $(roster_user_terms): workstream.sh new --slug $slug … opens one"
+  [[ "$n" -ne 0 ]] || die "no open issue labelled workstream and ws:$slug among $(workstream_user_terms): workstream.sh new --slug $slug … opens one; $WORKSTREAM_OWNERS_HINT"
   [[ "$n" -eq 1 ]] || die "workstream $slug has $n open tracking issues, one is the rule: $(cut -f5 <<< "$rows" | tr '\n' ' ')— close the extra one(s)"
   awk -F'\t' '{print $2 "#" $3}' <<< "$rows"
 }
@@ -462,7 +463,7 @@ ws_seats_write() {
   echo "$ref"
 }
 
-# ws_seats_all: every seat of every open workstream among the roster's owners, one TSV line each: slug, seat
+# ws_seats_all: every seat of every open workstream among the workstream owners (workstream_user_terms), one TSV line each: slug, seat
 # (short id), repo, home, agent, tracking (owner/repo#N), title. The one enumeration of "all seats" (seats.sh list,
 # seat_id's bare-label fallback, seat_repo for a seat of another repo): the workstream issues replace any roster as
 # an index of other repos' seats. Computed once per run ($BEAST_WS_CACHE/ws-seats.tsv; one search, one read per
@@ -594,7 +595,7 @@ seat_repo() {
   fi
   identity="$(seat_identity "$x")" || exit 1; slug="${identity%%/*}"
   r="$(ws_seats_all | awk -F'\t' -v s="$slug" -v i="$id" '$1 == s && $2 == i {print $3}')" || exit 1
-  [[ -n "$r" ]] || die "seat $identity is in no \`## Seats\` table of an open workstream among $(roster_user_terms) (workstream.sh seat-add $slug $id … adds it)"
+  [[ -n "$r" ]] || die "seat $identity is in no \`## Seats\` table of an open workstream among $(workstream_user_terms) (workstream.sh seat-add $slug $id … adds it; $WORKSTREAM_OWNERS_HINT)"
   echo "$r"
 }
 
@@ -1129,6 +1130,36 @@ parse_issue_ref() {
   fi
 }
 
+# row_refs_state <default repo | ""> <ref>...: whether each ref names an OPEN row, one line per ref,
+# "<ref>\t<owner/repo#N | ->\t<state>". A ref is an issue or pull request url, owner/repo#N, or #N, read in <default repo>.
+# The state is open (an open issue or PR carrying a row label, RELAY_ROW_LABELS: a decision, a PR for review, a desk),
+# closed, not-a-row, missing (HTTP 404 or 410) or unresolved (#N with no default repo). One GET per distinct owner/repo#N,
+# remembered for the call. Any other GitHub failure dies, named by gh_request: a fault is never read as an answer.
+row_refs_state() {
+  [[ $# -ge 1 ]] || die "row_refs_state takes <default repo | \"\"> <ref>..."
+  local def="$1" ref full repo n err st info memo=$'\n'; shift
+  err="$(mktemp)"
+  for ref in "$@"; do
+    full=""
+    if [[ "$ref" =~ ^#([0-9]+)$ ]]; then [[ -z "$def" ]] || full="$def#${BASH_REMATCH[1]}"
+    else read -r repo n < <(parse_issue_ref "$ref") || { rm -f "$err"; exit 1; }; full="$repo#$n"; fi
+    if [[ -z "$full" ]]; then printf '%s\t-\tunresolved\n' "$ref"; continue; fi
+    st="$(printf '%s' "$memo" | awk -F'\t' -v k="$full" '$1 == k {print $2; exit}')"
+    if [[ -z "$st" ]]; then
+      repo="${full%#*}"; n="${full##*#}"
+      if info="$(gh_get "repos/$repo/issues/$n" 2> "$err")"; then
+        st="$(jq -r --arg l "$RELAY_ROW_LABELS" '($l | split(",")) as $rl
+          | if ([.labels[]?.name] | any(. as $x | $rl | index($x))) | not then "not-a-row" else .state end' <<< "$info")" \
+          || { rm -f "$err"; die "row_refs_state: GitHub's answer for $full is not an issue"; }
+      elif grep -qE 'HTTP (404|410)\)' "$err"; then st="missing"
+      else cat "$err" >&2; rm -f "$err"; die "row_refs_state: cannot read $full (named above)"; fi
+      memo+="$full"$'\t'"$st"$'\n'
+    fi
+    printf '%s\t%s\t%s\n' "$ref" "$full" "$st"
+  done
+  rm -f "$err"
+}
+
 # Extract the text under a "## <Heading>" section of a markdown body, up to the next "## ".
 # Usage: section "<heading>" <<< "$body"   (prints nothing if absent; use section_required to fail)
 section() {
@@ -1177,19 +1208,65 @@ section_required() {
 # One-line cell for a markdown table: join lines, escape pipes, trim.
 cell() { tr '\n' ' ' | sed -e 's/|/\\|/g' -e 's/  */ /g' -e 's/^ //' -e 's/ $//'; }
 
-# The repo's award policy: `.beast/award-policy.md` at the root of the current checkout. Required by
-# award.sh and bounty.sh. Fails loud when absent, when it names another repo, when it still carries a
-# fill field (`<owner/repo>` or `<TOKEN>`), or when its token is not the one being awarded. Prints the policy's token.
-award_policy_token() {
-  local repo="$1" want="${2:-}" f
+# award_policy <repo> [<token>]: the repo's award policy, `.beast/award-policy.md` at the root of the current checkout,
+# the one parser of it. Required by award.sh and bounty.sh. Prints "<TOKEN> <community owner/repo>": its `Token: <SYMBOL>`
+# line and its `Community: <owner/repo>` line, the repo that holds the token's community and its awarders file
+# (community_awarders). Fails loud when absent, when it names another repo, when it still carries a fill field
+# (`<owner/repo>`, `<TOKEN>` or `<COMMUNITY>`), when a line is missing or malformed, or when its token is not <token>.
+award_policy() {
+  local repo="$1" want="${2:-}" f tok com
   f="$(repo_root)/.beast/award-policy.md"
-  [[ -f "$f" ]] || die "no award policy at $f — write one first: init-repo.sh $repo --path <checkout> --token <TOKEN> (a repo that takes no outside contributions has no policy and awards nothing)"
+  [[ -f "$f" ]] || die "no award policy at $f — write one first: init-repo.sh $repo --path <checkout> --token <TOKEN> --community <owner/repo> (a repo that takes no outside contributions has no policy and awards nothing)"
   head -1 "$f" | grep -q -- "— $repo\$" || die "$f is the policy of '$(head -1 "$f" | sed 's/^# Award policy — //')', not of $repo"
-  ! grep -q -e '<owner/repo>' -e '<TOKEN>' "$f" || die "$f still carries a fill field: $(grep -o -e '<owner/repo>' -e '<TOKEN>' "$f" | head -1) — set it, a placeholder policy awards nothing"
-  local tok; tok="$(sed -n 's/^Token: \([A-Z0-9]\{2,12\}\).*/\1/p' "$f" | head -1)"
+  ! grep -q -e '<owner/repo>' -e '<TOKEN>' -e '<COMMUNITY>' "$f" || die "$f still carries a fill field: $(grep -o -e '<owner/repo>' -e '<TOKEN>' -e '<COMMUNITY>' "$f" | head -1) — set it, a placeholder policy awards nothing"
+  tok="$(sed -n 's/^Token: \([A-Z0-9]\{2,12\}\).*/\1/p' "$f" | head -1)"
   [[ -n "$tok" ]] || die "$f has no 'Token: <SYMBOL>' line"
   [[ -z "$want" || "$want" == "$tok" ]] || die "token $want is not this repo's award token $tok (one owner: $f)"
-  echo "$tok"
+  com="$(sed -n 's/^Community: \([^ ]*\).*/\1/p' "$f" | head -1)"
+  [[ -n "$com" ]] || die "$f has no 'Community: <owner/repo>' line: the repo that holds the $tok community and its .beast/awarders.json (the repos that may award $tok); add it"
+  [[ "$com" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "$f: 'Community: $com' is not owner/repo"
+  echo "$tok $com"
+}
+
+# The token's authority: the community repo of a token (an award policy's `Community:` line) commits `.beast/awarders.json`,
+# the one owner of which repos may award its token: {"token": "<SYMBOL>", "awarders": ["<owner/repo>", ...]}. Read from the
+# community repo's default branch through GitHub, never from a local copy. A missing file refuses every award (no open default).
+AWARDERS_PATH=".beast/awarders.json"
+
+# community_awarders <community repo> <token>: the repos that may award <token>, one per line, as the file lists them. Dies
+# naming the community repo and the file when the file is absent (naming the file to create and its shape), unreadable,
+# not the shape above (an unknown key, a token that is not a symbol, an empty list, an entry that is not owner/repo, an
+# entry listed twice), or for another token.
+community_awarders() {
+  local c="$1" tok="$2" st got body bad
+  [[ "$c" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "community repo '$c' is not owner/repo"
+  st="$(gh_status_of "repos/$c/contents/$AWARDERS_PATH")" || exit 1
+  [[ "$st" != 404 ]] || die "refused: the community repo $c carries no $AWARDERS_PATH, so no repo may award $tok. Its owner commits $AWARDERS_PATH on its default branch: {\"token\": \"$tok\", \"awarders\": [\"<owner/repo>\", ...]}, listing every repo that may award $tok"
+  [[ "$st" == 200 ]] || die "cannot read $AWARDERS_PATH of the community repo $c (HTTP $st)"
+  got="$(gh_get "repos/$c/contents/$AWARDERS_PATH")" || die "cannot read $AWARDERS_PATH of the community repo $c (named above)"
+  body="$(python3 -I -c 'import base64, json, sys
+d = json.load(sys.stdin)
+if d.get("encoding") != "base64": sys.exit("encoding %r, not base64" % d.get("encoding"))
+sys.stdout.write(base64.b64decode(d.get("content") or "").decode("utf-8"))' <<< "$got")" || die "cannot decode $AWARDERS_PATH of the community repo $c (named above)"
+  bad="$(jq -r --arg t "$tok" '
+    if type != "object" then "is not an object {\"token\", \"awarders\"}"
+    elif (keys - ["awarders", "token"]) != [] then "unknown key(s) \(keys - ["awarders", "token"] | join(", ")); the keys are token and awarders"
+    elif ((.token | type) != "string") or (.token | test("^[A-Z0-9]{2,12}$") | not) then "\"token\" \(.token | tojson) is not a symbol such as ACME"
+    elif .token != $t then "is the awarders file of token \(.token), not \($t)"
+    elif ((.awarders | type) != "array") or (.awarders | length) == 0 then "\"awarders\" is a non-empty list of owner/repo, got \(.awarders | tojson)"
+    elif ([.awarders[] | select(type != "string" or (test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") | not))] | length) > 0 then "\"awarders\" entry \([.awarders[] | select(type != "string" or (test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") | not))][0] | tojson) is not owner/repo"
+    elif (.awarders | map(ascii_downcase) | unique | length) != (.awarders | length) then "\"awarders\" lists a repo twice"
+    else empty end' <<< "$body" 2>/dev/null)" || die "the community repo $c: $AWARDERS_PATH is not JSON"
+  [[ -z "$bad" ]] || die "the community repo $c: $AWARDERS_PATH $bad"
+  jq -r '.awarders[]' <<< "$body"
+}
+
+# award_authority_check <repo> <token> <community repo>: dies unless the community repo's awarders file lists <repo>
+# (case-insensitively, as GitHub compares names), naming the community repo, the file and the missing entry.
+award_authority_check() {
+  local repo="$1" tok="$2" c="$3" list
+  list="$(community_awarders "$c" "$tok")" || exit 1
+  grep -qixF -- "$repo" <<< "$list" || die "refused: $repo may not award $tok. The community repo $c lists the repos that may award $tok in $AWARDERS_PATH ($(paste -sd, - <<< "$list")), and \"$repo\" is not among them: the owner of $c adds \"$repo\" to its \"awarders\""
 }
 
 # ---- GitHub, REST only --------------------------------------------------------------------------
@@ -1354,6 +1431,40 @@ roster_user_terms() {
   [[ -n "$t" ]] || die "roster $(roster_path) names no owner (repo, board, seats[].repo)"
   printf '%s' "${t# }"
 }
+
+# roster_workstream_owners [roster]: the one parser of the roster's top-level "workstream_owners": GitHub owners, beyond
+# the ones the roster names (roster_owners), whose `workstream` + `ws:<slug>` tracking issues this repo's seats may join.
+# One per line; nothing when the field is absent. Dies naming the field when it is not a list of owner names (letters,
+# digits, -), lists one twice, or lists one the roster already names (searched already).
+roster_workstream_owners() {
+  local r="${1:-}" bad
+  [[ -n "$r" ]] || r="$(roster_path)"
+  [[ -f "$r" ]] || die "no roster at $r — run init-repo.sh for this repo first"
+  bad="$(jq -r '
+    if has("workstream_owners") | not then empty
+    elif (.workstream_owners | type) != "array" then "is a list of GitHub owners ([\"<owner>\", ...]), got \(.workstream_owners | tojson)"
+    else ([.repo, .board, (.seats[]?.repo)] | map(select(type == "string" and contains("/")) | split("/")[0] | ascii_downcase)) as $own
+      | [.workstream_owners | to_entries[] | .key as $i | .value
+          | if (type != "string") or (test("^[A-Za-z0-9-]+$") | not) then "[\($i)] \(tojson) is not a GitHub owner name (letters, digits, -)"
+            elif (ascii_downcase | IN($own[])) then "[\($i)] \(tojson) is already an owner the roster names (repo, board, seats[].repo), searched without it"
+            else empty end] + [.workstream_owners | map(ascii_downcase? // .) | group_by(.) | map(select(length > 1) | .[0]) | .[] | "lists \(tojson) twice"]
+      | first // empty end' "$r")" || die "roster $r: cannot read \"workstream_owners\""
+  [[ -z "$bad" ]] || die "roster $r: \"workstream_owners\" $bad"
+  jq -r '(.workstream_owners // [])[]' "$r"
+}
+
+# workstream_user_terms: the one owner of where workstreams are searched: the roster's owners (roster_owners) plus its
+# declared "workstream_owners", as search terms "user:a user:b". An undeclared owner is never searched.
+workstream_user_terms() {
+  local t o extra
+  t="$(roster_user_terms)" || exit 1
+  extra="$(roster_workstream_owners)" || exit 1
+  while IFS= read -r o; do [[ -n "$o" ]] && t="$t user:$o"; done <<< "$extra"
+  printf '%s' "$t"
+}
+
+# WORKSTREAM_OWNERS_HINT: the line a "not found among the owners" refusal ends with, naming the field that widens the search.
+WORKSTREAM_OWNERS_HINT='a tracking issue under another owner is searched only when this roster'"'"'s "workstream_owners" lists that owner (docs/protocol.md, Roster)'
 
 user_login() { gh_login; }
 
@@ -1610,6 +1721,47 @@ answer_kind() {
   else echo ""; fi
 }
 
+# ---- seat tags: the one reader of the seat a comment names as its writer --------------------------------------
+# Every seat posts as the same GitHub login, so a comment's author never says which seat wrote it; its tagged line does.
+# SEAT_TAG_JQ is the jq library of those readers (run through tag_jq, which binds $seatre, $askre and $msgre):
+#   tag_ack(l)       a well-formed `BEAST-ACK seat=<token> at=<UTC> state=seen|executed|blocked` line, or null
+#   tag_closer(b)    the "Closed by seat <token> at <UTC>." of a close comment (row_close_comment), or null
+#   tag_actor(desk)  of a comment: the seat id that wrote it, or null (an untagged comment, a BEAST-ANSWER: the decider's).
+#                    In order: the closer; a BEAST-ACK first line, or last line (a seat's own reply on a row ends with
+#                    it); a BEAST-STATUS or BEAST-NOTES header; a BEAST-ASK header; a BEAST-MSG sender (from=); on a
+#                    desk (desk = the desk's seat id, else ""), a BEAST-WITHDRAW, which only the desk's seat posts. A
+#                    bare label (a comment written before the 2026-10-15 relabel) is read as <the comment's login>/<LABEL>.
+SEAT_TAG_JQ='
+def tag_first: (split("\n")[0] // "");
+def tag_last: (split("\n") | map(select(test("\\S"))) | last // "");
+def tag_ack(l): (l | capture("^BEAST-ACK seat=(?<seat>" + $seatre + ") at=(?<at>[^ ]+) state=(?<state>seen|executed|blocked)") // null);
+def tag_closer(b): (b | capture("Closed by seat (?<seat>" + $seatre + ") at (?<at>[0-9T:Z-]+)\\.") // null);
+def tag_actor(desk):
+  . as $c | (($c.body // "") | gsub("\r"; "")) as $b | ($b | tag_first | sub("\\s+$"; "")) as $f
+  | ((tag_closer($b) // tag_ack($f) // tag_ack($b | tag_last)
+      // ($f | capture("^BEAST-(STATUS|NOTES) seat=(?<seat>" + $seatre + ")( |$)"))
+      // ($f | capture($askre))
+      // ($f | capture($msgre) | {seat: (.from | split("/") | "\(.[2])/\(.[1])")})
+      // (if desk != "" and ($f | test("^BEAST-WITHDRAW n=[0-9]+$")) then {seat: desk} else null end)) | .seat?) as $s
+  | if $s == null then null elif ($s | contains("/")) then $s else "\($c.user.login // "")/\($s)" end;
+'
+
+# tag_jq [jq options...] '<program>': jq with SEAT_TAG_JQ prepended to the program and its regexes bound.
+tag_jq() {
+  [[ $# -ge 1 ]] || die "tag_jq takes [jq options...] '<program>'"
+  local prog="${*: -1}"
+  jq --arg seatre "$SEAT_TOKEN_RE" --arg askre "$ASK_HEADER_RE" --arg msgre "$MSG_HEADER_RE" "${@:1:$#-1}" "$SEAT_TAG_JQ $prog"
+}
+
+# ack_line <id> seen|executed|blocked "<next>": the one writer of a seat's ack line, stamped now (ack.sh, the close
+# comment's last line, the filer's ack of decision.sh new and pr.sh request).
+ack_line() {
+  [[ $# -eq 3 && "$1" =~ $SEAT_ID_RE ]] || die "ack_line takes <seat id> <state> \"<next>\", not $*"
+  case "$2" in seen|executed|blocked) ;; *) die "ack_line: state is seen, executed or blocked, not '$2'" ;; esac
+  [[ -n "$3" && "$3" != *$'\n'* ]] || die "ack_line: next is one line"
+  printf 'BEAST-ACK seat=%s at=%s state=%s next=%s' "$1" "$(utc_now)" "$2" "$3"
+}
+
 # seat_acks <row>: (a row_read result) one line per seat id, "<id>\t<at>\t<state>\t<url>", the NEWEST well-formed BEAST-ACK
 # by that seat (first line, or the last non-empty line of a close comment). The seat is a qualified id, or a
 # bare label (comments written before the 2026-10-15 relabel), read as <the comment author's login>/<LABEL>:
@@ -1618,15 +1770,12 @@ answer_kind() {
 seat_acks() {
   [[ $# -eq 1 ]] || die "seat_acks takes one row (row_read), not $*"
   local closed_at; closed_at="$(jq -r '.issue.closed_at // ""' <<< "$1")"
-  jq '.comments' <<< "$1" | jq -r --arg closed "$closed_at" --arg seat "$SEAT_TOKEN_RE" '
-    def lastline: (split("\n") | map(select(test("\\S"))) | last // "");
-    def firstline: (split("\n")[0]);
-    def ack(l): (l | capture("^BEAST-ACK seat=(?<seat>" + $seat + ") at=(?<at>[^ ]+) state=(?<state>seen|executed|blocked)") // null);
+  jq '.comments' <<< "$1" | tag_jq -r --arg closed "$closed_at" '
     # A close comment names its closer: "Closed by seat X at T" is X'"'"'s seen ack at T (the same fact, the shape the close has always carried).
     # The close comment is the closer'"'"'s seen ack AT THE CLOSE: its time is the issue'"'"'s closed_at (the comment lands seconds before the close).
-    def closer(b): (b | capture("Closed by seat (?<seat>" + $seat + ") at (?<at>[0-9T:Z-]+)\\.") // null | if . == null then null else {seat:.seat, at:(if $closed != "" then $closed else .at end), state:"seen"} end);
-    .[] | . as $c | ((.body // "") | firstline) as $f | ((.body // "") | lastline) as $l
-      | (closer(.body // "") // ack($f) // ack($l)) as $a
+    def closer(b): (tag_closer(b) | if . == null then null else {seat:.seat, at:(if $closed != "" then $closed else .at end), state:"seen"} end);
+    .[] | . as $c | ((.body // "") | tag_first) as $f | ((.body // "") | tag_last) as $l
+      | (closer(.body // "") // tag_ack($f) // tag_ack($l)) as $a
       | if $a != null then "\(if ($a.seat | contains("/")) then $a.seat else "\($c.user.login)/\($a.seat)" end)\t\($a.at)\t\($a.state)\t\($c.html_url)"
         elif ($f | startswith("BEAST-ACK")) or ($l | startswith("BEAST-ACK")) then "BAD\t\($c.html_url)"
         else empty end' \
@@ -1636,6 +1785,28 @@ seat_acks() {
       printf '%s\t%s\t%s\t%s\n' "$a" "$b" "$c" "$d"
     done \
   | sort -t$'\t' -k1,1 -k2,2 | awk -F'\t' '{ last[$1] = $0; if (!($1 in seen)) { seen[$1] = 1; order[++n] = $1 } } END { for (i = 1; i <= n; i++) print last[order[i]] }'
+}
+
+# event_actors NEW|DECIDED|UPDATED <delta> <comments-json> <desk seat | "">: the seats whose acts make up one watch.sh
+# event on a row, one per line, "-" for an act no seat tag names (the decider's: an untagged comment, a BEAST-ANSWER).
+#   NEW      the filer (the seat of the row's first BEAST-ACK comment: the filer's ack, which decision.sh new and pr.sh
+#            request post), then the writer of every comment that is not bookkeeping
+#   DECIDED  the closer (the newest comment, when it is a close comment), then the writer of every newer comment that is
+#            not bookkeeping
+#   UPDATED  the writer of every newer comment that is not bookkeeping (nothing: no news, no event)
+# <delta> is how many comments are newer than the seat's snapshot; bookkeeping is BOOKKEEPING_FIRST_LINE_RE. The relay
+# sends a seat an event only when one of its actors is not that seat: a seat never hears its own act back.
+event_actors() {
+  [[ $# -eq 4 && "$2" =~ ^[0-9]+$ ]] || die "event_actors takes NEW|DECIDED|UPDATED <delta> <comments-json> <desk seat | \"\">, not $*"
+  case "$1" in NEW|DECIDED|UPDATED) ;; *) die "event_actors: kind is NEW, DECIDED or UPDATED, not '$1'" ;; esac
+  tag_jq -r --arg kind "$1" --argjson d "$2" --arg desk "$4" --arg bk "$BOOKKEEPING_FIRST_LINE_RE" '
+    def news: .[] | select((((.body // "") | gsub("\r"; "") | tag_first) | test($bk)) | not) | (tag_actor($desk) // "-");
+    def newer: if $d > 0 then .[-$d:] else [] end;
+    if $kind == "NEW" then
+      ((first(.[] | select((.body // "") | startswith("BEAST-ACK "))) // null) as $c | if $c != null then ($c | tag_actor($desk) // "-") else "-" end), news
+    elif $kind == "DECIDED" then
+      ((.[-1] // null) as $c | if $c != null and tag_closer($c.body // "") != null then ($c | tag_actor($desk) // "-") else "-" end), (newer | news)
+    else newer | news end' <<< "$3"
 }
 
 # approve_phrase "<body>": the first double-quoted phrase of the body's '## Approve with' section, or nothing.
@@ -1878,6 +2049,12 @@ roster_public_owners() {
   { roster_repo_owners "$r"; jq -r '(.public_intended // [])[] | split("/")[0]' "$r"; } | awk 'NF { k = tolower($0); if (!(k in seen)) { seen[k] = 1; print } }'
 }
 
+# scrub_owner_refusal <roster> <owner> <login> <why>: the one refusal of a publish whose roster names an owner the gh login
+# cannot list the private repos of (the scrub would pass them). It states the publishing rule and names the owner and the login.
+scrub_owner_refusal() {
+  die "refused: the roster $1 names the owner $2 (its repo, publishes_to, board or a seat repo), and the gh login $3 cannot list $2's private repos ($4), so the scrub cannot cover them. The rule: each organization publishes its own public repos from its own twin, with a login that can list that owner's private repos. Publish $2's public repos from $2's own twin, as a login that can list $2's private repos"
+}
+
 # scrub_patterns [roster]: the pattern bag, JSON {bag, slugs: [...], names: [...], skipped: [...], words: [{url, words}],
 # allow_words: [...], roster: [{pattern, paths}], vendored: [<dir>, ...], record_re}: the facts the scanner matches, derived
 # from the roster (the repo's own by default) and GitHub (every read through gh_get, so a warm cache costs no quota). names are the bare names
@@ -1904,13 +2081,14 @@ scrub_patterns() {
   done < <(jq -r '[.repo, .board, (.seats[]?.repo)] | map(select(. != null)) | unique | .[]' "$roster")
   # every private repo of every owner the roster names (repo, publishes_to, board, seat repos, tracking refs): an org's
   # through orgs/<o>/repos?type=private, the gh login's through user/repos; another user's cannot be listed and dies
+  # A listing that cannot be made refuses with the publishing rule (scrub_owner_refusal), naming the owner and the login.
   local lst
   while IFS= read -r o; do
     [[ -n "$o" ]] || continue
     type="$(gh_get "users/$o" | jq -r .type)" || die "cannot read the GitHub account $o (named above)"
-    if [[ "$type" == Organization ]]; then lst="$(gh_get_all "orgs/$o/repos?type=private")" || die "cannot list the private repos of the org $o (named above): the scrub would pass them"
-    elif [[ "$(tr 'A-Z' 'a-z' <<< "$o")" == "$(tr 'A-Z' 'a-z' <<< "$me")" ]]; then lst="$(gh_get_all "user/repos?visibility=private&affiliation=owner")" || die "cannot list the private repos of $o (named above): the scrub would pass them"
-    else die "the roster names the user $o, whose private repos the gh login $me cannot list: the scrub cannot cover them"; fi
+    if [[ "$type" == Organization ]]; then lst="$(gh_get_all "orgs/$o/repos?type=private")" || scrub_owner_refusal "$roster" "$o" "$me" "the org's private repo listing failed (named above)"
+    elif [[ "$(tr 'A-Z' 'a-z' <<< "$o")" == "$(tr 'A-Z' 'a-z' <<< "$me")" ]]; then lst="$(gh_get_all "user/repos?visibility=private&affiliation=owner")" || scrub_owner_refusal "$roster" "$o" "$me" "the login's private repo listing failed (named above)"
+    else scrub_owner_refusal "$roster" "$o" "$me" "$o is another user's account, whose private repos no other login can list"; fi
     lst="$(jq -r '.[] | select(.private == true) | .full_name' <<< "$lst")" || die "cannot read the private repo list of $o"
     slugs+="$lst"$'\n'; names+="$(sed 's#^[^/]*/##' <<< "$lst")"$'\n'
   done < <(roster_repo_owners "$roster")
@@ -2226,11 +2404,12 @@ row_close_comment() {
   esac
   [[ "$by" =~ $SEAT_ID_RE ]] || die "row_close_comment: --by '$by' is not a seat id"
   [[ "$next" != *$'\n'* ]] || die "--next is one line"
+  local ack; ack="$(ack_line "$by" seen "$next")" || exit 1
   issue_comment "$repo" "$n" "$verdict on the word, verbatim: \"$words\"
 
 Record: $rec. Closed by seat $by at $(utc_now).
 
-BEAST-ACK seat=$by at=$(utc_now) state=seen next=$next" >/dev/null
+$ack" >/dev/null
 }
 
 # row_mark_rejected <repo> <N>: the label `rejected` (defined in templates/labels.json) on a rejected row.

@@ -32,6 +32,8 @@ You are the blocked seat, filing BEFORE you ask for the word. Search the home re
 - **labels:** `decision`, one `seat:<login>/<LABEL>` per seat that waits on it, and `hands` when only the assignee can perform the act. A label the repo lacks cannot be created here: the create fails naming it, and a shell seat adds it (`decision.sh new --seat` creates seat labels).
 - **milestone:** required when the repo has an open milestone. The connector lists no milestones: take the number from the `milestone` field of any open row of that repo (`search_issues` `is:open repo:<home>` with `fields: ["milestone"]`); when no row carries one, ask a shell seat for `milestone.sh list` and stop.
 
+Then one `add_issue_comment` on the new row, your seen ack as filer, exactly `BEAST-ACK seat=<login>/<LABEL> at=<UTC now> state=seen next=filed; waits on the decider's word`: the filer is current on its own row, and the relay never sends the filing back to it.
+
 Refuse a title that is not a plain question, a section left empty, a phrase with `|`, and any repo the write guard refuses.
 
 ## 3. assign (a row to a seat)
@@ -50,7 +52,7 @@ Never assign by changing the assignee: the assignee is the decider whose word th
 
 ## 4. pr (request review)
 
-On the PR (the issues endpoints serve PRs): `issue_write` `{method: "update", labels: [<current labels>, "needs-review", "seat:<login>/<LABEL>"], assignees: [<the decider>]}`. A GitHub review request is refused while every seat posts as the PR's author, so none is made. If the connector cannot add labels or assignees, say so and hand it to a shell seat (`pr.sh request`).
+On the PR (the issues endpoints serve PRs): `issue_write` `{method: "update", labels: [<current labels>, "needs-review", "seat:<login>/<LABEL>"], assignees: [<the decider>]}`. A GitHub review request is refused while every seat posts as the PR's author, so none is made. Then one `add_issue_comment`, your seen ack as requester: `BEAST-ACK seat=<login>/<LABEL> at=<UTC now> state=seen next=review requested; waits on the decider's word`. If the connector cannot add labels or assignees, say so and hand it to a shell seat (`pr.sh request`).
 
 ## 5. answer
 

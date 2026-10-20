@@ -25,4 +25,4 @@ What a seat receives, one line per change to a decision labelled `seat:<login>/<
 
 The relay session decides nothing and sends nothing but the line; relay.sh resolves the addresses, and the messenger's only tool is SendMessage.
 
-An `UPDATED` whose last comment is the seat's own (every seat runs under one login today) is the seat's echo: ignore it. A seat whose ListAgents name changed (a renamed session) must re-record with `seats.sh record`; the log's `not reachable` names it.
+A seat is never sent its own act: every seat posts as one login, so the watcher reads who acted from the tags (the filer's ack, the closer, a `BEAST-ACK`, `BEAST-ASK`, `BEAST-MSG` or own-desk `BEAST-WITHDRAW` line) and logs an event whose every actor is the seat itself as `own act, not sent`. The decider's comments and answers, and every other seat's acts, are sent. A seat's own comment on a row goes through `ack.sh` (`--text` for a reply or evidence), so it is read as the seat's. A seat whose ListAgents name changed (a renamed session) must re-record with `seats.sh record`; the log's `not reachable` names it.

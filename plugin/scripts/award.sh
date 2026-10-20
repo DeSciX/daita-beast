@@ -3,8 +3,10 @@
 #   award.sh <owner/repo#N | url> --amount <int> --token <TOKEN> --to <login> --for "<what>" [--ref <url>]
 # Writes ONE comment of the fixed shape the ledger parses, and adds the label `awarded`:
 #   BEAST-AWARD amount=<n> token=<TOKEN> to=@<login> for="accepted logo (PR #12)" ref=<url>
-# Refuses unless the caller is an admin or maintainer of that repo (GitHub roles gate who may award), and
-# unless the checkout carries a filled .beast/award-policy.md for that repo whose token is the one awarded.
+# Refuses unless the checkout carries a filled .beast/award-policy.md for that repo whose token is the one awarded,
+# unless the policy's community repo lists the repo in its .beast/awarders.json (award_authority_check: the community
+# decides which repos may award its token), and unless the caller is an admin or maintainer of that repo (GitHub roles
+# gate who may award).
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 need gh jq
 
@@ -26,7 +28,8 @@ done
 to="${to#@}"
 [[ "$what" != *'"'* ]] || die "--for may not contain double quotes"
 read -r repo number < <(parse_issue_ref "$ref")
-award_policy_token "$repo" "$token" >/dev/null
+policy="$(award_policy "$repo" "$token")" || exit 1
+award_authority_check "$repo" "$token" "${policy#* }"
 
 me="$(user_login)"
 role="$(repo_permission "$repo" "$me")"

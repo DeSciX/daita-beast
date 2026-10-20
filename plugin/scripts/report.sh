@@ -45,7 +45,7 @@ if [[ "${1:-}" == milestone ]]; then
   # Awards on the milestone's items, from the ledger (the one parser of BEAST-AWARD), for every month the milestone spans.
   awards='[]'; awnote=""
   if [[ -f "$(repo_root)/.beast/award-policy.md" ]]; then
-    tok="$(award_policy_token "$repo")" || exit 1
+    tok="$(award_policy "$repo")" || exit 1; tok="${tok%% *}"
     from="$(jq -r '.created_at[:7]' <<< "$m")"; to="$(jq -r '(.closed_at // (now | todate))[:7]' <<< "$m")"
     tmp="$(mktemp -d)"; mo="$from"
     while :; do

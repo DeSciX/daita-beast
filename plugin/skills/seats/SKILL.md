@@ -12,7 +12,7 @@ A seated session starts with `/daita-beast:join` in the seat's home, which recor
    ```
    ${CLAUDE_PLUGIN_ROOT}/scripts/seats.sh record <LABEL> "<name> [<ref>]"
    ```
-3. Show the map: every seat of every open workstream among the roster's owners, with its account, address and when it was seen:
+3. Show the map: every seat of every open workstream among the workstream owners (the roster's owners plus its `workstream_owners`), with its account, address and when it was seen:
    ```
    ${CLAUDE_PLUGIN_ROOT}/scripts/seats.sh list
    ```

@@ -11,13 +11,13 @@ A decision is an issue in your home repo (the roster's `repo`, always private), 
 
 File one BEFORE you ask the decider for anything you wait on (it files in the roster's `repo`; `--decides <owner/repo>` names the repo it decides, as a `Decides:` link at the end of the Decision section):
 ```
-${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh new --assignee <decider login> [--decides <owner/repo>] \
+${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh new --assignee <decider login> --by <YOUR SEAT> [--seat <SEAT>]... [--decides <owner/repo>] \
   --title "<plain-language question>" \
   --decision "<the question>" --unblocks "<what ships>" --waits "<SEAT — what it does on the word>" \
   --recommendation "<answer and why>" --approve-with "<exact phrase>" \
   --record "<repo> <commit id> — <record path>" [--hands] [--project <owner>/<number>]
 ```
-Long text: write the six sections to a file and pass `--body-file <md>` instead of the section flags.
+Long text: write the six sections to a file and pass `--body-file <md>` instead of the section flags. `--by` is you, the filing seat: the row's first comment is your seen ack, so the filing never comes back to you as an event and never sits in your inbox; `--seat` labels every seat that waits on the word.
 
 Add `--seat <LABEL>` for every seat that waits on it (label `seat:<login>/<LABEL>`, visible in the GitHub UI and filterable).
 

@@ -30,6 +30,8 @@ When the roster has `license`, prepare and request first run the license gate (`
    - a roster `scrub` pattern: a string applies to every text file, or `{"pattern": "<regex>", "paths": ["<glob>", …]}` applies only to matching paths;
    - a path name: a secret-shaped file (`wallet.json`, `.env*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `*.p12`, `*.pfx`, `keystore*.json`, `credentials*.json`), or a path carrying a private repo's name or a roster pattern.
 
+   The private-repo class lists every private repo of every owner the roster names (its `repo`, `publishes_to`, `board` and seat repos). **Each organization publishes its own public repos from its own twin, with a login that can list that owner's private repos.** A listing that cannot be made (another person's account, or an org listing that fails) refuses the publish, naming the owner and the gh login: run it as a login that can list that owner's private repos, from that owner's own twin. `workstream_owners` (another owner's workstream this repo's seats join) adds no owner to this list.
+
    Under a directory of the roster's top-level `vendored` (byte-exact upstream copies), a file's content is not checked for private repos, private names, closed-row words or roster `scrub` patterns; local paths, `BEAST-` lines, records paths and path names are still checked there. Binary files (a NUL byte in the first 8000 bytes) are not read for content; each one is named on stderr, and its path name is still checked. Fix the content or the message, then prepare again. To check a branch or a body by hand, run `publish.sh scrub <slug> [--body-file <f>]`.
 
 3. Request. Write the PR description for outside readers:

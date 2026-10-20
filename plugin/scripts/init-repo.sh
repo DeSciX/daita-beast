@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # init-repo.sh — make a repo a Beast coordinating repo: labels, issue templates, roster skeleton.
-#   init-repo.sh <owner/repo> [--path <local checkout>] [--token <SYMBOL>]
+#   init-repo.sh <owner/repo> [--path <local checkout>] [--token <SYMBOL> --community <owner/repo>]
 # Idempotent: labels are created or updated in place; files are written only when absent. The award
-# policy is written only with --token (the community token), filled; no file ever carries a placeholder.
+# policy is written only with --token (the community token) and --community (the repo that holds the token's
+# community and its .beast/awarders.json), filled; no file ever carries a placeholder.
 # A public or public-intended repo (repo_public_why_at: the checkout's roster when it has one, then GitHub) gets the
 # public set only (labels_public: bounty, awarded; the bounty template; the award policy): every coordination label,
 # template and the roster are refused on stderr, and a coordination label it already carries is named and exits 1.
@@ -12,11 +13,13 @@ need gh jq
 here="$(dirname "${BASH_SOURCE[0]}")"; templates="$here/../templates"
 
 repo="${1:-}"; shift || true
-[[ -n "$repo" ]] || die "usage: init-repo.sh <owner/repo> [--path <dir>] [--token <SYMBOL>]"
-path=""; token=""
+[[ -n "$repo" ]] || die "usage: init-repo.sh <owner/repo> [--path <dir>] [--token <SYMBOL> --community <owner/repo>]"
+path=""; token=""; community=""
 while [[ $# -gt 0 ]]; do
-  case "$1" in --path) path="$2"; shift 2 ;; --token) token="$2"; shift 2 ;; *) die "unknown argument $1" ;; esac
+  case "$1" in --path) path="$2"; shift 2 ;; --token) token="$2"; shift 2 ;; --community) community="$2"; shift 2 ;; *) die "unknown argument $1" ;; esac
 done
+[[ -z "$token" && -z "$community" ]] || [[ -n "$token" && -n "$community" ]] || die "--token and --community go together: the award policy names the token and the community repo that holds its .beast/awarders.json"
+[[ -z "$community" || "$community" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "--community '$community' is not owner/repo"
 [[ -z "$path" ]] || checkout_require_root "$path"   # a plain checkout or a submodule's (its .git is a file): lib.sh is the one owner of the test
 
 why="$(repo_public_why_at "$repo" "${path:-.}")" || exit 1
@@ -41,7 +44,7 @@ if [[ -n "$path" ]]; then
   if [[ -n "$token" ]]; then
     [[ "$token" =~ ^[A-Z0-9]{2,12}$ ]] || die "--token must be a symbol such as ACME"
     mkdir -p "$path/.beast"
-    if [[ -f "$path/.beast/award-policy.md" ]]; then echo "award policy present"; else sed -e "s|<owner/repo>|$repo|" -e "s|<TOKEN>|$token|" "$templates/award-policy.md" > "$path/.beast/award-policy.md"; echo "award policy written at $path/.beast/award-policy.md (token $token)"; fi
+    if [[ -f "$path/.beast/award-policy.md" ]]; then echo "award policy present"; else sed -e "s|<owner/repo>|$repo|" -e "s|<TOKEN>|$token|g" -e "s|<COMMUNITY>|$community|" "$templates/award-policy.md" > "$path/.beast/award-policy.md"; echo "award policy written at $path/.beast/award-policy.md (token $token, community $community: it awards only once $community lists $repo in its .beast/awarders.json)"; fi
   fi
   if [[ -n "$why" ]]; then
     echo "refused: no roster and no seat labels in $repo ($why)" >&2

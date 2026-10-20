@@ -5,7 +5,7 @@
 #                                  workstream tracking issue (created, then edited in place; the one owner), the
 #                                  machine-local cache ~/.beast/sessions.json (keyed by the identity), and the
 #                                  rendered Account/Address/Seen cells of the issue's `## Seats` table
-#   list                           every seat of every open workstream among the roster's owners (ws_seats_all), with
+#   list                           every seat of every open workstream among the workstream owners (the roster's owners plus its "workstream_owners") (ws_seats_all), with
 #                                  its account, address and when it was seen (from the BEAST-ADDRESS comments)
 #   address <seat>                 the seat's address, read live: line 1 the address alone; then its account, machine,
 #                                  age, and which path applies: direct (SendMessage: same Claude account, same machine,

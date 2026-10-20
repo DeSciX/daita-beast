@@ -10,6 +10,9 @@
 #   BEAST-EVENT kind=DECIDED seat=<id> <title> <url> :: <first line of the close comment>   the word came
 #   BEAST-EVENT kind=UPDATED seat=<id> <title> <url>                             a new comment that is not bookkeeping (lib.sh BOOKKEEPING_FIRST_LINE_RE: acks, status, notes, addresses, the Cowork stamp, close and amend lines; label, body and comment edits are silent)
 #   BEAST-WATCH <message>   (stderr)                                            the watcher itself (API failure, retried)
+# A seat never hears its own act: an event whose every actor is the seat itself (event_actors, lib.sh: the filer's ack,
+# the closer, the tagged writer of each new comment; an untagged comment is the decider's) is logged on stderr as
+# "own act, not sent" and emits nothing. A comment that cannot be read leaves the event unfiltered (named on stderr).
 # One REST search per poll whatever the seat count, from a high-water mark: each seat keeps its snapshot
 # (~/.beast/watch/<login>/<LABEL>.json) and the start time of its last good poll (<LABEL>.mark, with the query
 # it ran), so a poll asks only for rows updated since the oldest seat's mark minus WATCH_OVERLAP_S, and a restart
@@ -84,7 +87,7 @@ poll() {
   for i in "${!seats[@]}"; do
     seat="${seats[$i]}"
     snap="$HOME/.beast/watch/$seat.json"; markf="$HOME/.beast/watch/$seat.mark"; mkdir -p "$(dirname "$snap")"
-    cur="$(jq --argjson l "${names[$i]}" '[.[] | select(.labels | any(.name as $n | $l | index($n)))] | map({key:.url, value:{title,state,updatedAt,comments}}) | from_entries' <<< "$all")"
+    cur="$(jq --argjson l "${names[$i]}" '[.[] | select(.labels | any(.name as $n | $l | index($n)))] | map({key:.url, value:{title,state,updatedAt,comments,desk:(.labels | any(.name == "desk"))}}) | from_entries' <<< "$all")"
     if [[ ! -f "$snap" ]]; then
       write_atomic "$snap" "$cur"
       write_atomic "$markf" "$query_id $started"
@@ -92,24 +95,30 @@ poll() {
       continue
     fi
     prev="$(cat "$snap")"
-    jq -r --argjson p "$prev" 'to_entries[] | . as $e |
-        if ($p[$e.key] == null) then (if $e.value.state == "open" then "NEW\t\($e.value.state)\t\($e.value.title)\t\($e.key)" else empty end)
-        elif ($p[$e.key].state == "open" and $e.value.state == "closed") then "DECIDED\t\($e.value.state)\t\($e.value.title)\t\($e.key)"
-        elif (($e.value.comments // 0) > ($p[$e.key].comments // 0)) then "UPDATED\t\($e.value.state)\t\($e.value.title)\t\($e.key)\t\(($e.value.comments // 0) - ($p[$e.key].comments // 0))"
-        else empty end' <<< "$cur" | while IFS=$'\t' read -r kind state title url delta; do
+    jq -r --argjson p "$prev" 'to_entries[] | . as $e | (($e.value.comments // 0) - ($p[$e.key].comments // 0)) as $d |
+        if ($p[$e.key] == null) then (if $e.value.state == "open" then "NEW\t\($e.value.state)\t\($e.value.title)\t\($e.key)\t0\t\($e.value.desk // false)" else empty end)
+        elif ($p[$e.key].state == "open" and $e.value.state == "closed") then "DECIDED\t\($e.value.state)\t\($e.value.title)\t\($e.key)\t\([$d, 0] | max)\t\($e.value.desk // false)"
+        elif $d > 0 then "UPDATED\t\($e.value.state)\t\($e.value.title)\t\($e.key)\t\($d)\t\($e.value.desk // false)"
+        else empty end' <<< "$cur" | while IFS=$'\t' read -r kind state title url delta desk; do
       [[ -n "$kind" ]] || continue
+      read -r repo number < <(parse_issue_ref "$url")
+      # Who acted (event_actors, lib.sh): an UPDATED with no news is no event, and an event whose every actor is this
+      # seat is its own act, never sent back to it. Unreadable comments leave the event unfiltered, named here.
+      if cs="$(issue_comments "$repo" "$number")"; then
+        actors="$(event_actors "$kind" "${delta:-0}" "$cs" "$([[ "$desk" == true ]] && echo "$seat")")" \
+          || { echo "BEAST-WATCH seat=$seat cannot read the actors of $kind $url (named above); sent unfiltered" >&2; actors="-"; }
+        [[ -n "$actors" ]] || continue
+        if ! grep -qvxF -- "$seat" <<< "$actors"; then echo "BEAST-WATCH seat=$seat own act, not sent: $kind $url" >&2; continue; fi
+      else
+        echo "BEAST-WATCH seat=$seat cannot read the comments of $url at $(utc_now); $kind sent unfiltered" >&2; cs=""
+      fi
       case "$kind" in
         DECIDED)
-          read -r repo number < <(parse_issue_ref "$url")
-          word="$(issue_comments "$repo" "$number" 2>/dev/null | jq -r '.[-1].body | split("\n")[0]' 2>/dev/null || echo "(close comment unreadable)")"
+          if [[ -z "$cs" ]]; then word="(close comment unreadable)"
+          else word="$(jq -r 'if length == 0 then "(no comment on the row)" else (.[-1].body // "" | split("\n")[0]) end' <<< "$cs")" || word="(close comment unreadable)"; fi
           echo "BEAST-EVENT kind=DECIDED seat=$seat $title $url :: $word" ;;
         NEW) echo "BEAST-EVENT kind=NEW seat=$seat state=$state $title $url" ;;
-        UPDATED)
-          # Only news is an event: the new comments, minus bookkeeping (BOOKKEEPING_FIRST_LINE_RE, lib.sh: acks, status,
-          # notes, addresses, the Cowork stamp, close comments, which DECIDED already carries, and amend lines).
-          read -r repo number < <(parse_issue_ref "$url")
-          news="$(issue_comments "$repo" "$number" 2>/dev/null | jq --argjson d "${delta:-1}" --arg bk "$BOOKKEEPING_FIRST_LINE_RE" '[.[-$d:][] | ((.body // "") | split("\n")[0]) | select(test($bk) | not)] | length' 2>/dev/null || echo 1)"
-          if [[ "$news" -gt 0 ]]; then echo "BEAST-EVENT kind=UPDATED seat=$seat $title $url"; fi ;;
+        UPDATED) echo "BEAST-EVENT kind=UPDATED seat=$seat $title $url" ;;
       esac
     done
     # Never forget an issue the search did not return this time (index lag, window): keep the old
