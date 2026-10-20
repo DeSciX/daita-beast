@@ -38,7 +38,7 @@ A PR is answered with the same three forms, as a comment on the PR (`add_issue_c
 
 The four answers and who may give them are the protocol's (`respond` skill): only the assignee's comment is an answer; a bare `approve` from the assignee on the issue counts like the phrase, so the page may post the phrase without loss. The comment is the record (its URL). The page never closes an issue, never labels, never edits a body, never acks: an ack is a seat's own `BEAST-ACK` comment, which the page only reads; the hearing seat acts on the relay's `UPDATED` (see `respond`).
 
-Testing the write path: file a throwaway decision with `decision.sh new --repo <your private repo> --assignee <you> --seat <SEAT> --title "FIXTURE board write <UTC>" …` (placeholder sections, `--record fixture`), answer it from the page, confirm the comment on GitHub, then close it with `decision.sh close … --by <you>`. The relay will send that seat the event; that is expected and harmless.
+Testing the write path: file a throwaway decision with `decision.sh new --repo <your private repo> --assignee <you> --by <SEAT> --seat <SEAT> --title "FIXTURE board write <UTC>" …` (placeholder sections, `--record fixture`), answer it from the page, confirm the comment on GitHub, then close it with `decision.sh close … --by <SEAT>`. The relay sends that seat your answer (an `UPDATED`), never its own filing or close; that is expected and harmless.
 
 Multi-select: every answerable card (decision or PR) has a checkbox; a bar above the list offers "Approve selected", shows each comment it will post (`repo#number → phrase`), then posts one comment per issue, in order.
 

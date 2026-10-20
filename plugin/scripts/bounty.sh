@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # bounty.sh — open a bounty: an issue labelled `bounty` whose ## Bounty section states the floor.
 #   bounty.sh --repo <owner/repo> --title "<what>" --amount <int> --token <TOKEN> --what "<the work and what accepted means>" [--project <owner>/<number>]
-# Requires the checkout's filled .beast/award-policy.md for that repo (the bounty text cites it).
+# Requires the checkout's filled .beast/award-policy.md for that repo (the bounty text cites it), and the policy's community repo
+# listing the repo in its .beast/awarders.json (award_authority_check).
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 need gh jq
 
@@ -20,7 +21,8 @@ done
 [[ -n "$repo" && -n "$title" && -n "$amount" && -n "$token" && -n "$what" ]] || die "usage: bounty.sh --repo r --title t --amount N --token TOKEN --what \"…\""
 [[ "$amount" =~ ^[0-9]+$ ]] || die "amount must be a whole number of tokens"
 [[ "$token" =~ ^[A-Z0-9]{2,12}$ ]] || die "token must be a symbol such as ACME"
-award_policy_token "$repo" "$token" >/dev/null
+policy="$(award_policy "$repo" "$token")" || exit 1
+award_authority_check "$repo" "$token" "${policy#* }"   # a bounty promises an award: only a repo that may award the token opens one
 me="$(user_login)"
 label_ensure_template "$repo" bounty
 [[ "$title" == Bounty:* ]] || title="Bounty: $title"

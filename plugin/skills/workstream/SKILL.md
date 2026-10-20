@@ -20,6 +20,8 @@ At least one `--milestone "<title>|<YYYY-MM-DD>|<what it delivers>"` is required
 
 Then: file decisions with `/daita-beast:decision` (adding `--project <owner>/<number>`), add the issues and PRs the work produces with `source ${CLAUDE_PLUGIN_ROOT}/scripts/lib.sh && project_cmd item-add <number> --owner <owner> --url <issue or PR url>`, and report with `/daita-beast:status`. GitHub Projects exist only behind GraphQL: on a surface that blocks it (Claude Code cloud sessions) `workstream.sh` and `project_cmd` die naming that, and the Project step is done from a surface that has it. A dependency on another repo is an issue filed there and added to this Project. Close the workstream with a final `done` status carrying the acceptance evidence.
 
+**Another owner's workstream.** A workstream is found among the owners the roster names (`repo`, `board`, `seats[].repo`) plus the roster's top-level `"workstream_owners": ["<owner>", …]`; an owner not declared is never searched, and a lookup that finds nothing names that field. So the seats of `acme/app-dev` join workstream `scenes` mastered at `threejs/three-dev` once acme's roster declares `"workstream_owners": ["threejs"]`; `seat-add` and the seats' joins then write the `## Seats` table, addresses and status on `threejs/three-dev`. Its master must be private and not public-intended: `coord_write_guard` refuses every write to a public master, whatever its owner. The seat's roster row stays in its own repo.
+
 A seat's skill opens its workstream when absent: `/daita-beast:seat <LABEL>` asks for these fields and runs `workstream.sh new` itself.
 
 Without a shell (Cowork, claude.ai), use the `connector` skill: its recipe of the same name, or its list of the acts it cannot do.

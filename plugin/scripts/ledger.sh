@@ -9,7 +9,9 @@
 # lacks push access) stops the run, naming the repo, the login and the answer; no award is dropped for it.
 # A ledger bound for a public repo lists only public repos: when --out is in a checkout of a public or
 # public-intended repo (repo_public_why_at), a private repo in --repos is refused before anything is read, since its
-# item urls, award reasons and logins would publish. An --out in no checkout is scratch (report.sh reads it there).
+# item urls, award reasons and logins would publish; and that public repo is the token's community repo, so every repo in
+# --repos must be listed in its .beast/awarders.json for the token (award_authority_check), else the run is refused before
+# anything is read. An --out in no checkout is scratch (report.sh reads it there).
 # Outputs <out>/<month>.jsonl (one row per award) and <out>/<month>.md (totals per login).
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 need gh jq
@@ -37,6 +39,7 @@ if root="$(checkout_root "$out" 2>/dev/null)"; then
       [[ -n "$rwhy" ]] || priv="$priv $r"
     done
     [[ -z "$priv" ]] || die "refused: --out $out is in a checkout of $dest, which is $dwhy, and --repos names private repos:$priv. Their item urls, award reasons and logins would publish: a public ledger lists only public repos' awards"
+    for r in ${repos//,/ }; do award_authority_check "$r" "$community" "$dest"; done
   fi
 fi
 rows="$(mktemp)"; dropped=0

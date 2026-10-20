@@ -55,6 +55,10 @@ case "$cmd" in
     issue_add_labels "$repo" "$number" needs-review "seat:$seat"
     issue_add_assignees "$repo" "$number" "$assignee"
     [[ -z "$msn" ]] || milestone_set "$repo" "$number" "$msn"
+    # The requester's seen ack (ack_line, lib.sh): the seat is current on the row it put on the board, and the relay
+    # never sends the request back to it (event_actors, lib.sh). A rerun posts it again; the newest ack stands.
+    line="$(ack_line "$seat" seen "review requested; waits on the decider's word")" || exit 1
+    issue_comment "$repo" "$number" "$line" >/dev/null || die "$repo#$number is requested but the requester's ack was NOT posted (named above): rerun pr.sh request"
     echo "requested: $(jq -r .html_url <<< "$info") labelled needs-review + seat:$seat, assigned $assignee; approves with \"$(row_phrase "$repo#$number" "$info")\""
     ;;
   close)

@@ -2,7 +2,7 @@
 # resume.sh — everything a seat needs after a compaction or reload, from GitHub and the roster.
 #   resume.sh <LABEL | login/LABEL>
 # Prints: the seat map of every open workstream with the seats' addresses (seats.sh list); the seat's last handoff (its newest
-# BEAST-STATUS seat=<id> comment on any workstream tracking issue of the roster's owners); decisions for the
+# BEAST-STATUS seat=<id> comment on any workstream tracking issue of the workstream owners (workstream_user_terms)); decisions for the
 # seat closed since its last inbox sweep; open decisions that wait on it. A seat's working state
 # lives in those comments, never in a session's context, so this is the whole resume. Then the seat's
 # BEAST-NOTES seat=<id> comment (notes.sh show).
@@ -15,7 +15,7 @@ seat="${1:-}"; shift || true
 seat="$(seat_rostered "$seat")" || exit 1
 # The seat as a BEAST-STATUS header writes it: its id, or its bare label while that resolves to it.
 names="$(seat_comment_tokens "$seat" | jq -R . | jq -sc .)" || exit 1
-scope="$(roster_user_terms)"
+scope="$(workstream_user_terms)" || exit 1
 
 echo "== seats (verify an address by a reply before relying on it)"
 "$here/seats.sh" list

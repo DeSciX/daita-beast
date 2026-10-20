@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # decision.sh — file, close, or sweep pending decisions.
-#   decision.sh new [--repo <owner/repo>] [--decides <owner/repo>] --title "<plain question>" --assignee <login>
+#   decision.sh new [--repo <owner/repo>] [--decides <owner/repo>] --title "<plain question>" --assignee <login> --by <LABEL | login/LABEL>
 #       --decision "<text>" --unblocks "<text>" --waits "<text>" --recommendation "<text>"
 #       --approve-with "<exact phrase>" --record "<repo commit — path>"
 #       [--seat <LABEL | login/LABEL>]... [--hands] [--project <owner>/<number>]...
 #       [--milestone "<title>"] [--waits-on <seat | owner/repo#N>]...
-#     or: decision.sh new [--repo ...] [--decides ...] --title ... --assignee ... --body-file <md> [--seat ...] [--hands] [--project ...]
+#     or: decision.sh new [--repo ...] [--decides ...] --title ... --assignee ... --by ... --body-file <md> [--seat ...] [--hands] [--project ...]
+#   --by names the filing seat: its seen ack (ack_line, lib.sh) is the row's first comment, so the filer is current on
+#   the row it filed and the relay never sends the filing back to it (event_actors, lib.sh).
 #   The row is filed in --repo, by default the roster's "repo" (the home of the seats working from this checkout).
 #   --decides names the repo the row decides, when it is another: the line "Decides: https://github.com/<owner/repo>"
 #   is appended to the body's ## Decision section (the six sections stay the six).
@@ -46,7 +48,7 @@ here="$(dirname "${BASH_SOURCE[0]}")"
 cmd="${1:-}"; shift || true
 case "$cmd" in
   new)
-    repo=""; decides=""; title=""; assignee=""; hands=0; body_file=""; projects=(); seats=(); ms=""; waits=()
+    repo=""; decides=""; title=""; assignee=""; by=""; hands=0; body_file=""; projects=(); seats=(); ms=""; waits=()
     d=""; u=""; w=""; r=""; a=""; rec=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
@@ -54,6 +56,7 @@ case "$cmd" in
         --decides) decides="$2"; shift 2 ;;
         --title) title="$2"; shift 2 ;;
         --assignee) assignee="$2"; shift 2 ;;
+        --by) by="$2"; shift 2 ;;
         --hands) hands=1; shift ;;
         --project) projects+=("$2"); shift 2 ;;
         --seat) seats+=("$2"); shift 2 ;;
@@ -69,10 +72,11 @@ case "$cmd" in
         *) die "unknown argument $1" ;;
       esac
     done
-    [[ -n "$title" && -n "$assignee" ]] || die "new needs --title and --assignee"
+    [[ -n "$title" && -n "$assignee" && -n "$by" ]] || die "new needs --title, --assignee and --by <the filing seat>"
+    by="$(seat_id "$by")" || exit 1
     [[ -n "$repo" ]] || repo="$(roster_repo)" || exit 1
     [[ -z "$decides" || "$decides" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "--decides '$decides' is not owner/repo"
-    coord_write_guard "$repo"
+    coord_write_guard "$repo" "$by"
     [[ -z "$ms" ]] || milestone_title_check "$ms"
     msn="$(milestone_require "$repo" "$ms")" || exit 1
     ids=()   # every --seat resolved to its id before anything is written
@@ -143,7 +147,9 @@ $body"
       [.[] | select(.pull_request == null and .title == $t and .user.login == $me
                     and ([.labels[].name | select(startswith("seat:"))] | sort) == $s)] | sort_by(.number) | .[0].html_url // empty')" \
       || die "cannot list the open decision issues of $repo to check for this row"
+    reused=0
     if [[ -n "$url" ]]; then
+      reused=1
       echo "reusing $url (an open decision row with this title and these seats, filed by $(gh_login))" >&2
       [[ -z "$msn" ]] || milestone_set "$repo" "${url##*/}" "$msn"
     else
@@ -151,6 +157,14 @@ $body"
       issues_list_shows "$repo" "${url##*/}" -f labels=decision -f state=open   # so a rerun finds it (the list lags a create)
     fi
     rm -f "$tmp"
+    # The filer's seen ack, the row's first comment (a rerun that reuses the row posts it only when it is missing).
+    acked=0
+    if [[ $reused -eq 1 ]]; then rd="$(row_read "$repo" "${url##*/}")" || exit 1; seat_acks "$rd" | cut -f1 | grep -qxF -- "$by" && acked=1; fi
+    if [[ $acked -eq 0 ]]; then
+      line="$(ack_line "$by" seen "filed; waits on the decider's word")" || exit 1
+      issue_comment "$repo" "${url##*/}" "$line" >/dev/null \
+        || die "$url is filed but the filer's ack was NOT posted (named above): rerun the same decision.sh new, which reuses the row and posts it"
+    fi
     echo "$url"
     for p in "${projects[@]:-}"; do
       [[ -n "$p" ]] || continue
@@ -355,7 +369,7 @@ $summary
     done
     [[ -n "$words" && -n "$rec" && -n "$by" ]] || die "record needs --words, --record and --by besides the new row's fields"
     seat_id "$by" >/dev/null || exit 1   # a bad --by fails before the row is filed
-    url="$("$0" new "${newargs[@]}" ${seatargs[@]+"${seatargs[@]}"} | tail -1)"
+    url="$("$0" new "${newargs[@]}" --by "$by" ${seatargs[@]+"${seatargs[@]}"} | tail -1)"
     [[ "$url" == https://github.com/* ]] || die "record: the row was not filed: $url"
     "$0" close "$url" --words "$words" --record "$rec" --by "$by" $([[ $rejected -eq 1 ]] && echo --rejected)
     ;;

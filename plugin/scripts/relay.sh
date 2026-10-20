@@ -2,7 +2,9 @@
 # relay.sh — the scheduler's entry point: one poll over the roster, and when a decision changed for a
 # seat, one disposable Claude session (haiku by default) that sends each seat its event line.
 #   relay.sh --repo <coordinating checkout> [--model haiku|sonnet] [--permission-mode <mode>] [--dry-run]
-# Nothing runs when nothing changed. Every run appends to ~/.beast/relay.log. relay.sh resolves each
+# Nothing runs when nothing changed. A seat is never sent its own act: watch.sh drops an event whose every actor is
+# that seat (event_actors, lib.sh: the filer's ack, the closer, the tagged writer of each new comment) and logs it here
+# as "own act, not sent"; the decider's comments and other seats' acts are sent. Every run appends to ~/.beast/relay.log. relay.sh resolves each
 # seat's recorded address itself, by the seat id the event line carries (seat=<login>/<LABEL>); the messenger session decides nothing and has one tool, SendMessage:
 # it sends each seat its line verbatim and reports queued / no-address per line. A receiver HOLDS a
 # message from a sender in another permission mode (measured 2026-10-12: 23 lines "sent" to a
