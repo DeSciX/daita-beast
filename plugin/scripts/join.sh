@@ -10,8 +10,9 @@
 # 2 address: recorded when --address is given (seats.sh record: the BEAST-ADDRESS comment on the tracking issue).
 # 3 CLAUDE.md: the block between <!-- beast:begin --> and <!-- beast:end --> in the home's CLAUDE.md is regenerated
 #   from templates/claude-block.md for this seat (its identity, its role, its workstream's seat map).
-# 4 memory: lists the auto-memory files of the launch folder and of the home (when another) that duplicate GitHub
-#   state (never edits them). 5 resume: resume.sh <id> (handoff, notes, inbox).
+# 4 memory: the auto-memory folder this session loads (session_memory_dir, lib.sh), triaged by memory_triage: the
+#   files and MEMORY.md lines that restate seat state are listed to act on, another seat's are named as theirs,
+#   lessons and pointers are kept (never edits them). 5 resume: resume.sh <id> (handoff, notes, inbox).
 # 6 the home's CLAUDE.md path, to read now: it does not load by itself in a session started elsewhere.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 need gh jq git
@@ -103,18 +104,23 @@ if [[ ! -f "$md" ]]; then
 fi
 claude_block_write "$md" "$identity"
 
-echo "== 4. memory (auto-memory of the launch folder, shared by every seat started there, and of the home; never edited here)"
-memdirs=("$(automemory_dir "$launch")")
-[[ "$launch_p" == "$home_p" ]] || memdirs+=("$(automemory_dir "$home")")
-for memdir in "${memdirs[@]}"; do
-  if [[ -d "$memdir" ]]; then
-    hits="$(grep -l -i -E 'BEAST-STATUS|seat state|seat_state|resume\.sh|seats\.sh|handoff|the board|board as|decision\.sh' "$memdir"/*.md 2>/dev/null | grep -v '/MEMORY.md$' || true)"
-    if [[ -n "$hits" ]]; then
-      echo "$memdir: these files restate seat state or Beast rules; working state lives in the handoff on $tracking, durable seat notes in notes.sh $seat, and the rules in the CLAUDE.md block. Delete each, or cut it to a short pointer or a lesson true for every seat started there, and fix MEMORY.md's index (the seat-clerk agent drafts this triage):"
-      printf '  %s\n' $hits
-    else echo "$memdir: nothing duplicates GitHub state"; fi
-  else echo "$memdir: no auto-memory directory"; fi
-done
+echo "== 4. memory: the auto-memory this session loads, shared by every seat started in that folder (never edited here)"
+m="$(session_memory_dir "$launch")" || exit 1
+memdir="${m%%$'\t'*}"; echo "$memdir (${m#*$'\t'})"
+if [[ ! -d "$memdir" ]]; then echo "no auto-memory directory there yet: nothing to triage"
+else
+  ids="$(seat_homes_on_machine "$launch" | cut -f1 | sort -u)" || exit 1
+  tri="$(memory_triage "$memdir" "$seat" $ids)" || exit 1
+  echo "Lessons (frontmatter type feedback, user or reference) are never flagged. A short pointer to a seat's tracking issue, as a file or as one line of MEMORY.md, is allowed for any seat, this one or another."
+  st="$(awk -F'\t' '$1 == "state" {print "  " $2 " (" $3 ")"}' <<< "$tri")"
+  if [[ -n "$st" ]]; then
+    echo "These restate seat state; working state lives in the handoff on $tracking, durable seat facts in notes.sh $seat. Delete each, or cut it to a pointer or a lesson true for every seat started there, and fix its MEMORY.md line (the seat-clerk agent drafts this triage):"
+    printf '%s\n' "$st"
+  else echo "Nothing restates seat state."; fi
+  ow="$(awk -F'\t' '$1 == "owned" {print "  " $2 ": owned by " $3 "; leave it"}' <<< "$tri")"
+  [[ -z "$ow" ]] || { echo "Another seat's (never this seat's to delete):"; printf '%s\n' "$ow"; }
+  echo "Kept: $(awk -F'\t' '{n[$1]++} END {printf "%d lesson(s), %d pointer(s), %d other", n["lesson"], n["pointer"], n["clean"]}' <<< "$tri")."
+fi
 
 echo "== 5. resume"
 "$here/resume.sh" "$seat"

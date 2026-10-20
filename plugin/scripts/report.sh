@@ -178,8 +178,10 @@ seat_ids="$(jq -r --argjson closed "$closed" --arg re "$SEAT_TOKEN_RE" '
 awards="[]"
 if [[ -n "$community" && -n "$month" ]]; then
   tmp="$(mktemp -d)"
-  "$here/ledger.sh" --community "$community" --repos "$repos" --month "$month" --out "$tmp" >/dev/null 2>"$tmp/err" || true
-  awards="$(jq -s '.' "$tmp/$month.jsonl" 2>/dev/null || echo '[]')"
+  rc=0; "$here/ledger.sh" --community "$community" --repos "$repos" --month "$month" --out "$tmp" >/dev/null 2>"$tmp/err" || rc=$?
+  # 2 is a ledger with named drops (counted below); any other failure is a ledger that was not read.
+  [[ $rc -eq 0 || $rc -eq 2 ]] || { cat "$tmp/err" >&2; rm -rf "$tmp"; die "ledger.sh $month exited $rc (named above): the awards could not be read"; }
+  awards="$(jq -s '.' "$tmp/$month.jsonl")" || { rm -rf "$tmp"; die "cannot read the ledger rows of $month"; }
   awards_dropped="$(grep -c '^DROPPED' "$tmp/err" || true)"
   rm -rf "$tmp"
 else awards_dropped=0; fi

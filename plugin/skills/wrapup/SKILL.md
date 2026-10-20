@@ -58,6 +58,6 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/wrapup.sh run "<milestone>" --words "<verbatim>" -
      - the milestone closed, with its open items carried;
      - one comment on your tracking issue: `milestone <M> closed: <release link>, <n> rows folded`;
      - the row closed on the words, with the board republished;
-     - the DeSciX KB manifests that cover a changed file, with the `npx -y -p @descix/cli@3.0.0 descix kb corpus sync …` command for you to run after you pull and push.
+     - the DeSciX KB manifests that cover a changed file, with the `descix kb corpus sync …` command, at the plugin's CLI pin, for you to run after you pull and push.
 
 A rerun after an interruption finishes the work: an item already deleted is logged as gone, and the release is reused when its tag, title and notes match.

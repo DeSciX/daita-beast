@@ -1,20 +1,25 @@
 #!/usr/bin/env bash
 # seat.sh — a seat's roster row and its home: the directory the seat works in once seated (join.sh, from any
 # directory), so its CLAUDE.md and its working tree never mix with another seat's.
-#   seat.sh new <LABEL> --repo-path <checkout> --agent <name> --workstream <slug> [--kind checkout|worktree|wrapper | --kind subdir --dir <dir>]
+#   seat.sh new <LABEL> --repo-path <checkout> --agent <name> --workstream <slug> [--kind checkout|worktree|wrapper | --kind subdir --dir <dir> [--stub]]
 #       from the repo's main checkout. Refuses a public or public-intended repo before any write. Adds the roster row
-#       {github: gh login, label, repo, lane (CLAUDE.md LANE:), agent (the role: <repo>/.claude/agents/<name>.md, or
+#       {github: gh login, label, repo, lane (the repo CLAUDE.md's `LANE: <name>` line; no key when it has none), agent (the role: <repo>/.claude/agents/<name>.md, or
 #       daita-beast:seat), workstream (the slug whose tracking issue carries the labels workstream and ws:<slug>),
 #       home: {kind, branch} | {kind: subdir, dir}}, creates the home, then adds the seat to the workstream issue's
-#       `## Seats` table (workstream.sh seat-add) and renders the master's CLAUDE.md block (workstream.sh render): one
-#       act writes the row, the home, the table and the master block. Kind, when not given:
+#       `## Seats` table (workstream.sh seat-add, which renders the master's CLAUDE.md block and every home block of
+#       the workstream on this machine) and opens its desk: one act writes the row, the home, the table, the blocks
+#       and the desk. Kind, when not given:
 #       checkout when no other seat of this login in this repo is homed in the checkout; else worktree; else (the
 #       repo has submodules or nested git repos, which a worktree would not carry) wrapper. subdir is only explicit:
-#       --dir is a directory inside the checkout (relative to it) that has its own CLAUDE.md and is not a repo root.
+#       --dir is a directory inside the checkout (relative to it) that has its own CLAUDE.md and is not a repo root;
+#       --stub writes a missing one as the single import line of the nearest CLAUDE.md above it (subdir_stub), and
+#       without --stub the refusal prints that line.
 #       A roster row written before homes (no "home") of this repo is given its home by the same command.
 #   seat.sh where <LABEL | id>     the home path and kind on this machine, from any directory (seat_locate)
-#   seat.sh retire <LABEL | id>    removes the seat from its workstream's `## Seats` table and sets "retired": "<date>"
-#                                  on the roster row; the home, the branch and the comments are kept
+#   seat.sh retire <LABEL | id>    removes the seat from its workstream's `## Seats` table (workstream.sh seat-remove,
+#                                  which re-renders the master block and every home block of the workstream on this
+#                                  machine) and sets "retired": "<date>" on the roster row; the home, the branch and
+#                                  the comments are kept
 # The home path is derived by seat_home_path (lib.sh), never stored in the roster.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 need jq git
@@ -36,13 +41,25 @@ gitignore_seat_json() {
   echo "added $e to $gi (commit it)"
 }
 
+# subdir_stub <checkout> <dir>: the one line of a subdir home's stub CLAUDE.md: an import of the nearest CLAUDE.md
+# above <dir> inside the checkout (the checkout's own at the latest), by its relative path, e.g. @../CLAUDE.md; with
+# no CLAUDE.md above it, a heading naming the directory (the file then carries only the seat's Beast block).
+subdir_stub() {
+  local root="$1" p="$2" up=""
+  while [[ "$p" != . ]]; do
+    p="$(dirname "$p")"; up="../$up"
+    if [[ -f "$root/$p/CLAUDE.md" ]]; then echo "@${up}CLAUDE.md"; return 0; fi
+  done
+  echo "# $2"
+}
+
 cmd="${1:-}"; shift || true
 case "$cmd" in
   new)
     need gh
     label="${1:-}"; shift || true
-    [[ "$label" =~ $SEAT_LABEL_RE ]] || die "usage: seat.sh new <LABEL> --repo-path <checkout> --agent <name> --workstream <slug> [--kind checkout|worktree|wrapper | --kind subdir --dir <dir>] (LABEL: upper-case letters, digits, _ or -)"
-    agent=""; ws=""; kind=""; target=""; dir=""
+    [[ "$label" =~ $SEAT_LABEL_RE ]] || die "usage: seat.sh new <LABEL> --repo-path <checkout> --agent <name> --workstream <slug> [--kind checkout|worktree|wrapper | --kind subdir --dir <dir> [--stub]] (LABEL: upper-case letters, digits, _ or -)"
+    agent=""; ws=""; kind=""; target=""; dir=""; stub=0
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --repo-path) target="$2"; shift 2 ;;
@@ -51,12 +68,14 @@ case "$cmd" in
         --role|--tracking) die "$1 is gone: the role is an agent file (--agent <name>) and the tracking issue is found by its labels (--workstream <slug>)" ;;
         --kind) kind="$2"; shift 2 ;;
         --dir) dir="$2"; shift 2 ;;
+        --stub) stub=1; shift ;;
         *) die "unknown argument $1" ;;
       esac
     done
     case "$kind" in ""|checkout|worktree|wrapper|subdir) ;; *) die "--kind must be checkout, worktree, wrapper or subdir, not '$kind'" ;; esac
     [[ "$kind" != subdir || -n "$dir" ]] || die "--kind subdir needs --dir <a directory inside the checkout with its own CLAUDE.md>: a subdir home is always named explicitly"
     [[ -z "$dir" || "$kind" == subdir ]] || die "--dir is only for --kind subdir (got --kind ${kind:-none}): a subdir home is never picked automatically"
+    [[ $stub -eq 0 || "$kind" == subdir ]] || die "--stub is only for --kind subdir --dir <dir>: it writes the subdir's CLAUDE.md"
     # The target repo is a parameter, never the shell's cwd by accident: a seat is scoped deliberately.
     [[ -n "$target" ]] || die "seat.sh new needs --repo-path <the main checkout of the repo this seat works in>; scope it first (the seat skill's scoping step)"
     checkout_require_root "$target"
@@ -100,8 +119,8 @@ case "$cmd" in
       seat_agent_check "$remote" "$agent" || exit 1
       tracking="$(workstream_issue "$ws")" || exit 1
     fi
-    lane="$(sed -n 's/^LANE: *\([a-z]*\).*/\1/p' "$root/CLAUDE.md" 2>/dev/null | head -1)"
-    [[ -n "$lane" ]] || die "cannot read the lane: $root/CLAUDE.md has no 'LANE: <platform|rnd|app>' line"
+    lane="$(checkout_lane "$root")"
+    [[ -n "$lane" ]] || echo "lane: none ($root/CLAUDE.md has no 'LANE: <name>' line; the row records no lane)"
 
     # A subdir home: a directory of this checkout (never another repo's root) with its own CLAUDE.md, homing no other seat.
     if [[ "$kind" == subdir ]]; then
@@ -113,7 +132,7 @@ case "$cmd" in
       [[ "$(checkout_root "$dirp")" != "$dirp" ]] || die "--dir $dir is a repo root ($dirp): a subdir home is a directory of this checkout, never another repo's checkout"
       top="$(git -C "$dirp" rev-parse --show-toplevel 2>/dev/null)" && top="$(cd "$top" && pwd -P)" || die "--dir $dir is not inside a git working tree"
       [[ "$top" == "$rootp" ]] || die "--dir $dir is inside the repo at $top, not in the checkout $rootp: a subdir home is a directory of this checkout"
-      [[ -f "$dirp/CLAUDE.md" ]] || die "--dir $dir has no CLAUDE.md: a subdir home is a directory with its own CLAUDE.md (the seat's Beast block is written there)"
+      [[ -f "$dirp/CLAUDE.md" || $stub -eq 1 ]] || die "--dir $dir has no CLAUDE.md: a subdir home is a directory with its own CLAUDE.md (the seat's Beast block is written there). Rerun with --stub to write $dirp/CLAUDE.md as the one line \`$(subdir_stub "$rootp" "$dir")\` (subdir_stub: an import of the nearest CLAUDE.md above it), or write that line yourself"
       [[ $materialize -eq 0 || "$dir" == "$rd" ]] || die "seat $id is recorded with home dir $rd, not $dir: change the roster row first if the seat is moving"
       at_dir="$(jq -r --arg r "$remote" --arg g "$me" --arg l "$label" --arg d "$dir" \
         '[.seats[] | select(.repo == $r and .github == $g and .label != $l and .home.kind? == "subdir" and .home.dir == $d) | "\(.github)/\(.label)"] | join(" ")' "$roster")"
@@ -160,8 +179,8 @@ case "$cmd" in
       echo "roster: home recorded on $id (agent $agent, workstream $ws)"
     else
       jq --arg l "$label" --arg repo "$remote" --arg lane "$lane" --arg g "$me" --arg a "$agent" --arg w "$ws" --argjson h "$homej" \
-        '.seats += [{label:$l, github:$g, repo:$repo, lane:$lane, agent:$a, workstream:$w, home:$h}]' "$roster" > "$roster.tmp" && mv "$roster.tmp" "$roster"
-      echo "roster: added $id (repo $remote, lane $lane, agent $agent, workstream $ws, tracking $tracking, home $homej)"
+        '.seats += [{label:$l, github:$g, repo:$repo} + (if $lane == "" then {} else {lane:$lane} end) + {agent:$a, workstream:$w, home:$h}]' "$roster" > "$roster.tmp" && mv "$roster.tmp" "$roster"
+      echo "roster: added $id (repo $remote, lane ${lane:-none}, agent $agent, workstream $ws, tracking $tracking, home $homej)"
     fi
     fi
     roster_check_unique "$roster"
@@ -169,7 +188,11 @@ case "$cmd" in
 
     # The home.
     case "$kind" in
-      checkout|subdir) : ;;
+      checkout) : ;;
+      subdir)
+        if [[ -f "$home/CLAUDE.md" ]]; then [[ $stub -eq 0 ]] || echo "--stub: $home/CLAUDE.md exists; nothing written"
+        else subdir_stub "$root" "$dir" > "$home/CLAUDE.md"; echo "stub $home/CLAUDE.md: $(cat "$home/CLAUDE.md") (commit it)"; fi
+        ;;
       worktree)
         if [[ -e "$home" ]]; then echo "worktree present: $home"
         elif git -C "$root" show-ref --verify --quiet "refs/heads/$branch"; then git -C "$root" worktree add "$home" "$branch" >/dev/null 2>&1 || die "git worktree add $home $branch failed"; echo "worktree $home on the existing branch $branch"
@@ -195,10 +218,13 @@ case "$cmd" in
     # The seat map: the workstream issue's `## Seats` table (the one owner), then the master's CLAUDE.md block.
     if [[ $materialize -eq 0 ]]; then
       homeword="$(ws_home_word "$kind" "$([[ "$kind" == subdir ]] && echo "$dir" || { [[ "$kind" == worktree ]] && echo "$branch" || true; })")" || exit 1
-      if ws_seats_parse "$ws" | grep -q "^$id	"; then echo "table: $id is already in the \`## Seats\` table of workstream $ws"
-      else "$here/workstream.sh" seat-add "$ws" "$id" --repo "$remote" --home "$homeword" --agent "$agent" || die "the roster row and the home are written, the \`## Seats\` table is not (named above): rerun $here/workstream.sh seat-add $ws $id --repo $remote --home \"$homeword\" --agent $agent, then workstream.sh render $ws"; fi
-      "$here/workstream.sh" render "$ws" || die "the \`## Seats\` table is written, the master's CLAUDE.md block is not (named above): rerun $here/workstream.sh render $ws"
+      if ws_seats_parse "$ws" | grep -q "^$id	"; then
+        echo "table: $id is already in the \`## Seats\` table of workstream $ws"
+        "$here/workstream.sh" render "$ws" || die "the CLAUDE.md blocks are not rendered (named above): rerun $here/workstream.sh render $ws"
+      else "$here/workstream.sh" seat-add "$ws" "$id" --repo "$remote" --home "$homeword" --agent "$agent" || die "the roster row and the home are written, the \`## Seats\` table or the CLAUDE.md blocks are not (named above): rerun $here/workstream.sh seat-add $ws $id --repo $remote --home \"$homeword\" --agent $agent, or workstream.sh render $ws when the table has it"; fi
     fi
+    # The desk: a new seat can be asked and messaged from its first session (desk.sh open reuses an existing desk).
+    "$here/desk.sh" open "$id" || die "the seat is made, its desk is not (named above): rerun $here/desk.sh open $id"
     [[ "$kind" != wrapper ]] || claude_block_write "$home/CLAUDE.md" "$id"
     echo
     echo "== take the seat: start a session anywhere in the workspace and run"
@@ -206,7 +232,7 @@ case "$cmd" in
     [[ "$kind" != wrapper ]] || echo "  optional, for terminal users: $home/claude.sh starts a session in the wrapper with the repo's agents and skills (claude --add-dir)"
     case "$kind" in
       wrapper) echo "  commit $roster" ;;
-      subdir)  echo "  commit $roster and $root/.gitignore if changed" ;;
+      subdir)  echo "  commit $roster, $home/CLAUDE.md and $root/.gitignore if changed" ;;
       *)       echo "  commit $roster and $home/.gitignore if changed" ;;
     esac
     ;;
@@ -225,11 +251,11 @@ case "$cmd" in
     id="$(seat_rostered "${1:-}")" || exit 1
     roster="$(roster_path)"
     ws="$(roster_field "$id" workstream)"
-    if ws_seats_parse "$ws" | grep -q "^$id	"; then "$here/workstream.sh" seat-remove "$ws" "$id" || exit 1; "$here/workstream.sh" render "$ws" || exit 1
-    else echo "table: $id is not in the \`## Seats\` table of workstream $ws"; fi
+    if ws_seats_parse "$ws" | grep -q "^$id	"; then "$here/workstream.sh" seat-remove "$ws" "$id" || exit 1
+    else echo "table: $id is not in the \`## Seats\` table of workstream $ws"; "$here/workstream.sh" render "$ws" || exit 1; fi
     jq --arg g "$(seat_login "$id")" --arg l "$(seat_label "$id")" --arg d "$(date -u +%Y-%m-%d)" \
       '(.seats[] | select(.github == $g and .label == $l) | .retired) = $d' "$roster" > "$roster.tmp" && mv "$roster.tmp" "$roster"
     echo "$id retired in $roster (\"retired\": \"$(date -u +%Y-%m-%d)\"); its home, branch and comments are kept"
     ;;
-  *) die "usage: seat.sh new <LABEL> --repo-path <checkout> --agent <name> --workstream <slug> [--kind checkout|worktree|wrapper | --kind subdir --dir <dir>] | where <seat> | retire <seat>" ;;
+  *) die "usage: seat.sh new <LABEL> --repo-path <checkout> --agent <name> --workstream <slug> [--kind checkout|worktree|wrapper | --kind subdir --dir <dir> [--stub]] | where <seat> | retire <seat>" ;;
 esac

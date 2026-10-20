@@ -11,6 +11,11 @@ utc_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # The directory the plugin's scripts live in (claude_block_render, the hooks and seat.sh name it).
 BEAST_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# The published DeSciX CLI every printed descix command runs: the one owner of its version (bootstrap.sh, wrapup.sh
+# and the skills and docs read it here). descix_cmd <args>: the command line, `npx -y -p <pin> descix <args>`.
+DESCIX_CLI_PKG='@descix/cli@4.1.0'
+descix_cmd() { printf 'npx -y -p %s descix %s' "$DESCIX_CLI_PKG" "$*"; }
+
 # ---- a checkout: the one owner of "is <dir> a git checkout", "its root" and "is it the repo's main checkout" ------
 # A checkout root is `git rev-parse --show-toplevel`. The main checkout of a repo, the one whose git dir holds the repo
 # (the roster, the seats' homes and the publish branches are read there), is the worktree whose git dir IS the common
@@ -79,6 +84,10 @@ repo_slug() {
   echo "$u"
 }
 
+# checkout_lane <checkout>: the lane its CLAUDE.md declares on a `LANE: <name>` line (a name: a-z, 0-9, -), or nothing
+# when it has no such line: a lane is recorded only when declared, never defaulted.
+checkout_lane() { [[ ! -f "$1/CLAUDE.md" ]] || sed -n 's/^LANE: *\([a-z][a-z0-9-]*\).*/\1/p' "$1/CLAUDE.md" | head -1; }
+
 # The committed, repo-scoped roster: the main checkout's, so every home of the repo reads one roster.
 roster_path() { echo "$(repo_main_root)/.beast/roster.json"; }
 
@@ -139,10 +148,11 @@ AGENT_NAME_RE='^(daita-beast:)?[A-Za-z0-9][A-Za-z0-9_-]*$'
 ROSTER_DATE_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
 
 # roster_check_unique [roster]: the one check of the roster's seat rows; every script that reads them calls it
-# (via roster_seat_ids). A row is {github, label, repo, lane, agent, workstream, home?, retired?}. Dies naming the
+# (via roster_seat_ids). A row is {github, label, repo, lane?, agent, workstream, home?, retired?}. Dies naming the
 # row and the key when: github/label is not <login>/<LABEL>; two rows share one (github, label) pair; the row
 # carries `role` or `tracking` (deleted: the agent file is the role, the workstream issue is found by its labels);
-# `agent` is absent or not an agent name; `workstream` is absent or not a slug; `retired` is not YYYY-MM-DD; or
+# `agent` is absent or not an agent name; `workstream` is absent or not a slug; `lane` (optional: the repo
+# CLAUDE.md's LANE: line when it has one) is present and not a name; `retired` is not YYYY-MM-DD; or
 # the row's `repo` is not the roster's own (a peer row): peers live on the workstream issue's `## Seats` table.
 roster_check_unique() {
   local r="${1:-}" bad
@@ -159,6 +169,7 @@ roster_check_unique() {
           elif has("tracking") then "\($id): key \"tracking\" is deleted (the workstream issue is found by its labels: \"workstream\": \"<slug>\")"
           elif ((.agent // "") | type) != "string" or ((.agent // "") | test($a) | not) then "\($id): key \"agent\" is required (an agent name, or daita-beast:seat), got \(.agent | tojson)"
           elif ((.workstream // "") | type) != "string" or ((.workstream // "") | test($w) | not) then "\($id): key \"workstream\" is required (a slug: a-z, 0-9, -), got \(.workstream | tojson)"
+          elif has("lane") and (((.lane | type) != "string") or (.lane | test("^[a-z][a-z0-9-]*$") | not)) then "\($id): key \"lane\" is optional, and when present a name (a-z, 0-9, -), got \(.lane | tojson)"
           elif has("retired") and ((.retired | type) != "string" or (.retired | test($d) | not)) then "\($id): key \"retired\" is a date YYYY-MM-DD, got \(.retired | tojson)"
           elif ((.repo // "" | ascii_downcase) != $mine) then "\($id): a peer row (repo \(.repo | tojson), not this roster'"'"'s own \($own | tojson)): peers live on the workstream issue (workstream.sh seat-add)"
           else empty end] | first // empty' "$r")"
@@ -750,11 +761,12 @@ seat_homes_on_machine() {
 }
 
 # seat_locate <LABEL | login/LABEL | composite> <launch dir>: "<id>\t<main checkout>" of the one seat it names on this
-# machine; dies naming the checkouts it read when there is none (with the clone and seat.sh new steps), and naming
+# machine; when there is none, dies naming the rosters it searched and the seat skill that creates it, or, for a seat
+# some roster here names for a repo with no checkout on this machine, the clone and seat.sh new steps; dies naming
 # the candidates' composites when a bare LABEL or a short id names several seats (the same label in two
 # workstreams is two identities) or a seat is rostered in two checkouts.
 seat_locate() {
-  local want="$1" launch="$2" rows hits ids repo seen c slug=""
+  local want="$1" launch="$2" rows hits ids repo seen c slug="" name
   if [[ "$want" =~ $SEAT_IDENTITY_RE ]]; then slug="${want%%/*}"; want="$(seat_short "$want")"; fi
   [[ "$want" =~ $SEAT_LABEL_RE || "$want" =~ $SEAT_ID_RE ]] || die "seat '$want' is not a LABEL (A-Z, 0-9, _, -), <login>/<LABEL> nor <slug>/<LABEL>/<login>"
   rows="$(seat_homes_on_machine "$launch")" || exit 1
@@ -762,8 +774,10 @@ seat_locate() {
   if [[ -z "$hits" ]]; then
     seen="$(beast_checkouts "$launch")" || exit 1
     repo="$(while IFS= read -r c; do [[ -z "$c" ]] || jq -r --arg w "$want" '.seats[]? | select("\(.github)/\(.label)" == $w or .label == $w) | .repo // empty' "$c/.beast/roster.json"; done <<< "$seen" | sort -u | head -1)"
-    seen="$(paste -sd ' ' - <<< "$seen")"
-    die "seat ${slug:+$slug/${want#*/}/}${slug:+${want%%/*}}${slug:-$want} has no home on this machine: no checkout this session can name (${seen:-none}) carries its roster row in the checkout of its own repo. ${repo:+Clone its repo (git clone https://github.com/$repo <path>) and run $BEAST_SCRIPTS/seat.sh new $(printf '%s' "${want#*/}") --repo-path <path>, which makes the home the roster records; }a new seat is made with $BEAST_SCRIPTS/seat.sh new <LABEL> --repo-path <checkout> --agent <name> --workstream <slug>"
+    name="${slug:+$slug/${want#*/}/}${slug:+${want%%/*}}${slug:-$want}"
+    [[ -z "$repo" ]] || die "seat $name is rostered for $repo, but no checkout of $repo on this machine carries its row (checkouts read: $(paste -sd ' ' - <<< "$seen")): clone it (git clone https://github.com/$repo <path>) and run $BEAST_SCRIPTS/seat.sh new $(printf '%s' "${want#*/}") --repo-path <path>, which makes the home the roster records"
+    seen="$(awk 'NF {print $0 "/.beast/roster.json"}' <<< "$seen" | paste -sd ' ' -)"
+    die "no seat $name in any roster this machine can name (searched: ${seen:-none}); to create it: /daita-beast:seat $(printf '%s' "${want#*/}")"
   fi
   ids="$(awk -F'\t' '{print $3 "/" substr($1, index($1, "/") + 1) "/" substr($1, 1, index($1, "/") - 1)}' <<< "$hits" | sort -u)"
   [[ "$ids" != *$'\n'* ]] || die "seat '${1}' names several seats on this machine: $(tr '\n' ' ' <<< "$ids")— name one by its composite id"
@@ -771,8 +785,92 @@ seat_locate() {
   cut -f1,2 <<< "$hits"
 }
 
+# ---- auto-memory: the one owner of "which memory folder this session loads" and "what in it restates seat state" --
+# Claude Code keeps a session's transcript and auto-memory under ~/.claude/projects/<encoded launch folder>/, the
+# launch folder's path with every character but A-Z, a-z, 0-9 and - replaced by -. Every seat started in one folder
+# shares it, so it holds only lessons true for all of them and short pointers; a seat's state lives on GitHub.
+
 # automemory_dir <dir>: Claude Code's auto-memory directory for sessions started in <dir>.
 automemory_dir() { echo "$HOME/.claude/projects/$(printf '%s' "$1" | sed 's#[^A-Za-z0-9-]#-#g')/memory"; }
+
+# session_memory_dir <launch dir>: "<dir>\t<how it was found>" of the auto-memory THIS session loads: the project
+# folder holding this session's transcript ($CLAUDE_CODE_SESSION_ID.jsonl), else, outside a Claude Code session or
+# before its transcript exists, automemory_dir of the launch dir, saying so. Two folders holding the transcript dies.
+session_memory_dir() {
+  local sid="${CLAUDE_CODE_SESSION_ID:-}" hits n
+  if [[ -n "$sid" ]]; then
+    hits="$(find "$HOME/.claude/projects" -mindepth 2 -maxdepth 2 -name "$sid.jsonl" 2>/dev/null || true)"
+    n="$(printf '%s' "$hits" | grep -c . || true)"
+    [[ "$n" -le 1 ]] || die "session $sid has a transcript in $n project folders: $(tr '\n' ' ' <<< "$hits")— cannot tell which memory it loads"
+    if [[ "$n" -eq 1 ]]; then printf '%s\t%s\n' "$(dirname "$hits")/memory" "the project folder of this session ($sid)"; return 0; fi
+  fi
+  printf '%s\t%s\n' "$(automemory_dir "$1")" "the launch folder $1 (${sid:+no transcript of session $sid under $HOME/.claude/projects; }derived as Claude Code encodes it)"
+}
+
+# MEMORY_POINTER_MAX: the body size (bytes, after the frontmatter) up to which a memory file citing a tracking issue
+# (owner/repo#N) is a pointer, kept; one index line of MEMORY.md is always under it.
+MEMORY_POINTER_MAX=1200
+
+# memory_triage <memory dir> <joining seat id> [<other seat id>]...: one TSV line per memory file and per MEMORY.md
+# index line: verdict, name (the file, or MEMORY.md:<line>), detail. The verdicts, in this order:
+#   lesson   the file's frontmatter type (else its name prefix) is feedback, user or reference; an index line
+#            linking such a file. Never flagged.
+#   owned    names another seat and not the joining seat: its login/LABEL or composite, "<LABEL> seat" or "seat
+#            <LABEL>", or its LABEL in the file's name (the index line's link); detail is that seat. It is never the
+#            joining seat's to delete.
+#   pointer  cites a tracking issue (owner/repo#N) within MEMORY_POINTER_MAX bytes. Kept.
+#   state    restates seat STATE (a handoff, a recorded address, branch or worktree state, inbox items, a next act):
+#            detail is what matched. The only verdict join tells the seat to act on.
+#   clean    none of the above.
+memory_triage() {
+  MEMORY_POINTER_MAX="$MEMORY_POINTER_MAX" python3 -I - "$@" <<'PY'
+import os, re, sys
+d, me, others = sys.argv[1], sys.argv[2], sys.argv[3:]
+cap = int(os.environ["MEMORY_POINTER_MAX"])
+LESSON = {"feedback", "user", "reference"}
+REF = re.compile(r"\b[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+\b")
+STATE = [("handoff", r"\bhandoff\b|BEAST-STATUS|state=handoff"), ("next act", r"\bnext act\b|\bnext step\b"),
+         ("inbox", r"\binbox\b"), ("address", r"BEAST-ADDRESS|ListAgents|\[[0-9a-f]{6,}\]"),
+         ("branch/worktree", r"\bworktree\b|\b(on|at) (the )?branch\b|\bbranch [A-Za-z0-9._-]+/|\buncommitted\b|\bunpushed\b")]
+def names(text, title, sid):
+    login, label = sid.split("/", 1); L = re.escape(label); w = r"(?<![A-Za-z0-9_/-])%s(?![A-Za-z0-9_-])" % L
+    if re.search(re.escape(sid), text) or re.search(r"[a-z0-9][a-z0-9-]*/%s/%s" % (L, re.escape(login)), text): return True
+    if re.search(r"%s(?:'s)? seat\b|\bseats? %s" % (w, w), text): return True
+    t = "-" + re.sub(r"[^a-z0-9]+", "-", title.lower()) + "-"
+    return ("-" + re.sub(r"[^a-z0-9]+", "-", label.lower()) + "-") in t
+def split(text):
+    m = re.match(r"^---\n(.*?)\n---\n?(.*)$", text, re.S)
+    return (m.group(1), m.group(2)) if m else ("", text)
+def ftype(name, front):
+    m = re.search(r"^\s*type:\s*([A-Za-z]+)\s*$", front, re.M)
+    if m: return m.group(1).lower()
+    p = name.split("_", 1)[0].lower()
+    return p if p in LESSON else ""
+def verdict(text, title, is_lesson):
+    if is_lesson: return "lesson", ""
+    own = [o for o in others if o != me and names(text, title, o)]
+    if own and not names(text, title, me): return "owned", " ".join(own)
+    if REF.search(text) and len(text.encode()) <= cap: return "pointer", REF.search(text).group(0)
+    hit = [k for k, r in STATE if re.search(r, text, re.I)]
+    return ("state", ", ".join(hit)) if hit else ("clean", "")
+types = {}
+for f in sorted(os.listdir(d)):
+    if not f.endswith(".md") or f == "MEMORY.md": continue
+    front, body = split(open(os.path.join(d, f), encoding="utf-8", errors="replace").read())
+    types[f] = ftype(f, front)
+    nm = re.search(r"^name:\s*(.+)$", front, re.M)
+    v, why = verdict(body.strip(), f[:-3] + " " + (nm.group(1) if nm else ""), types[f] in LESSON)
+    print("%s\t%s\t%s" % (v, f, why))
+idx = os.path.join(d, "MEMORY.md")
+if os.path.exists(idx):
+    for n, line in enumerate(open(idx, encoding="utf-8", errors="replace").read().split("\n"), 1):
+        if not line.lstrip().startswith(("-", "*")): continue
+        link = re.search(r"\]\(([^)]+\.md)\)", line)
+        tgt = os.path.basename(link.group(1)) if link else ""
+        v, why = verdict(line.strip(), tgt[:-3], types.get(tgt, "") in LESSON)
+        print("%s\tMEMORY.md:%d\t%s" % (v, n, why))
+PY
+}
 
 # ---- the CLAUDE.md block: one renderer, used by join.sh and seat.sh ------------------------------
 # protocol_repo: the repo whose docs/protocol.md the block points at. A checkout of the plugin's own twin carries
@@ -810,7 +908,7 @@ seat_agent_path() {
   if [[ "$agent" == daita-beast:* ]]; then
     rel="$BEAST_SCRIPTS/../agents/${agent#daita-beast:}.md"
     [[ -f "$rel" ]] || die "the plugin has no agent $agent: $(cd "$BEAST_SCRIPTS/.." && pwd)/agents/${agent#daita-beast:}.md does not exist"
-    cd "$(dirname "$rel")" && echo "$(pwd -P)/$(basename "$rel")"; return 0
+    echo "$(cd "$(dirname "$rel")" && pwd -P)/$(basename "$rel")"; return 0
   fi
   [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "seat_agent_path: '$repo' is not owner/repo"
   rel=".claude/agents/$agent.md"
@@ -934,6 +1032,22 @@ ws_block_write_local() {
   m="$(ws_block_markers "$2")"
   block="$(ws_block_render "$2")" || exit 1
   block_write "$1" "${m%%$'\t'*}" "${m#*$'\t'}" "$block"
+}
+
+# ws_homes_render <slug>: the Beast block of every home on this machine of a seat in the workstream's `## Seats` table
+# (seat_homes_on_machine: rows not retired whose home holds its own .beast/seat.json), re-rendered from the table, so
+# a seat added or removed reaches every home here as well as the master. A home whose CLAUDE.md carries no block yet
+# is named and left to its join. Prints one line per home.
+ws_homes_render() {
+  local slug="$1" rows id c h k ws ret
+  rows="$(ws_seats_parse "$slug")" || exit 1
+  while IFS=$'\t' read -r id c h k ws ret; do
+    [[ -n "$id" && "$ws" == "$slug" && -z "$ret" ]] || continue
+    grep -q "^$id	" <<< "$rows" || continue
+    [[ -d "$h" && "$(seat_json_id "$h")" == "$id" ]] || { echo "home of $id: not on this machine ($h)"; continue; }
+    if [[ ! -f "$h/CLAUDE.md" ]] || ! grep -q "$CLAUDE_BLOCK_BEGIN_RE" "$h/CLAUDE.md"; then echo "home of $id: $h/CLAUDE.md has no Beast block yet (join.sh writes it)"; continue; fi
+    ( cd "$c" && claude_block_write "$h/CLAUDE.md" "$(seat_identity_of "$id" "$slug")" ) || die "the Beast block of $id in $h/CLAUDE.md was not re-rendered (named above)"
+  done < <(seat_homes_on_machine "$PWD")
 }
 
 # ws_block_write_remote <repo> <slug> [pr]: the block written into <repo>'s CLAUDE.md through the contents API on
@@ -1245,9 +1359,18 @@ user_login() { gh_login; }
 
 user_exists() { gh_get "users/$1" >/dev/null 2>&1; }
 
-# repo_permission <repo> <login>: admin|maintain|write|triage|read, or "none" (no access, or the
-# caller may not read the collaborator list — both mean "may not award").
-repo_permission() { local p; if p="$(gh_get "repos/$1/collaborators/$2/permission" 2>/dev/null)"; then jq -r .permission <<< "$p"; else echo none; fi; }
+# repo_permission <repo> <login>: admin|maintain|write|triage|read|none, as GitHub answers it. Dies naming the repo,
+# the login and GitHub's answer when the role cannot be read (a 403: the caller lacks push access to <repo>): an
+# unread role is never taken for "none".
+repo_permission() {
+  local p err first; err="$(mktemp)"
+  if p="$(gh_get "repos/$1/collaborators/$2/permission" 2>"$err")"; then
+    rm -f "$err"; jq -er '.permission | select(type == "string")' <<< "$p" || die "GitHub answered the role of $2 on $1 without a permission"
+    return 0
+  fi
+  first="$(grep -m1 . "$err" || true)"; rm -f "$err"
+  die "cannot read the role of $2 on $1: ${first#daita-beast: } (a 403 means the gh login lacks push access to $1 and may not read its collaborators' roles; run with a login that has it)"
+}
 
 # issue_get <repo> <N>: the issue (or pull request) as JSON. Dies naming the issue when unreadable.
 issue_get() {
@@ -2018,22 +2141,42 @@ roster_repo() {
   echo "$v"
 }
 
-# repo_public_why <repo> [roster]: one line saying why <repo> is public ("listed in the roster's public_intended
+# repo_public_why <repo> [roster | -]: one line saying why <repo> is public ("listed in the roster's public_intended
 # (<entry>)" or "public on GitHub"), or nothing when it is private and not public-intended. The roster is read
-# first (a repo that does not exist yet is public-intended by its owner's entry); then GitHub's visibility. Names
-# compare case-insensitively, as GitHub's do. Dies when <repo> is not owner/repo or its visibility cannot be read.
+# first (a repo that does not exist yet is public-intended by its owner's entry); then GitHub's visibility. "-" is
+# no roster (repo_public_why_at, for a checkout that has none): GitHub's visibility only. Names compare
+# case-insensitively, as GitHub's do. Dies when <repo> is not owner/repo or its visibility cannot be read.
 repo_public_why() {
-  local r="$1" roster="${2:-}" hit priv
+  local r="$1" roster="${2:-}" hit="" priv
   [[ "$r" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "'$r' is not owner/repo"
   [[ -n "$roster" ]] || roster="$(roster_path)"
-  hit="$(jq -r --arg r "$r" '($r | ascii_downcase) as $lr | ($lr | split("/")[0]) as $lo
-    | [(.public_intended // [])[] | select((ascii_downcase == $lr) or (ascii_downcase == $lo))] | first // empty' "$roster")" \
-    || die "cannot read \"public_intended\" of the roster $roster"
+  if [[ "$roster" != - ]]; then
+    hit="$(jq -r --arg r "$r" '($r | ascii_downcase) as $lr | ($lr | split("/")[0]) as $lo
+      | [(.public_intended // [])[] | select((ascii_downcase == $lr) or (ascii_downcase == $lo))] | first // empty' "$roster")" \
+      || die "cannot read \"public_intended\" of the roster $roster"
+  fi
   if [[ -n "$hit" ]]; then echo "listed in the roster's public_intended ($hit)"; return 0; fi
   priv="$(gh_get "repos/$r" | jq -r .private)" || die "cannot read the visibility of $r (named above)"
   [[ "$priv" == true || "$priv" == false ]] || die "GitHub answered repos/$r without a boolean \"private\""
   [[ "$priv" == true ]] || echo "public on GitHub"
 }
+
+# repo_public_why_at <repo> <dir>: repo_public_why with the roster of the checkout <dir> is in when it has one
+# (.beast/roster.json at its root), else (no roster, or <dir> in no checkout) GitHub's visibility only. For scripts whose
+# target is a checkout that may carry no roster yet (init-repo.sh, bootstrap.sh) or a community repo's (ledger.sh --out).
+repo_public_why_at() {
+  local root roster=-
+  if root="$(checkout_root "$2" 2>/dev/null)" && [[ -f "$root/.beast/roster.json" ]]; then roster="$root/.beast/roster.json"; fi
+  repo_public_why "$1" "$roster"
+}
+
+# The label sets of templates/labels.json, the one owner: a public or public-intended repo carries only the labels marked
+# "public" (the bounty and award flow); every other fixed label, and every seat:* and ws:* label, is coordination and
+# lives only in a private repo. labels_public / labels_coordination: the fixed names, one per line.
+# label_is_coordination <name>: status 0 for a coordination label.
+labels_public() { jq -r '.[] | select(.public == true) | .name' "$BEAST_SCRIPTS/../templates/labels.json"; }
+labels_coordination() { jq -r '.[] | select(.public != true) | .name' "$BEAST_SCRIPTS/../templates/labels.json"; }
+label_is_coordination() { [[ "$1" == seat:* || "$1" == ws:* ]] || labels_coordination | grep -qxF -- "$1"; }
 
 # roster_pair_check [roster]: dies unless the roster's "repo" is private and not public-intended, and, when the
 # roster declares "publishes_to", unless that repo is public or public-intended. Prints "publishes_to" (or nothing).

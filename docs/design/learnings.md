@@ -98,7 +98,7 @@ All measured; each shapes code.
 **Rule.** A VS Code workspace file is found walking up from the launch folder to `$HOME`, and counts when it lists the launch folder in any position (`lib.sh::vscode_workspace_folders`).
 **Evidence.** The earlier rule (a file in the launch folder or its parent, with the launch folder as its first entry) never found a workspace that listed another repo before the launch folder; from a nested repo of a workspace listed three levels up, the workspace is now found, and from a scratch directory none is.
 
-**Rule.** Auto-memory belongs to the launch folder and is shared by every seat started there (`lib.sh::automemory_dir`); a seat's state lives on GitHub (handoff, notes). `join.sh` lists memory files that restate GitHub state.
+**Rule.** Auto-memory belongs to the launch folder and is shared by every seat started there (`lib.sh::automemory_dir`); a seat's state lives on GitHub (handoff, notes). `join.sh` triages the folder this session loads: only files and `MEMORY.md` lines restating seat state are listed; lessons, another seat's files and short pointers are not.
 
 **Rule.** One editor window holds every seat; two seats never share a home (`join.sh` dies when `seat.json` names another seat).
 **Evidence.** Requiring a separate window per seat was replaced, by the decider's approval on a row, with seating that sets the root inside one multi-folder workspace.

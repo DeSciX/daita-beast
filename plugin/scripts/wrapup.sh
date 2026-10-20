@@ -523,8 +523,8 @@ PY
         [[ -n "$cov" ]] || continue
         hit=1; kb="$(jq -r '.kb_name // empty' <<< "$mj")"; [[ -n "$kb" ]] || kb="$(basename "$mp" .json)"
         echo "KB $kb ($mp) covers changed: $cov"
-        echo "  run (after pushing $db): npx -y -p @descix/cli@3.0.0 descix kb corpus sync -a $app -k $kb --dry-run"
-        echo "  then:                    npx -y -p @descix/cli@3.0.0 descix kb corpus sync -a $app -k $kb"
+        echo "  run (after pushing $db): $(descix_cmd kb corpus sync -a "$app" -k "$kb" --dry-run)"
+        echo "  then:                    $(descix_cmd kb corpus sync -a "$app" -k "$kb")"
       done < <(gh_get "repos/$repo/contents/.descix/manifests?ref=$(uri "$db")" | jq -r '.[] | select(.type == "file" and (.name | endswith(".json"))) | .path')
       [[ $hit -eq 1 ]] || echo "KB: no manifest of $repo covers a changed file"
     fi

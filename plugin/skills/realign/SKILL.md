@@ -80,7 +80,7 @@ When unsure whether something is protected, treat it as protected and surface it
 2. **Records** (`org/records` and the like): for each record, either its rule is live and not yet in an instruction surface or the docs (promote it there as one line, then delete the record), or it is spent (delete it). An investigation or red-team record survives only by having its useful content written into `docs/`; the file itself goes.
 3. **Docs:** as-built truth only. Delete plans, proposals and dated narrative, or move them to the concepts plane.
 4. **Memory:** one canonical statement per topic. Run `scripts/realign/check_memory_drift.sh <dir>` (`--strict` to gate). Fold durable conclusions into the index, delete the memos whose work has landed, collapse version clusters (`…_m2/_m3`, `…_v2`) to the current one, resolve or delete every "not reconciled" entry, and prune the index to match.
-5. **KB corpora:** re-sync each KB whose manifest's sources cover a changed doc. The manifests are `.descix/manifests/*.json`; after pushing, run `npx -y -p @descix/cli@3.0.0 descix kb corpus sync -a <app_id> -k <kb> --dry-run`, then again without `--dry-run`.
+5. **KB corpora:** re-sync each KB whose manifest's sources cover a changed doc. The manifests are `.descix/manifests/*.json`; after pushing, run `npx -y -p <pin> descix kb corpus sync -a <app_id> -k <kb> --dry-run`, then again without `--dry-run`, where `<pin>` is the plugin's CLI pin, `DESCIX_CLI_PKG` in `scripts/lib.sh` (`wrapup.sh run` and `bootstrap.sh` print the filled command).
 
 ### Scope (b): a workstream's wrap-up
 
