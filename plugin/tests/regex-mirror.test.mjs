@@ -1,4 +1,4 @@
-// The page (plugin/templates/board.html) parses desk asks with JS twins of the shapes lib.sh owns. This test extracts
+// The page (plugin/templates/board.html) parses desk asks and the amend line with JS twins of the shapes lib.sh owns. This test extracts
 // both sides from the source files as they stand and runs them on one fixture list of lines: lib.sh's through jq (the
 // engine desk_parse uses), the page's through node. Any line the two read differently fails the test, naming it.
 //   node --test plugin/tests/
@@ -91,6 +91,17 @@ const MSG_LINES = [
   `${P}MSG from=beast/BEAST/acme to=platform/DEVPLANE/acme re=none blocking=no ${T} extra`,
 ];
 
+const AMEND_LINES = [
+  "Amended at 2026-10-20T10:00:00Z: revised after https://github.com/acme/twin/issues/30#issuecomment-1; changed: Decision",
+  "Amended at 2026-10-20T10:00:00Z: 3 files; added a; removed none; changed b",
+  "Amended at 2026-10-20T10:00:00Z:",
+  "Amended at 2026-10-20 10:00:00Z: x",
+  "Amended at 2026-10-20T10:00Z: x",
+  "amended at 2026-10-20T10:00:00Z: x",
+  " Amended at 2026-10-20T10:00:00Z: x",
+  "Amended on 2026-10-20T10:00:00Z: x",
+];
+
 // compare <lib regex name> <page regex name> <lines> <group names in the page's capture order>
 function compare(libName, pageName, lines, groups) {
   const libCap = jqCaptures(libRe(libName), lines);
@@ -120,8 +131,12 @@ test("the seat-to-seat tag: lib.sh MSG_HEADER_RE and the page's MSG_RE read ever
   compare("MSG_HEADER_RE", "MSG_RE", MSG_LINES, ["from", "to", "re", "at"]);
 });
 
+test("the amend line: lib.sh AMEND_LINE_RE and the page's AMEND_RE read every fixture line alike", () => {
+  compare("AMEND_LINE_RE", "AMEND_RE", AMEND_LINES, []);
+});
+
 test("the fixtures exercise both outcomes on both shapes", () => {
-  for (const [name, lines] of [["ASK_HEADER_RE", ASK_LINES], ["WAITS_ON_RE", WAITS_LINES], ["MSG_HEADER_RE", MSG_LINES]]) {
+  for (const [name, lines] of [["ASK_HEADER_RE", ASK_LINES], ["WAITS_ON_RE", WAITS_LINES], ["MSG_HEADER_RE", MSG_LINES], ["AMEND_LINE_RE", AMEND_LINES]]) {
     const caps = jqCaptures(libRe(name), lines);
     assert.ok(caps.some((c) => c) && caps.some((c) => !c), `${name}: the fixtures must hold lines that match and lines that do not`);
   }

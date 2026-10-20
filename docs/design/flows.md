@@ -239,10 +239,11 @@ sequenceDiagram
   participant G as GitHub
   P->>C: get_me
   C-->>P: the viewer's login
-  par every 120 s
-    P->>C: search_issues open, assignee, label decision or needs-review
+  loop every 2 min
+    P->>C: search_issues open, assignee, label decision, needs-review or desk
+  end
+  loop every 15 min, and when Decided opens
     P->>C: search_issues closed in the last 7 days
-    P->>C: search_issues open desks assigned to the viewer
   end
   C-->>P: replies read by itemsOf
   P->>C: issue_read get_comments per row and desk, pages of 20 (readComments)
@@ -256,7 +257,7 @@ sequenceDiagram
 
 As built (`plugin/templates/board.html`, spec `docs/board-ui.md`):
 - The template's first line is a stamp, `<!-- board.html @ @@COMMIT@@ -->`; `board-ui` fills it at publish with the template's newest commit on the public repo's main (`list_commits`), the only edit made to the template at publish. The `cowork-tick` skill reads it back off the published page (flow 7).
-- Three watches through `search_issues` on a 120 s `refetchInterval`: the board, decided (last 7 days), desks. `itemsOf` reads every search reply; `readComments` reads every comment thread in pages of 20 until a short page.
+- Two searches, one owner (`tick`/`runSearch`): open rows and desks in one search every 2 min, split by label in `onData`; decided (last 7 days) every 15 min and when Decided opens; a rate-limit answer pauses both (60 s or the error's retry-after, doubling to 15 min). `itemsOf` reads every search reply; `readComments` reads every comment thread in pages of 20 until a short page, only when the issue's `updated_at` moved.
 - `deriveRow` computes each row's latest event and each seat's current ack with the same rules as `lib.sh::row_events` and `lib.sh::seat_acks`; `answerKind` mirrors `lib.sh::answer_kind`; `parseDesk` mirrors `lib.sh::desk_parse`, its `MSG_RE` the twin of `lib.sh::MSG_HEADER_RE`; `turnOf` gives each open row one status. Rows whose status is "Your turn" are listed first, oldest first; the rest fold into "With the seats", grouped by seat.
 - Every answer has a confirm step showing the exact comment. The page never closes, labels, edits a body or acks.
 - Milestones due within 3 days are read off the rows the page already fetched (the connector has no milestone tool).
@@ -306,7 +307,7 @@ As built (`plugin/skills/cowork-tick/SKILL.md`):
 Failure behavior:
 - No argument: refused naming the task's prompt shape.
 - Not exactly one open pinned board issue, or two stamps by one login: refused naming them (a shell seat's `board.sh --publish`, or a human deleting one).
-- A quiet tick costs one `get_me`, the roster, two searches for the stamp and the rows, one for the desks, one `list_commits` and one artifact read; the task is scheduled no more often than every 15 minutes because the search quota is shared with the page's watches and the relay.
+- A quiet tick costs one `get_me`, the roster, two searches for the stamp and the rows, one for the desks, one `list_commits` and one artifact read; the task is scheduled no more often than every 15 minutes because the search quota is shared with the page's searches and the relay.
 
 ## 8. Publish: prepare, scrub, license, request, amend, merge, pull
 

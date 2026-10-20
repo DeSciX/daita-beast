@@ -81,7 +81,7 @@ Assumptions (change them and rerun the arithmetic):
 
 **Comparison.** About 2.99 million (polling, any hour) against about 12,000 Haiku tokens plus E working turns (relay, busy hour) and zero (relay, idle hour). The polling cost scales with S / P and with each session's context size; the relay's scales with the number of changes.
 
-**GitHub quota.** The relay spends one search per tick (30 an hour at 120 s, against a search quota of 30 a minute) and core reads only on changed rows; unchanged reads are 304s that cost nothing (`learnings.md`, Relay cost). The board and the inbox cost nothing warm; the page's watches, the relay and the tick share the search quota, which is why the tick runs no more often than every 15 minutes.
+**GitHub quota.** The relay spends one search per tick (30 an hour at 120 s, against a search quota of 30 a minute) and core reads only on changed rows; unchanged reads are 304s that cost nothing (`learnings.md`, Relay cost). The board and the inbox cost nothing warm; the page's searches (one every 2 min, one every 15 min), the relay and the tick share the search quota, which is why the tick runs no more often than every 15 minutes.
 
 ## 6. Things that differ from a local system
 

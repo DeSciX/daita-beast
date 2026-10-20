@@ -102,6 +102,7 @@ textarea { min-height: 4.2rem; resize: vertical; }
 .note.err { background: var(--hands-bg); color: var(--hands); }
 .note.warn { background: var(--warn-bg); color: var(--warn); }
 .note.ok { color: var(--ok); font-weight: 600; }
+.slow { margin: -4px 0 12px; }
 .note code, .mono { font-family: var(--mono); font-size: 0.86em; }
 .empty { border: 1px dashed var(--line); border-radius: 8px; padding: 28px 16px; text-align: center; color: var(--muted); }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
@@ -149,6 +150,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     <h1>Waiting on your word</h1>
     <div class="meta"><span id="who"></span><span id="asof"></span><button class="btn small" id="refresh" hidden>Refresh</button></div>
   </div>
+  <div class="meta slow" id="slow" role="status" hidden></div>
   <div class="tabs" role="tablist">
     <button class="tab" role="tab" id="tab-decisions" aria-selected="true">Board <span id="count"></span></button>
     <button class="tab" role="tab" id="tab-decided" aria-selected="false">Decided <span id="dcount"></span></button>
@@ -156,7 +158,6 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
   </div>
   <section id="view-decisions">
     <div id="banner"></div>
-    <div id="kbanner"></div>
     <div id="turn"></div>
     <div id="desks"></div>
     <div id="deskview"></div>
@@ -192,7 +193,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
   var DENIED = { needs_reauth: 1, server_not_connected: 1, server_not_found: 1, selection_required: 1, blocked_by_policy: 1, approval_required: 1, not_in_manifest: 1, not_granted: 1, consent_required: 1, capability_disabled: 1, capability_removed: 1 };
   var AMBIGUOUS = { server_unavailable: 1, upstream_error: 1, cancelled: 1 };
   var TABS = ["decisions", "decided", "awards"];
-  var mcp = null, login = "", items = null, ditems = null, desks = null, unwatch = null, unwatchD = null, unwatchK = null, watchRetried = false, dRetried = false, kRetried = false;
+  var mcp = null, login = "", items = null, ditems = null, desks = null;
   var deskOpen = null;     // the desk key (owner/repo#N) whose drill-down is open
   var deskView = null;     // {key, sig, el}: the drill-down, rebuilt only when its signature changes
   var cards = new Map();   // seat|key -> {el, sig}   (Decisions; one card per seat group a row is in)
@@ -256,7 +257,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
 
   function read(fn) {
     return fn().catch(function (e) {
-      if (!e || !e.retryable) throw e;
+      if (!e || !e.retryable || rateLimited(e)) throw e;
       return sleep(Math.min(e.retryAfterMs || 0, 60000) + 600 + Math.random() * 1400).then(fn);
     });
   }
@@ -353,6 +354,35 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     if (/^reject:\s*\S/.test(b)) return "reject";
     if (/^revise:\s*\S/.test(b)) return "revise";
     return null;
+  }
+  /* The amend line (lib.sh AMEND_LINE_RE, the owner; plugin/tests/regex-mirror.test.mjs holds the two alike): the first
+     line of the comment that says the row changed after it was filed (decision.sh revise, publish.sh request --amend). */
+  var AMEND_RE = /^Amended at [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z: /;
+  /* standingOf(list, phrase, viewer): where the viewer's answer on a row stands; the page's twin of lib.sh row_answer_url
+     and row_revise_pending. answer: the viewer's newest answer-form comment, except an approve no newer than the newest
+     amend line, which approved what the amend replaced (stale). gap: the newest answer is a revise and no amend line is
+     newer, so the row was not revised and no approval is offered: "replied" when the newest comment after it that is not
+     an ack is someone else's, else "waiting". revised: the amend line newer than the revise (the decider's turn again). */
+  function standingOf(list, phrase, viewer) {
+    var me = String(viewer || "").toLowerCase(), answer = null, amended = null;
+    list = list || [];
+    list.forEach(function (c) {
+      if (!c) return;
+      if (AMEND_RE.test(String(c.body || "").split(/\r?\n/)[0]) && (!amended || String(c.created_at) > String(amended.at))) amended = { at: c.created_at, url: c.html_url };
+      if (phrase && c.user && String(c.user.login).toLowerCase() === me && answerKind(c.body, phrase)) answer = c;
+    });
+    var out = { answer: answer, kind: answer ? answerKind(answer.body, phrase) : null, amended: amended, stale: null, gap: null, reply: null, replies: 0, revised: null };
+    if (out.kind === "approve" && amended && !(String(answer.created_at) > String(amended.at))) { out.stale = answer; out.answer = null; out.kind = null; }
+    if (out.kind === "revise") {
+      if (amended && String(amended.at) > String(answer.created_at)) out.revised = amended;
+      else {
+        var after = list.slice(list.indexOf(answer) + 1).filter(function (c) { return c && !ackLine(c.body, null, c.created_at); });
+        var last = after[after.length - 1], theirs = last && !(last.user && String(last.user.login).toLowerCase() === me);
+        out.gap = theirs ? "replied" : "waiting";
+        if (theirs) { out.reply = last; out.replies = after.length; }
+      }
+    }
+    return out;
   }
 
   /* ---------- acks ---------- */
@@ -513,6 +543,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     if (mode === "approve") return d ? phrase + " — " + d : phrase;
     if (mode === "revise") return d ? "revise: " + d : null;
     if (mode === "reject") return d ? "reject: " + d : null;
+    if (mode === "reply") return d && answerKind(d, phrase) !== "approve" ? d : null;   // a question back, never an approval
     return null;
   }
 
@@ -525,16 +556,20 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     readComments(r, it.number).then(function (list) {
       s.comments = list;
       if (s.ctx) s.ctx.comments = list;
-      var mine = phrase ? list.filter(function (c) { return c && c.user && String(c.user.login).toLowerCase() === login.toLowerCase() && answerKind(c.body, phrase) && !(s.ignoreBefore && String(c.created_at) <= s.ignoreBefore); }).pop() : null;
-      /* A revise is a question back: it holds the card only until someone replies on the issue; the
-         reply is then shown above the buttons, so a card that is the decider's turn again says so. */
+      /* One derivation (standingOf). A revise holds the card until the seat revises the row (an amend line after it);
+         a reply in the meantime is shown above the buttons and makes it the decider's turn, without an approval. */
+      var w = standingOf(list, phrase, login), mine = w.answer;
+      if (mine && s.ignoreBefore && String(mine.created_at) <= s.ignoreBefore) mine = null;
+      s.gap = w.gap;
+      s.stale = w.stale ? { at: w.stale.created_at, url: w.stale.html_url, amendAt: w.amended.at, amendUrl: w.amended.url } : null;
+      s.revised = w.revised ? { at: w.revised.at, url: w.revised.url, revAt: w.answer.created_at, revUrl: w.answer.html_url } : null;
       s.thread = null;
-      if (mine && answerKind(mine.body, phrase) === "revise" && list[list.length - 1] !== mine) {
-        var after = list.slice(list.indexOf(mine) + 1), lastReply = after[after.length - 1];
-        s.thread = { at: mine.created_at, url: mine.html_url, body: String(mine.body).trim(), replies: after.length,
-                     reply: { at: lastReply.created_at, url: lastReply.html_url, login: lastReply.user && lastReply.user.login, body: String(lastReply.body || "").trim() } };
+      if (w.gap === "replied") {
+        s.thread = { at: w.answer.created_at, url: w.answer.html_url, body: String(w.answer.body).trim(), replies: w.replies,
+                     reply: { at: w.reply.created_at, url: w.reply.html_url, login: w.reply.user && w.reply.user.login, body: String(w.reply.body || "").trim() } };
         mine = null;
       }
+      if (w.revised) mine = null;
       s.checkErr = null;
       if (mine) { s.answered = { at: mine.created_at, url: mine.html_url, body: String(mine.body).trim(), kind: answerKind(mine.body, phrase) }; s.err = null; s.ambiguous = false; s.mode = null; }
       else if (force) { s.ambiguous = false; s.err = { code: "not_posted", message: "No answer of yours is on the issue. It did not post; you can answer again." }; }
@@ -542,7 +577,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     }).catch(function (e) { s.checkErr = e; render(); });
   }
 
-  function post(it, r, key, body) {
+  function post(it, r, key, body, mode) {
     var s = state(key);
     s.pending = true; s.err = null; s.ambiguous = false; render();
     /* One-shot write: no cache option, no signal, never auto-retried. */
@@ -550,7 +585,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
       var p = res && res.payload && typeof res.payload === "object" ? res.payload : {};
       var url = [p.html_url, p.url].filter(function (u) { return typeof u === "string" && u.indexOf("https://github.com/") === 0; })[0] || it.html_url;
       s.pending = false; s.mode = null;
-      s.answered = { at: p.created_at || new Date().toISOString(), url: url, body: body, kind: /^revise:/.test(body) ? "revise" : "answer" };
+      s.answered = { at: p.created_at || new Date().toISOString(), url: url, body: body, kind: /^revise:/.test(body) ? "revise" : mode === "reply" ? "reply" : "answer" };
       render();
     }).catch(function (e) {
       s.pending = false; s.err = e; s.ambiguous = !!AMBIGUOUS[code(e)]; render();
@@ -562,7 +597,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
   function answerable(it) {
     var r = repoOf(it); if (!r) return null;
     var key = keyOf(it, r), s = state(key), p = parseItem(it);
-    if (p.missing.length || !p.phrase || s.answered || s.mode || s.pending || s.ambiguous) return null;
+    if (p.missing.length || !p.phrase || s.answered || s.gap || s.mode || s.pending || s.ambiguous) return null;
     return { it: it, r: r, key: key, phrase: p.phrase };
   }
   function renderBulk() {
@@ -644,8 +679,9 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
 
   /* ---------- whose turn ----------
      One plain-language status per open row, from what the page already reads:
-       your answer on the issue (s.answered / s.thread) and each seat's newest BEAST-ACK (d.acks, d.unacked).
-     mine = the row waits on the viewer. Order: a seat reply after a revise is the viewer's turn; an ANSWERED row is with
+       your answer on the issue (standingOf: s.answered / s.gap / s.thread) and each seat's newest BEAST-ACK (d.acks, d.unacked).
+     mine = the row waits on the viewer. Order: a seat reply after a revise the row was not revised for is the viewer's
+     turn, without an approval; a revise with no reply is with the seats; an ANSWERED row is with
      the seats (revise → waiting on them; the newest ack current with the row's latest event: executed → working on it,
      blocked → blocked; a seat unacked → hasn't picked it up; else they have it); an open row the viewer has NOT answered
      is the viewer's turn whatever the seats acked — an ack says how the seat handled the row's latest event (filed it,
@@ -654,11 +690,12 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
      next= text when it is blocked. */
   function turnOf(row) {
     var s = row.s, d = row.d, seats = d.seats, names = seats.length ? seats.map(seatText).join(", ") : "the seat";
-    if (s.thread) return { mine: true, cls: "turn", text: "Your turn — " + names + " replied" };
+    if (s.gap === "replied") return { mine: true, cls: "turn", text: "Your turn — " + names + " replied, row not yet revised" };
     var newest = null;
     if (d.known) seats.forEach(function (x) { var a = ackFor(d.acks, x); if (a && d.current.indexOf(x) >= 0 && (!newest || a.cAt >= newest.a.cAt)) newest = { a: a, x: x }; });
     if (s.answered) {
       if (s.answered.kind === "revise") return { mine: false, cls: "wait", text: "Revision requested — waiting on " + names };
+      if (s.answered.kind === "reply") return { mine: false, cls: "wait", text: "Replied — waiting on " + names };
       if (newest && newest.a.state === "executed") return { mine: false, cls: "work", text: seatText(newest.x) + " working on it" };
       if (newest && newest.a.state === "blocked") return { mine: false, cls: "turn", text: seatText(newest.x) + " blocked" };
       if (!d.known) return { mine: false, cls: "done", text: "Answered" };
@@ -666,6 +703,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
       return late.length ? { mine: false, cls: "wait", text: "Answered — " + late.map(seatText).join(", ") + " hasn't picked it up" }
                          : { mine: false, cls: "done", text: "Answered — " + names + " has it" };
     }
+    if (s.gap === "waiting") return { mine: false, cls: "wait", text: "Revision requested — waiting on " + names };
     var note = !newest ? "" : newest.a.state === "blocked" ? seatText(newest.x) + " blocked" + (newest.a.next ? ": " + newest.a.next : "")
              : newest.a.state === "executed" ? seatText(newest.x) + " executed its part" : "";
     return { mine: true, cls: "turn", text: "Your turn", note: note };
@@ -723,13 +761,20 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
       foot.appendChild(h("div", { class: "note err", text: "malformed: " + why }));
       return card;
     }
-    foot.appendChild(h("div", { class: "lbl", text: "Approving phrase" }));
-    foot.appendChild(h("div", { class: "phrase", text: p.phrase }));
+    if (s.gap && s.mode === "approve") s.mode = null;
+    if (s.gap) foot.appendChild(h("div", { class: "note warn", text: "Not revised yet: you asked for a revision and the row has no amend line after it, so it cannot be approved until the seat revises it (decision.sh revise). Reply, revise or reject." }));
+    else {
+      foot.appendChild(h("div", { class: "lbl", text: "Approving phrase" }));
+      foot.appendChild(h("div", { class: "phrase", text: p.phrase }));
+    }
+    if (s.revised && !s.gap) foot.appendChild(h("div", { class: "note ok" }, "revision requested " + utc(s.revised.revAt) + " ", h("a", { href: s.revised.revUrl, target: "_blank", rel: "noopener noreferrer", text: "your words" }),
+      " · row revised " + utc(s.revised.at) + " ", h("a", { href: s.revised.url, target: "_blank", rel: "noopener noreferrer", text: "the amend" })));
+    if (s.stale && !s.answered) foot.appendChild(h("div", { class: "note warn" }, "your approval " + utc(s.stale.at) + " predates the amend " + utc(s.stale.amendAt) + " ", h("a", { href: s.stale.amendUrl, target: "_blank", rel: "noopener noreferrer", text: "the amend" }), " · it no longer counts; approve again"));
     if (p.kind === "pr") foot.appendChild(h("div", { class: "meta", text: (p.approveWith ? "From the PR body's “Approve with”. " : "The PR body has no “Approve with”, so a bare approve is the word. ") + "The answer is a comment on the PR; read the diff on GitHub first." }));
     if (p.nested) foot.appendChild(h("div", { class: "meta", text: "Taken from inside the quoted instruction under Approve with." }));
     if (s.answered) {
-      var rev = s.answered.kind === "revise";
-      foot.appendChild(h("div", { class: "note ok" }, (rev ? "revision requested " : "answered ") + utc(s.answered.at) + " ", h("a", { href: s.answered.url, target: "_blank", rel: "noopener noreferrer", text: "the record" })));
+      var rev = s.answered.kind === "revise" || s.answered.kind === "reply";
+      foot.appendChild(h("div", { class: "note ok" }, (s.answered.kind === "revise" ? "revision requested " : s.answered.kind === "reply" ? "replied " : "answered ") + utc(s.answered.at) + " ", h("a", { href: s.answered.url, target: "_blank", rel: "noopener noreferrer", text: "the record" })));
       foot.appendChild(h("pre", { class: "copy", text: s.answered.body }));
       if (rev) foot.appendChild(h("div", { class: "row" }, h("button", { class: "btn small", type: "button", text: "Answer again", onclick: function () { s.ignoreBefore = String(s.answered.at); s.answered = null; s.draft = ""; render(); } })));
       return card;
@@ -752,7 +797,8 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     if (!s.mode) {
       var pick = function (m) { return function () { s.mode = m; s.err = null; render(); var t = $("t-" + id); if (t) t.focus(); }; };
       foot.appendChild(h("div", { class: "row" },
-        h("button", { class: "btn primary", type: "button", onclick: pick("approve"), text: "Approve" }),
+        s.gap ? h("button", { class: "btn primary", type: "button", onclick: pick("reply"), text: "Reply" })
+              : h("button", { class: "btn primary", type: "button", onclick: pick("approve"), text: "Approve" }),
         h("button", { class: "btn", type: "button", onclick: pick("revise"), text: "Revise" }),
         h("button", { class: "btn danger", type: "button", onclick: pick("reject"), text: "Reject" })));
       return card;
@@ -760,14 +806,14 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     var preview = h("pre", { class: "copy" });
     var go = h("button", { class: "btn " + (s.mode === "reject" ? "danger" : "primary"), type: "button", disabled: s.pending,
       text: s.pending ? "Posting…" : "Post this comment",
-      onclick: function () { var b = commentBody(s.mode, p.phrase, s.draft); if (b) post(it, r, key, b); } });
+      onclick: function () { var b = commentBody(s.mode, p.phrase, s.draft); if (b) post(it, r, key, b, s.mode); } });
     var sync = function () {
       var b = commentBody(s.mode, p.phrase, s.draft);
-      preview.textContent = b || (s.mode === "reject" ? "reject: <your reason, required>" : "revise: <what to change, required>");
+      preview.textContent = b || (s.mode === "reject" ? "reject: <your reason, required>" : s.mode === "reply" ? "<your reply, required; not an approval>" : "revise: <what to change, required>");
       go.disabled = s.pending || !b;
     };
     {
-      var hint = s.mode === "reject" ? "Reason (required)" : s.mode === "revise" ? "What to change (required)" : "Comment (optional)";
+      var hint = s.mode === "reject" ? "Reason (required)" : s.mode === "revise" ? "What to change (required)" : s.mode === "reply" ? "Your reply (required)" : "Comment (optional)";
       var ta = h("textarea", { id: "t-" + id, placeholder: hint, "aria-label": hint, disabled: s.pending,
         oninput: function (ev) { s.draft = ev.target.value; sync(); } });
       ta.value = s.draft;
@@ -808,7 +854,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
   function byUpdated(a, b) { return String(b.it.updated_at || "").localeCompare(String(a.it.updated_at || "")); }
   function mount(map, ck, row, seat, tab, expanded) {
     var s = row.s, it = row.it;
-    var sig = JSON.stringify([tab, seat, ui.flat, expanded, it.updated_at, it.title, it.body, it.closed_at, labelNames(it), s.mode, s.pending, s.err && s.err.code, s.ambiguous, s.answered && s.answered.at, s.thread && s.thread.reply.at, s.checkErr && s.checkErr.code, selected.has(row.key), bulkBusy, s.ctx && [s.ctx.open, s.ctx.loading, s.ctx.v], s.comments ? [s.acks, s.event, s.malformedAcks] : null]);
+    var sig = JSON.stringify([tab, seat, ui.flat, expanded, it.updated_at, it.title, it.body, it.closed_at, labelNames(it), s.mode, s.pending, s.err && s.err.code, s.ambiguous, s.answered && s.answered.at, s.thread && s.thread.reply.at, s.gap, s.stale && s.stale.at, s.revised && s.revised.at, s.checkErr && s.checkErr.code, selected.has(row.key), bulkBusy, s.ctx && [s.ctx.open, s.ctx.loading, s.ctx.v], s.comments ? [s.acks, s.event, s.malformedAcks] : null]);
     var c = map.get(ck);
     if (!c || c.sig !== sig) { c = { el: tab === "decided" ? buildClosed(row, seat, expanded) : buildCard(row, seat, expanded), sig: sig }; map.set(ck, c); }
     return c.el;
@@ -1149,9 +1195,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     b.appendChild(errNote(e));
     if (code(e) === "approval_required") {
       b.appendChild(h("div", { class: "row", style: "margin-top:8px" }, h("button", { class: "btn primary", type: "button", text: "Ask for approval and load", onclick: function () {
-        mcp.callTool(SERVER, "search_issues", query(), { cache: { refresh: true } }).then(onData, function (err) { b.textContent = ""; b.appendChild(errNote(err)); });
-        mcp.callTool(SERVER, "search_issues", queryDecided(), { cache: { refresh: true } }).then(onDecided, function (err) { var d = $("dbanner"); d.textContent = ""; d.appendChild(errNote(err)); });
-        mcp.callTool(SERVER, "search_issues", queryDesks(), { cache: { refresh: true } }).then(onDesks, function (err) { b.appendChild(errNote(err, "Desks:")); });
+        searchNow(true);
       } })));
     }
     b.appendChild(fallback());
@@ -1170,65 +1214,120 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
       b.appendChild(h("div", { class: "note warn", text: "Showing the newest " + list.length + " of " + p.total_count + " " + what + "; the rest are on GitHub." }));
     return list;
   }
+  /* One open search feeds the board and the desks strip: a desk carries `desk` and neither row label; a row is anything
+     carrying decision or needs-review (a row that also carries `desk` breaks the protocol: it is kept as a row, logged once). */
+  var deskOnRowLogged = false;
   function onData(res) {
-    items = itemsOf(res, "banner", "open rows");
-    watchRetried = false;
+    var rows = [], dk = [];
+    itemsOf(res, "banner", "open rows and desks").forEach(function (it) {
+      var ls = labelNames(it).map(function (l) { return l.toLowerCase(); }), desk = ls.indexOf("desk") >= 0;
+      if (ls.indexOf("decision") >= 0 || ls.indexOf("needs-review") >= 0) {
+        if (desk && !deskOnRowLogged) { deskOnRowLogged = true; console.warn("board: " + it.html_url + " carries desk and a row label; shown as a row"); }
+        rows.push(it);
+      } else if (desk && !isPR(it)) dk.push(it);
+    });
+    items = rows; desks = dk;
     var at = res && res.cache && res.cache.storedAt ? res.cache.storedAt : Date.now();
+    sq.okAt = at;
     $("asof").textContent = "as of " + utc(at);
     $("refresh").hidden = false;
     render();
   }
   function onDecided(res) {
     ditems = itemsOf(res, "dbanner", "rows decided in the last 7 days");
-    dRetried = false;
     render();
   }
-  function onDesks(res) {
-    desks = itemsOf(res, "kbanner", "desks");
-    kRetried = false;
-    render();
-  }
-  /* The board: decision issues and PRs labelled needs-review, assigned to the viewer (a comma in label: is OR). */
+  /* The board and the desks: decision issues and PRs labelled needs-review, and desk issues, assigned to the viewer
+     (a comma in label: is OR). */
   function query() {
-    return { query: "is:open assignee:" + login + " label:decision,needs-review", perPage: 100, sort: "updated", order: "desc", fields: FIELDS.slice() };
+    return { query: "is:open assignee:" + login + " label:decision,needs-review,desk", perPage: 100, sort: "updated", order: "desc", fields: FIELDS.slice() };
   }
   function queryDecided() {
     var since = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
     return { query: "is:closed assignee:" + login + " label:decision,needs-review closed:>=" + since, perPage: 100, sort: "updated", order: "desc", fields: FIELDS.concat(["closed_at"]) };
   }
-  function queryDesks() {
-    return { query: "is:open is:issue label:desk assignee:" + login, perPage: 100, sort: "updated", order: "desc", fields: FIELDS.slice() };
+
+  /* ---------- searches: the one owner of every search_issues call the page makes ---------- */
+  /* Budget: the open search every 2 min, the closed search every 15 min and when the viewer opens Decided or presses
+     Refresh. A rate-limit answer pauses both until max(the retry-after it carries, 60 s), doubled on each consecutive
+     one up to 15 min, reset by a success; meanwhile the lists stay and one muted line under the header says so. */
+  var OPEN_EVERY = 120000, CLOSED_EVERY = 900000, SLOW_MIN = 60000, SLOW_MAX = 900000;
+  var sq = { timer: null, busy: false, nextOpen: 0, nextClosed: 0, pausedUntil: 0, strikes: 0, okAt: null };
+  function errText(e) {
+    var r = "";
+    try { r = e && e.result !== undefined ? JSON.stringify(e.result) : ""; } catch (x) {}
+    return String((e && e.message) || "") + " " + r;
   }
-  function retryLater(e) {
-    setTimeout(function () { mcp.invalidate(SERVER, "search_issues").catch(function () {}); }, Math.min(e.retryAfterMs || 0, 60000) + 800 + Math.random() * 1500);
+  /* A 429, any "rate limit" text, or a 403 that names a secondary/abuse limit or a retry-after; a plain 403 (no access) is not one. */
+  function rateLimited(e) {
+    if (!e) return false;
+    if (e.code === "rate_limited") return true;
+    var t = errText(e);
+    return /rate limit/i.test(t) || /\b429\b/.test(t) || (/\b403\b/.test(t) && /secondary|abuse|retry.after/i.test(t));
   }
-  function watch() {
-    if (unwatch) unwatch();
-    if (unwatchD) unwatchD();
-    if (unwatchK) unwatchK();
-    unwatch = mcp.watchTool(SERVER, "search_issues", query(), function (ev) {
-      if (ev.type === "data") return onData(ev.result);
-      var e = ev.error;
-      if (DENIED[code(e)]) return dropData(e);
-      var b = $("banner"); b.textContent = "";
-      b.appendChild(errNote(e, items ? "Showing the last good list." : "Could not load your decisions."));
-      if (e && e.retryable && !watchRetried) { watchRetried = true; retryLater(e); }
-    }, { refetchInterval: 120000 });
-    unwatchD = mcp.watchTool(SERVER, "search_issues", queryDecided(), function (ev) {
-      if (ev.type === "data") return onDecided(ev.result);
-      var e = ev.error;
-      var b = $("dbanner"); b.textContent = "";
-      b.appendChild(errNote(e, ditems ? "Showing the last good list." : "Could not load the closed decisions."));
-      if (e && e.retryable && !dRetried) { dRetried = true; retryLater(e); }
-    }, { refetchInterval: 120000 });
-    unwatchK = mcp.watchTool(SERVER, "search_issues", queryDesks(), function (ev) {
-      if (ev.type === "data") return onDesks(ev.result);
-      var e = ev.error;
-      if (DENIED[code(e)]) return dropData(e);
-      var b = $("kbanner"); b.textContent = "";
-      b.appendChild(errNote(e, desks ? "Desks: showing the last good list." : "Could not load your desks."));
-      if (e && e.retryable && !kRetried) { kRetried = true; retryLater(e); }
-    }, { refetchInterval: 120000 });
+  /* The longest wait the error names: "[retry after Ns]", a Retry-After seconds value, an X-RateLimit-Reset epoch, retryAfterMs. */
+  function retryAfterOf(e) {
+    var t = errText(e), w = e && typeof e.retryAfterMs === "number" ? e.retryAfterMs : 0, m;
+    if ((m = /retry after (\d+)\s*s/i.exec(t))) w = Math.max(w, Number(m[1]) * 1000);
+    if ((m = /retry-after\W{0,4}(\d+)/i.exec(t))) w = Math.max(w, Number(m[1]) * 1000);
+    if ((m = /x-ratelimit-reset\W{0,4}(\d{9,})/i.exec(t))) w = Math.max(w, Number(m[1]) * 1000 - Date.now());
+    return w;
+  }
+  function slowLine() {
+    var el = $("slow");
+    if (!sq.pausedUntil) { el.hidden = true; el.textContent = ""; return; }
+    el.textContent = "GitHub asked the page to slow down; " + (sq.okAt ? "showing the list as of " + utc(sq.okAt) : "no list has been read yet") + "; next try " + utc(sq.pausedUntil) + ".";
+    el.hidden = false;
+  }
+  function schedule() {
+    if (sq.timer) clearTimeout(sq.timer);
+    sq.timer = null;
+    if (!mcp || !login) return;
+    var now = Date.now(), at = sq.pausedUntil > now ? sq.pausedUntil : Math.min(sq.nextOpen, sq.nextClosed);
+    sq.timer = setTimeout(tick, Math.max(0, at - now));
+  }
+  /* Run what is due, open first; a rate-limit answer on the first stops the second. Hidden tab: wait for visibilitychange. */
+  function tick() {
+    if (sq.timer) clearTimeout(sq.timer);
+    sq.timer = null;
+    if (!mcp || !login || sq.busy) return;
+    if (document.hidden) return;
+    var now = Date.now();
+    if (sq.pausedUntil > now) { slowLine(); return schedule(); }
+    var jobs = [];
+    if (now >= sq.nextOpen) jobs.push(true);
+    if (now >= sq.nextClosed) jobs.push(false);
+    if (!jobs.length) return schedule();
+    sq.busy = true; $("refresh").disabled = true;
+    jobs.reduce(function (chain, open) {
+      return chain.then(function () { if (sq.pausedUntil <= Date.now()) return runSearch(open); });
+    }, Promise.resolve()).then(done, function (e) { done(); throw e; });
+    function done() { sq.busy = false; $("refresh").disabled = false; schedule(); }
+  }
+  /* The open search (and the closed one with it when closed is true, or alone when only is true) now, inside the pause. */
+  function searchNow(closed, only) {
+    if (!only) sq.nextOpen = 0;
+    if (closed) sq.nextClosed = 0;
+    tick();
+  }
+  function runSearch(open) {
+    return read(function () { return mcp.callTool(SERVER, "search_issues", open ? query() : queryDecided(), { cache: { refresh: true } }); }).then(function (res) {
+      sq.strikes = 0; sq.pausedUntil = 0;
+      if (open) { sq.nextOpen = Date.now() + OPEN_EVERY; onData(res); } else { sq.nextClosed = Date.now() + CLOSED_EVERY; onDecided(res); }
+      slowLine();
+    }, function (e) {
+      if (rateLimited(e)) {
+        sq.strikes++;
+        sq.pausedUntil = Date.now() + Math.min(Math.max(retryAfterOf(e), SLOW_MIN) * Math.pow(2, sq.strikes - 1), SLOW_MAX);
+        slowLine();
+        return;
+      }
+      if (open) sq.nextOpen = Date.now() + OPEN_EVERY; else sq.nextClosed = Date.now() + CLOSED_EVERY;
+      if (open && DENIED[code(e)]) return dropData(e);
+      var b = $(open ? "banner" : "dbanner"); b.textContent = "";
+      if (open) b.appendChild(errNote(e, items ? "Showing the last good list." : "Could not load your decisions and desks."));
+      else b.appendChild(errNote(e, ditems ? "Showing the last good list." : "Could not load the closed decisions."));
+    });
   }
 
   /* ---------- connector absent ---------- */
@@ -1331,27 +1430,13 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
   function show(tab) {
     TABS.forEach(function (t) { $("view-" + t).hidden = t !== tab; $("tab-" + t).setAttribute("aria-selected", String(t === tab)); });
   }
-  TABS.forEach(function (t) { $("tab-" + t).addEventListener("click", function () { show(t); }); });
+  TABS.forEach(function (t) { $("tab-" + t).addEventListener("click", function () { show(t); if (t === "decided") searchNow(true, true); }); });
   if (location.hash === "#awards" || location.hash === "#decided") show(location.hash.slice(1));
   $("aw-path").value = "awards/" + new Date().toISOString().slice(0, 7) + ".jsonl";
   $("aw-repo").value = store("aw-repo") || "";
   $("aw-form").addEventListener("submit", loadAwards);
-  $("refresh").addEventListener("click", function () {
-    if (!mcp || !login) return;
-    var btn = $("refresh"); btn.disabled = true;
-    Promise.all([
-      read(function () { return mcp.callTool(SERVER, "search_issues", query(), { cache: { refresh: true } }); }).then(onData, function (e) {
-        if (DENIED[code(e)]) return dropData(e);
-        var b = $("banner"); b.textContent = ""; b.appendChild(errNote(e, "Refresh failed; showing the last good list."));
-      }),
-      read(function () { return mcp.callTool(SERVER, "search_issues", queryDecided(), { cache: { refresh: true } }); }).then(onDecided, function (e) {
-        var b = $("dbanner"); b.textContent = ""; b.appendChild(errNote(e, "Refresh failed; showing the last good list."));
-      }),
-      read(function () { return mcp.callTool(SERVER, "search_issues", queryDesks(), { cache: { refresh: true } }); }).then(onDesks, function (e) {
-        var b = $("kbanner"); b.textContent = ""; b.appendChild(errNote(e, "Desks: refresh failed; showing the last good list."));
-      })
-    ]).then(function () { btn.disabled = false; });
-  });
+  $("refresh").addEventListener("click", function () { searchNow(true); });
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) tick(); });
 
   var use = window.claude && window.claude.use ? window.claude.use("mcp") : Promise.resolve(null);
   Promise.resolve(use).catch(function () { return null; }).then(function (ns) {
@@ -1361,7 +1446,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
       login = (res.payload && res.payload.login) || "";
       if (!login) throw { code: "tool_error", message: "GitHub did not say who you are." };
       $("who").textContent = "@" + login;
-      watch();
+      searchNow(true);
     }).catch(function (e) { absent(e); });
   });
 })();

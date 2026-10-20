@@ -1049,6 +1049,9 @@ PY
 )"
 }
 
+# ROW_SECTIONS: a decision row's six body sections, in order (decision.sh new and revise, board.sh). One owner of the list.
+ROW_SECTIONS=("Decision" "Unblocks" "Waits" "Recommendation" "Approve with" "Record")
+
 # Same, but exits 1 naming the issue when the section is absent or empty.
 section_required() {
   local heading="$1" body="$2" who="$3" out
@@ -1532,13 +1535,17 @@ row_phrase() {
   echo "daita-beast: $who: '## Approve with' carries no quoted phrase; bare approve/revise:/reject: still count" >&2
 }
 
-# The amend line: the one line publish.sh request --amend posts on a publish row after it force-updates the PR branch.
-# One owner of its shape: amend_line writes it, row_amended_at reads it.
-#   Amended at <UTC>: <n> files; added <list>; removed <list>; changed <list>
+# The amend line: the first line of the comment that says a row changed after it was filed: decision.sh revise (the body
+# revised after a revise:) and publish.sh request --amend (the PR branch force-updated) post it. One owner of its shape:
+# amend_line writes it, row_amended_at reads it, the board page mirrors AMEND_LINE_RE (plugin/tests/regex-mirror.test.mjs).
+#   Amended at <UTC>: <what changed, one line>
 AMEND_LINE_RE='^Amended at [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z: '
 
-# amend_line <n files> <added> <removed> <changed>: the line, the lists already joined and truncated ("none" when empty).
-amend_line() { printf 'Amended at %s: %s files; added %s; removed %s; changed %s' "$(utc_now)" "$1" "$2" "$3" "$4"; }
+# amend_line "<what changed>": the line, stamped now.
+amend_line() {
+  [[ $# -eq 1 && -n "$1" && "$1" != *$'\n'* ]] || die "amend_line takes one line saying what changed, not $*"
+  printf 'Amended at %s: %s' "$(utc_now)" "$1"
+}
 
 # row_amended_at <row>: (a row_read result) the created_at of the row's newest comment whose first line is an amend line,
 # or nothing. Any author counts: a stray amend line only makes an earlier approval read as stale (the safe direction).
@@ -1569,6 +1576,24 @@ row_answer_url() {
   fi
   echo "$last_u"
 }
+
+# row_revise_pending <row>: (a row_read result) the URL of the decider's revise: comment when it is their standing answer
+# (row_answer_url) and no amend line (row_amended_at) is newer than it, else nothing: the decider asked for a revision and
+# the row was not revised. While it holds no approval closes the row (decision.sh close, pr.sh close --merge, publish.sh
+# merge); decision.sh revise (or publish.sh request --amend) ends it. A reject still closes.
+row_revise_pending() {
+  [[ $# -eq 1 ]] || die "row_revise_pending takes one row (row_read), not $*"
+  local row="$1" phrase u at amended
+  phrase="$(row_phrase "$(jq -r '"\(.issue.repository_url | sub(".*/repos/"; ""))#\(.issue.number)"' <<< "$row")" "$(jq '.issue' <<< "$row")" 2>/dev/null)"
+  u="$(row_answer_url "$row" "$phrase" revise)" || exit 1
+  [[ -n "$u" ]] || return 0
+  at="$(jq -r --arg u "$u" '.comments[] | select(.html_url == $u) | .created_at' <<< "$row")"
+  amended="$(row_amended_at "$row")"
+  [[ -n "$amended" && "$amended" > "$at" ]] || echo "$u"
+}
+
+# revise_pending_refusal <url>: the one wording of the refusal while row_revise_pending holds.
+revise_pending_refusal() { die "the decider asked for a revision at $1 and the row was not revised: the seat runs decision.sh revise first"; }
 
 # RECORD_PATH_RE: the dated records' directory (an ERE and a Python regex alike). The publish scrub refuses it in what
 # leaves the twin; wrapup.sh plan deletes the record files a closed row names under it. One owner of the shape.

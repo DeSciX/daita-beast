@@ -10,13 +10,14 @@ This page is published from a claude.ai (or Cowork) session where the GitHub con
 
 ## Data
 
-Three watches through `search_issues`, each on a 120 s `refetchInterval`, all for the viewer's login from `get_me`, across every organization:
+Two `search_issues` calls, both for the viewer's login from `get_me`, across every organization:
 
-| Watch | Query | Feeds |
-|---|---|---|
-| Board | `is:open assignee:<login> label:decision,needs-review` (a comma in `label:` is OR; issues and PRs) | the Board tab; `cache.storedAt` shows as "as of" |
-| Decided | `is:closed assignee:<login> label:decision,needs-review closed:>=<seven days ago>` | the Decided tab (closed issues, closed and merged PRs) |
-| Desks | `is:open is:issue label:desk assignee:<login>` | the desks strip and the drill-down |
+| Search | Query | When | Feeds |
+|---|---|---|---|
+| Open | `is:open assignee:<login> label:decision,needs-review,desk` (a comma in `label:` is OR; issues and PRs) | at load, then every 2 min | split by label: an issue carrying `desk` and neither row label is a desk (the desks strip and the drill-down); anything carrying `decision` or `needs-review` is a row of the Board tab (a row that also carries `desk` breaks the protocol; it is shown as a row and logged once); "as of" is that search's time |
+| Decided | `is:closed assignee:<login> label:decision,needs-review closed:>=<seven days ago>` | at load, then every 15 min, and at once when the viewer opens the Decided tab or presses Refresh | the Decided tab (closed issues, closed and merged PRs) |
+
+The read budget is one open search per 2 min, one closed search per 15 min, and a row's or desk's comments read only when its `updated_at` changed since the last read. A search answered with a rate limit (a 429, "rate limit" in the error, or a 403 naming a secondary limit or a retry-after) pauses both searches until max(the retry-after it carries, 60 s), doubled on each consecutive one up to 15 min and reset by a success, and the page keeps its lists and shows one muted line under the header, "GitHub asked the page to slow down; showing the list as of <time>; next try <time>.", instead of an error block.
 
 - A row is a PR when its `html_url` contains `/pull/<n>`. This connector's search results carry no `pull_request` field, and its `labels` and `assignees` are strings.
 - A decision issue's body is parsed by shape into six sections: `## Decision`, `## Unblocks`, `## Waits`, `## Recommendation`, `## Approve with`, `## Record`. A body missing a section renders the card with "malformed: <missing section>" and no buttons. The exact phrase is the quoted string in `## Approve with`.

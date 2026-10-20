@@ -1,6 +1,6 @@
 ---
 name: connector
-description: Run the Beast protocol without a shell, through the GitHub connector (Cowork, Claude.ai chat, or any surface with GitHub MCP tools and no Bash) — board, file a decision (new row), assign a row to a seat, request review on a PR, answer, status, ack, inbox, close, resume, the desk (ask, answer, message, desk inbox), and the workstream seat map. Use when a Beast verb is asked for and you have GitHub connector tools but no Bash tool.
+description: Run the Beast protocol without a shell, through the GitHub connector (Cowork, Claude.ai chat, or any surface with GitHub MCP tools and no Bash) — board, file a decision (new row), assign a row to a seat, request review on a PR, answer, status, ack, inbox, close, revise, resume, the desk (ask, answer, message, desk inbox), and the workstream seat map. Use when a Beast verb is asked for and you have GitHub connector tools but no Bash tool.
 ---
 
 # connector — the protocol as GitHub connector calls
@@ -54,7 +54,7 @@ On the PR (the issues endpoints serve PRs): `issue_write` `{method: "update", la
 
 ## 5. answer
 
-You are the assignee, or relaying their exact words with attribution: one `add_issue_comment` on the issue or PR, nothing else: the `## Approve with` phrase (a bare `approve`/`approved` counts the same there), or `<phrase> — <comment>`, or `revise: <what to change>`, or `reject: <reason>`. Never close, label or edit on an answer; the hearing seat does. On an amended publish row (a comment whose first line matches `Amended at <UTC>: ` on the row), an approval older than the newest amend line no longer counts: answer again after it.
+You are the assignee, or relaying their exact words with attribution: one `add_issue_comment` on the issue or PR, nothing else: the `## Approve with` phrase (a bare `approve`/`approved` counts the same there), or `<phrase> — <comment>`, or `revise: <what to change>`, or `reject: <reason>`. Never close, label or edit on an answer; the hearing seat does. On an amended row (a comment whose first line matches `Amended at <UTC>: `), an approval older than the newest amend line no longer counts: answer again after it. While your newest answer is a `revise:` with no amend line after it, the row was not revised: an approval does not close it (recipe 10); reply, revise or reject.
 
 ## 6. status
 
@@ -90,7 +90,7 @@ Record: <comment URL or repo commit>. Closed by seat <login>/<LABEL> at <UTC>.
 
 BEAST-ACK seat=<login>/<LABEL> at=<UTC> state=seen next=<the act>
 ```
-(`Rejected on the word, verbatim` on `reject:`, with the label `rejected` added through `issue_write` `update` with the full label list), then `issue_write` `{method: "update", state: "closed", state_reason: "completed"}` (`not_planned` on reject). **PR close:** on approve, `merge_pull_request` first; if GitHub refuses, report the refusal and stop, nothing commented; then the same close comment. On reject, the comment, the label `rejected`, and close the PR unmerged (`issue_write` `update` `state: "closed"`). The pinned generated board is republished by a shell seat on its next close; say so.
+Before an approving close, read the comments (`issue_read` `get_comments`): when the assignee's newest answer-form comment is a `revise:` and no comment whose first line matches `Amended at <UTC>: ` is newer, stop: "the decider asked for a revision at <url> and the row was not revised: the seat runs decision.sh revise first" (recipe 13). A reject still closes. (`Rejected on the word, verbatim` on `reject:`, with the label `rejected` added through `issue_write` `update` with the full label list), then `issue_write` `{method: "update", state: "closed", state_reason: "completed"}` (`not_planned` on reject). **PR close:** on approve, `merge_pull_request` first; if GitHub refuses, report the refusal and stop, nothing commented; then the same close comment. On reject, the comment, the label `rejected`, and close the PR unmerged (`issue_write` `update` `state: "closed"`). The pinned generated board is republished by a shell seat on its next close; say so.
 
 ## 11. desk (ask, answer, message, desk inbox)
 
@@ -122,6 +122,17 @@ The seat map of workstream `<slug>` is the `## Seats` table on its tracking issu
    - `create_branch` `{branch: "beast/ws-<slug>-seats", from_branch: "main"}`, the same `create_or_update_file` on that branch, then `create_pull_request` `{title: "workstream <slug>: seat map", head, base: "main"}` and recipe 4 on it.
 
 `workstream.sh new` (a Project, milestones, the tracking issue) is a shell act.
+
+## 13. revise (answer a `revise:` by revising the row)
+
+You are the hearing seat and the assignee's newest answer-form comment on the open row is `revise: <what to change>`; any other standing answer is refused ("not a revise: decision.sh revise answers a revise only"). A comment-only reply is not a revision. Two writes, in this order:
+1. `issue_read` `{method: "get"}`, then `issue_write` `{method: "update", body}` with only the sections the revise changes rewritten (each the text between `## <Section>` and the next `## `); every other byte the same. A new phrase replaces the quoted phrase in `## Approve with` and keeps its paragraph. Run recipe 2's checks on the result (six non-empty sections, one phrase, no `|`, the content inline).
+2. One `add_issue_comment` whose first line is exactly the amend line (`amend_line`, `AMEND_LINE_RE` in `lib.sh`), then a short summary:
+   ```
+   Amended at <UTC>: revised after <the revise comment URL>; changed: <the sections, in body order, comma-separated>
+
+   The row's body is revised in answer to the decider's revise (by seat <login>/<LABEL>). Approve with "<the phrase>", or answer again; an approval given before this line no longer counts.
+   ```
 
 ## Cannot be done here
 

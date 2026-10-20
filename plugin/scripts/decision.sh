@@ -15,6 +15,15 @@
 #   Every write (new, record, close) refuses a public or public-intended repo (coord_write_guard, lib.sh).
 #   decision.sh close <owner/repo#N | url> --words "<verbatim ruling>" --record "<repo commit | comment url>" --by <LABEL | login/LABEL> [--board <owner/repo>] [--next "<act>"]
 #       the close comment's last line is the closing seat's BEAST-ACK (state=seen); the other seats ack separately
+#   decision.sh revise <owner/repo#N | url> --by <LABEL | login/LABEL> [--decision …] [--unblocks …] [--waits …]
+#       [--recommendation …] [--approve-with "<exact phrase>"] [--record …] | --body-file <md>
+#       answers the decider's revise: by revising the row itself: refuses unless the decider's standing answer on the row
+#       is a revise: (row_answer_url), rewrites only the named sections of the body (section_replace; --approve-with
+#       swaps the quoted phrase and keeps the paragraph; --body-file replaces the six, each checked by section_required),
+#       then posts ONE comment whose first line is the amend line (amend_line: "revised after <revise url>; changed:
+#       <sections>"). An approval older than the amend no longer counts (row_answer_url), and until the amend no approval
+#       closes the row (row_revise_pending: decision.sh close, pr.sh close --merge, publish.sh merge). A reply comment
+#       is not a revision. On a pull request, push the change first; --body-file then replaces the PR body whole.
 #   decision.sh record --repo ... --title ... --assignee ... <the new sections or --body-file> --words "<verbatim>" --record "<repo commit>" --by <LABEL | login/LABEL> [--seat ...] [--rejected]
 #       files the row AND closes it on the words in one act: for a decision the decider gave in session before a
 #       row existed, so the board's decided table carries it (nothing is decided off the board).
@@ -114,7 +123,7 @@ EOF
     ask_inline_check "new decision '$title'" "$title
 $body"
     waits_on_parse "new decision '$title'" "$body" >/dev/null || exit 1
-    for h in "Decision" "Unblocks" "Waits" "Recommendation" "Approve with" "Record"; do
+    for h in "${ROW_SECTIONS[@]}"; do
       section_required "$h" "$body" "new decision '$title'" >/dev/null
     done
     phrase="$(approve_phrase "$body")"
@@ -169,6 +178,10 @@ $body"
     rn="$(parse_issue_ref "$ref")" || exit 1; read -r repo number <<< "$rn"
     coord_write_guard "$repo" "$by"
     issue_get "$repo" "$number" | jq -e '.pull_request == null' >/dev/null || die "$repo#$number is a pull request: close it with pr.sh close (--merge or --rejected)"
+    if [[ $rejected -eq 0 ]]; then
+      pend="$(row_revise_pending "$(row_read "$repo" "$number")")" || exit 1
+      [[ -z "$pend" ]] || revise_pending_refusal "$pend"
+    fi
     if [[ $rejected -eq 1 ]]; then
       row_close_comment "$repo" "$number" "$words" "$rec" "$by" "$next" rejected
       row_mark_rejected "$repo" "$number"
@@ -179,6 +192,112 @@ $body"
     fi
     echo "closed $repo#$number"
     row_after_close "$repo" "$number" "$by" "$board"
+    ;;
+  revise)
+    ref="${1:-}"; shift || true
+    by=""; body_file=""; names=(); vals=()
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --by) by="$2"; shift 2 ;;
+        --body-file) body_file="$2"; shift 2 ;;
+        --decision) names+=("Decision"); vals+=("$2"); shift 2 ;;
+        --unblocks) names+=("Unblocks"); vals+=("$2"); shift 2 ;;
+        --waits) names+=("Waits"); vals+=("$2"); shift 2 ;;
+        --recommendation) names+=("Recommendation"); vals+=("$2"); shift 2 ;;
+        --approve-with) names+=("Approve with"); vals+=("$2"); shift 2 ;;
+        --record) names+=("Record"); vals+=("$2"); shift 2 ;;
+        *) die "unknown argument $1" ;;
+      esac
+    done
+    [[ -n "$ref" && -n "$by" ]] || die "usage: decision.sh revise <issue> --by <SEAT> (--decision … | --unblocks … | --waits … | --recommendation … | --approve-with \"…\" | --record …)... | --body-file <md>"
+    [[ -z "$body_file" || ${#names[@]} -eq 0 ]] || die "revise takes the sections to change, or --body-file, not both"
+    [[ -n "$body_file" || ${#names[@]} -gt 0 ]] || die "revise needs the sections to change (--decision, --unblocks, --waits, --recommendation, --approve-with, --record) or --body-file: a revision changes the row, a reply comment does not"
+    [[ -z "$body_file" || -f "$body_file" ]] || die "no body file $body_file"
+    dupes="$(printf '%s\n' "${names[@]:-}" | sed '/^$/d' | sort | uniq -d | paste -sd, -)"
+    [[ -z "$dupes" ]] || die "revise names a section twice: $dupes"
+    by="$(seat_id "$by")" || exit 1
+    rn="$(parse_issue_ref "$ref")" || exit 1; read -r repo number <<< "$rn"
+    coord_write_guard "$repo" "$by"
+    rd="$(row_read "$repo" "$number")" || exit 1
+    info="$(jq '.issue' <<< "$rd")"
+    who="$repo#$number"
+    [[ "$(jq -r .state <<< "$info")" == open ]] || die "$who is closed: a decided row is not revised"
+    is_pr=0; jq -e '.pull_request != null' <<< "$info" >/dev/null && is_pr=1
+    phrase="$(row_phrase "$who" "$info" 2>/dev/null)"
+    rev="$(row_answer_url "$rd" "$phrase" revise 2>/dev/null)" || exit 1
+    if [[ -z "$rev" ]]; then
+      standing="none"
+      for k in approve reject; do u="$(row_answer_url "$rd" "$phrase" "$k" 2>/dev/null)" || exit 1; [[ -z "$u" ]] || standing="$k ($u)"; done
+      die "$who: the decider's standing answer is not a revise: (it is $standing): decision.sh revise answers a revise only; a question back is a reply on the row"
+    fi
+    old="$(jq -r '.body // ""' <<< "$info")"
+    tmp="$(mktemp)"
+    if [[ -n "$body_file" ]]; then
+      cp "$body_file" "$tmp"
+      new="$(cat "$tmp")"
+      if [[ $is_pr -eq 0 ]]; then
+        for h in "${ROW_SECTIONS[@]}"; do
+          section_required "$h" "$new" "revise $who" >/dev/null
+          [[ "$(printf '%s\n' "$old" | section "$h")" == "$(printf '%s\n' "$new" | section "$h")" ]] || names+=("$h")
+        done
+      else
+        names+=("the PR body")
+      fi
+    else
+      printf '%s\n' "$old" > "$tmp"
+      for i in "${!names[@]}"; do
+        h="${names[$i]}"; v="${vals[$i]}"
+        [[ -n "$(sed '/^[[:space:]]*$/d' <<< "$v")" ]] || die "revise $who: --$(tr 'A-Z ' 'a-z-' <<< "$h") is empty"
+        if [[ "$h" == "Approve with" ]]; then
+          [[ "$v" != *'"'* && "$v" != *$'\n'* ]] || die "revise $who: --approve-with is the exact phrase, one line, no double quote"
+          cur="$(printf '%s\n' "$old" | section "Approve with")"
+          if grep -q '"[^"]*"' <<< "$cur"; then
+            v="$(PH="$v" python3 -I -c 'import os,re,sys; sys.stdout.write(re.sub(r"\"[^\"]*\"", lambda m: "\"" + os.environ["PH"] + "\"", sys.stdin.read(), count=1))' <<< "$cur")"
+          else
+            v="\"$v\""
+          fi
+        fi
+        section_replace "$h" "$v" < "$tmp" > "$tmp.n" && mv "$tmp.n" "$tmp"
+      done
+      new="$(cat "$tmp")"
+    fi
+    ask_inline_check "revise $who" "$new"
+    if [[ $is_pr -eq 0 ]]; then
+      waits_on_parse "revise $who" "$new" >/dev/null || exit 1
+      np="$(approve_phrase "$new")"
+      [[ -n "$np" ]] || die "revise $who: its '## Approve with' section has no double-quoted phrase"
+      [[ "$np" != *"|"* ]] || die "revise $who: the approving phrase '$np' carries '|': one exact approving phrase per row; a choice between options is a desk ask"
+    else
+      np="$(row_phrase "$who" "$(jq --arg b "$new" '.body = $b' <<< "$info")")"
+    fi
+    pend="$(row_revise_pending "$rd")" || exit 1
+    if [[ "$new" == "$old" ]]; then
+      # A rerun after the body edit landed and the amend comment did not: post the comment only.
+      [[ -n "$pend" ]] || die "revise $who: nothing to change: the body already carries these sections, and the row was amended after $rev"
+      echo "the body of $who already carries this revision; posting the amend line only" >&2
+    else
+      issue_edit_body "$repo" "$number" "$tmp"
+    fi
+    rm -f "$tmp"
+    # The changed sections in the body's own order, once each.
+    changed="$(for h in "${ROW_SECTIONS[@]}" "the PR body"; do for n in "${names[@]:-}"; do if [[ "$n" == "$h" ]]; then echo "$h"; break; fi; done; done | paste -sd, - | sed 's/,/, /g')"
+    line="$(amend_line "revised after $rev; changed: $changed")"
+    summary="$(for h in "${ROW_SECTIONS[@]}"; do
+        [[ ",$(sed 's/, /,/g' <<< "$changed")," == *",$h,"* ]] || continue
+        first="$(printf '%s\n' "$new" | section "$h" | sed '/^[[:space:]]*$/d' | head -1 | cut -c1-200)"
+        echo "- $h: $first"
+      done)"
+    cbody="$line
+
+The row's body is revised in answer to the decider's revise (by seat $by). ${summary:+The changed sections now open:
+$summary
+
+}Approve with \"$np\", or answer again; an approval given before this line no longer counts."
+    url="$(issue_comment "$repo" "$number" "$cbody")" \
+      || die "the body of $who is revised but the amend comment was NOT posted (named above): the row still reads as not revised; rerun the same decision.sh revise"
+    echo "revised $who: $changed"
+    echo "$url"
+    echo "approves with \"$np\""
     ;;
   inbox)
     seat="${1:-}"; shift || true
@@ -215,7 +334,7 @@ $body"
     else
       echo "board: unacked for $seat: $n row(s). Ack each with ack.sh <row> --seat $seat --state seen|executed|blocked --next \"<act>\" once acted on."
       [[ -z "$out_closed" ]] || { echo; echo "closed on the word (a PR: merged or rejected; read the close comment, execute, ack):"; printf '%s' "$out_closed"; }
-      [[ -z "$out_answered" ]] || { echo; echo "answered by the decider, still open (approve on a PR: pr.sh close --merge; revise or a question back: reply on the row, ack):"; printf '%s' "$out_answered"; }
+      [[ -z "$out_answered" ]] || { echo; echo "answered by the decider, still open (approve on a PR: pr.sh close --merge; a revise: decision.sh revise <row>; a question back: reply on the row; then ack):"; printf '%s' "$out_answered"; }
       [[ -z "$out_new" ]] || { echo; echo "new rows naming you (read, ack seen):"; printf '%s' "$out_new"; }
     fi
     echo
@@ -240,5 +359,5 @@ $body"
     [[ "$url" == https://github.com/* ]] || die "record: the row was not filed: $url"
     "$0" close "$url" --words "$words" --record "$rec" --by "$by" $([[ $rejected -eq 1 ]] && echo --rejected)
     ;;
-  *) die "usage: decision.sh new|close|record|inbox" ;;
+  *) die "usage: decision.sh new|close|revise|record|inbox" ;;
 esac

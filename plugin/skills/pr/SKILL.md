@@ -12,7 +12,7 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/pr.sh request <owner/repo#N | PR url> --seat <YOUR
 ```
 `--milestone` files the PR under that open milestone of its repo; `request` refuses without it when the repo has any open milestone, listing them. It labels the PR `needs-review` and `seat:<login>/<LABEL>` and assigns the decider (the roster's `people[]` owner; it dies when that is not exactly one, then pass `--assignee`). The body is the hand-back shape (`## What`, `## Evidence`, `## Review against the engineering rules`, `## Closes`, `docs/protocol.md`). Add `## Approve with` and a quoted phrase when "approve" alone would be ambiguous; without one the phrase is `approve`.
 
-The decider answers on the PR with the decision forms: the phrase, `<phrase> — <comment>`, bare `approve`/`approved`, `revise: <what>` (push the change, reply, the PR stays), `reject: <reason>`. Your inbox (`decision.sh inbox <SEAT>`) lists it as answered.
+The decider answers on the PR with the decision forms: the phrase, `<phrase> — <comment>`, bare `approve`/`approved`, `revise: <what>` (push the change, then `decision.sh revise <pr> --by <SEAT> …` posts the amend line; a reply alone is not a revision and `pr.sh close --merge` refuses until it; the PR stays), `reject: <reason>`. Your inbox (`decision.sh inbox <SEAT>`) lists it as answered.
 
 On approve:
 ```
