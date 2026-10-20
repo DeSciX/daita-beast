@@ -9,8 +9,8 @@
 #              "?" in the second person or opening as a request (shall, should, can, may, do, does, would, will, which,
 #              ok, proceed, approve, go), or a phrase such as "waiting on you", "your call", "approve with", "shall I",
 #              "do you want"; a line that carries a GitHub issue or pull request link points at a row and does not count
-#   filed      a Bash call of this turn (the transcript from the turn's prompt_id) ran decision.sh new|record or
-#              desk.sh ask and its result is not an error
+#   filed      a Bash call of this turn (the transcript from the turn's prompt_id) ran decision.sh new|record|revise,
+#              desk.sh ask, or publish.sh|pr.sh request (each files or revises a row), and its result is not an error
 # Block: {"decision": "block", "reason": …}. A hook fault never blocks: it is named on stderr and the hook exits 0.
 set -u
 scripts="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -81,7 +81,7 @@ if start is None:
     start = 0
     for i, d in enumerate(rows):
         if d.get("type") == "user" and not d.get("isMeta") and any(b.get("type") == "text" for b in blocks(d)): start = i
-FILE = re.compile(r"decision\.sh[\x27\"]?\s+(new|record)\b|desk\.sh[\x27\"]?\s+ask\b")
+FILE = re.compile(r"decision\.sh[\x27\"]?\s+(new|record|revise)\b|desk\.sh[\x27\"]?\s+ask\b|(publish|pr)\.sh[\x27\"]?\s+request\b")
 calls, ok = {}, set()
 for d in rows[start:]:
     for b in blocks(d):

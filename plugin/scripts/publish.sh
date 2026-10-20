@@ -48,6 +48,8 @@
 #       later pull brings only outside changes), closes the row on the words. On "reject: …": closes the PR unmerged,
 #       deletes the branch, closes the row rejected. --record defaults to the decider's answer comment on the row; on an
 #       amended row an approval is only the decider's comment newer than the latest amend line (--record is refused).
+#       An approval is refused while the decider's revise: on the row has no amend line after it (row_revise_pending):
+#       request --amend's line, or decision.sh revise, answers it.
 #   publish.sh pull
 #       merges the public default branch into twin main (outside contributions), in the twin's main checkout on
 #       main with a clean tree; on a conflict it aborts the merge and names the conflicted files.
@@ -545,7 +547,7 @@ case "$cmd" in
       public_send PATCH "repos/$PUB/pulls/$n" "${args[@]}" >/dev/null
       echo "retitled $PUB#$n${body:+ and replaced its body}"
       coord_write_guard "$TWIN"
-      line="$(amend_line "$nf" "$added" "$removed" "$changed")"
+      line="$(amend_line "$nf files; added $added; removed $removed; changed $changed")"
       url="$(issue_comment "$TWIN" "$row" "$line")" || die "the PR branch is amended but the line on $TWIN#$row was NOT posted (named above): an earlier approval would still read as standing; rerun publish.sh request $slug --amend --seat $seat"
       G update-ref -d "$pend"
       echo "$url"
@@ -611,6 +613,10 @@ case "$cmd" in
     esac
     row="$(slug_row "$slug")" || exit 1
     rowj="$(row_read "$TWIN" "$row")" || exit 1
+    if [[ "$kind" == approve ]]; then
+      pend="$(row_revise_pending "$rowj")" || exit 1
+      [[ -z "$pend" ]] || revise_pending_refusal "$pend"
+    fi
     amended="$(row_amended_at "$rowj")"
     [[ -z "$rec" || -z "$amended" || "$kind" != approve ]] \
       || die "$TWIN#$row was amended at $amended: the approval is the decider's comment on the row after it (row_answer_url), and --record cannot show when words given elsewhere were given; nothing merged"

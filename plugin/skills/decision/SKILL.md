@@ -29,6 +29,12 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh close acme/widgets#12 --words "<verbat
 ```
 The close comment's last line is your `BEAST-ACK … state=seen` (`--next` names your act). Then send each other seat printed as unacked ONE line by `SendMessage`: the words verbatim and the issue URL. A seat with no live address is not sent; its inbox lists the row until it acks.
 
+Answer a `revise:` by revising the row, never by a reply comment (`/daita-beast:respond`):
+```
+${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh revise acme/widgets#12 --by <YOUR SEAT> --recommendation "<new text>" --approve-with "<new phrase>"
+```
+It refuses unless the decider's standing answer is a revise, rewrites only the named sections (`--body-file` replaces the six), and posts one comment whose first line is the amend line. Until then `close` refuses an approval, naming the revise; a reject still closes.
+
 `record` is ONLY for a significant decision the decider already gave in a session before a row existed (scope, engine, ship-or-cut, release; anything needing explanatory content): it is filed AND closed in one act. Never use it for something you are about to ask: that is `new`, filed before you ask, open until the word; a minor word (wording, copy, a link) goes only into the repo's dated record, never onto the board. Filing it closed puts it in the board's decided table; the dated record is committed first and cited:
 ```
 ${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh record --assignee <login> [--decides <owner/repo>] --seat <YOUR SEAT> --title "…" <the six sections or --body-file> --words "<verbatim>" --record "<repo commit — path>" --by <YOUR SEAT> [--rejected]

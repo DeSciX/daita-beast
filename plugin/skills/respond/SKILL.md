@@ -11,7 +11,7 @@ A decision issue carries its exact approving phrase in `## Approve with`. Only t
 |---|---|---|---|
 | Approve | the exact phrase, or a bare `approve` / `approved` (the assignee and the issue are unambiguous there) | the exact phrase (it names the decision) | `decision.sh close <ref> --words "<the words>" --record "<comment URL or commit>" --by <SEAT>` and acts |
 | Approve with comment | `<phrase> — <comment>` | same | same, the words quoted in full; the comment shapes the act |
-| Revise | `revise: <what to change>` | same | not an approval: reply on the issue with the revised row (or a question), leave it open; the decider answers again |
+| Revise | `revise: <what to change>` | same | not an approval: revise the row itself, `decision.sh revise <ref> --by <SEAT> --<section> "<new text>"…` (only the named sections change; it posts one comment whose first line is the amend line), and leave it open; a reply comment is not a revision, and no approval closes the row until it is revised; the decider answers again |
 | Reject | `reject: <reason>` | same | `decision.sh close <ref> --words "reject: <reason>" --record "…" --by <SEAT> --rejected` (label `rejected`, closed as not planned); nothing is executed |
 
 Any other wording, and any comment by someone who is not the assignee, is a question back, not an answer: the seat replies on the issue and leaves it open.

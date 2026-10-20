@@ -63,7 +63,7 @@ while IFS=$'\t' read -r num url_ full; do
     row="| PR | [$who]($url_) | $(jq -r .title <<< "$live" | cell) | — | — | — | $(row_phrase "$who" "$live" | cell) | —"
   else
     row="| decision | [$who]($url_)"
-    for h in "Decision" "Unblocks" "Waits" "Recommendation" "Approve with" "Record"; do
+    for h in "${ROW_SECTIONS[@]}"; do
       if text="$(section_required "$h" "$body" "$who" 2>/tmp/board.err)"; then
         row="$row | $(printf '%s' "$text" | cell)"
       else

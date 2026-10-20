@@ -8,7 +8,8 @@
 #       plus the assignee is the request; the decider answers with a comment, as on a decision.
 #   pr.sh close <owner/repo#N | url> --words "<verbatim>" --record "<comment url | repo commit>" --by <LABEL | login/LABEL>
 #             [--merge | --rejected] [--board <owner/repo>] [--next "<act>"]
-#       --merge merges (REST PUT pulls/{n}/merge) and dies naming GitHub's refusal when it will not; --rejected
+#       --merge merges (REST PUT pulls/{n}/merge) and dies naming GitHub's refusal when it will not, and refuses while the
+#       decider's revise: stands unanswered by decision.sh revise (row_revise_pending); --rejected
 #       closes unmerged with the label `rejected`; neither: the PR must already be merged. Then the close
 #       comment (row_close_comment, the one writer shared with decision.sh close: the words, the record and the
 #       closer's BEAST-ACK seen line), the board republished, the row's seats printed.
@@ -81,6 +82,8 @@ case "$cmd" in
       merge)
         [[ -z "$merged_at" ]] || die "$repo#$number was already merged at $merged_at: close it without --merge"
         [[ "$(jq -r .state <<< "$info")" == open ]] || die "$repo#$number is closed unmerged: reopen it before merging"
+        pend="$(row_revise_pending "$(row_read "$repo" "$number")")" || exit 1
+        [[ -z "$pend" ]] || revise_pending_refusal "$pend"
         sha="$(gh_send PUT "repos/$repo/pulls/$number/merge" | jq -r .sha)" || die "$repo#$number: GitHub refused the merge (named above) — nothing was commented or closed"
         echo "merged $repo#$number at $sha"
         row_close_comment "$repo" "$number" "$words" "$rec" "$by" "$next" closed
