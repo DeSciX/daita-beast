@@ -188,7 +188,10 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
 (function () {
   "use strict";
   var SERVER = "github";
+  /* A decision row's six sections and a PR row's two: lib.sh ROW_SECTIONS and PR_ROW_SECTIONS, the owners
+     (plugin/tests/board-page.test.mjs holds these equal to them). */
   var SECTIONS = ["Decision", "Unblocks", "Waits", "Recommendation", "Approve with", "Record"];
+  var PR_SECTIONS = ["Unblocks", "Recommendation"];
   var FIELDS = ["number", "title", "body", "state", "html_url", "labels", "assignees", "comments", "created_at", "updated_at", "repository_url", "milestone"];
   var DENIED = { needs_reauth: 1, server_not_connected: 1, server_not_found: 1, selection_required: 1, blocked_by_policy: 1, approval_required: 1, not_in_manifest: 1, not_granted: 1, consent_required: 1, capability_disabled: 1, capability_removed: 1 };
   var AMBIGUOUS = { server_unavailable: 1, upstream_error: 1, cancelled: 1 };
@@ -280,11 +283,11 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     }
   }
   function errNote(e, prefix) {
-    return h("div", { class: "note err" }, (prefix ? prefix + " " : ""), explain(e), " ", h("code", { text: "[" + code(e) + "]" }));
+    return h("div", { class: "note err" }, (prefix ? prefix + " " : ""), (e && e.tool ? e.tool + ": " : ""), explain(e), " ", h("code", { text: "[" + code(e) + "]" }));
   }
 
   /* ---------- parsing ---------- */
-  function parseBody(body) {
+  function parseBody(body, names) {
     var out = {}, cur = null;
     String(body || "").split(/\r?\n/).forEach(function (line) {
       var m = /^##\s+(.+?)\s*$/.exec(line);
@@ -292,14 +295,14 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
       if (cur) out[cur].push(line);
     });
     var sec = {}, missing = [];
-    SECTIONS.forEach(function (name) {
+    names.forEach(function (name) {
       var v = out[name.toLowerCase()];
       var text = v ? v.join("\n").trim() : "";
       if (!text) missing.push(name); else sec[name] = text;
     });
-    var phrase = null;
-    if (sec["Approve with"]) {
-      var q = /["“]([^"”]+)["”]/.exec(sec["Approve with"]);
+    var phrase = null, aw = out["approve with"] ? out["approve with"].join("\n").trim() : "";
+    if (aw) {
+      var q = /["“]([^"”]+)["”]/.exec(aw);
       if (q) phrase = q[1].trim();
     }
     /* A quoted instruction that itself names one 'single-quoted' phrase: the inner phrase is the word. */
@@ -328,14 +331,14 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
   function seatMatch(a, b) { var p = seatParts(a), q = seatParts(b); return a === b || ((!p.login || !q.login) && p.label === q.label); }
   /* A pull request is told apart by its URL: this connector's search results carry no pull_request field. */
   function isPR(it) { return /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(String((it && it.html_url) || "")); }
-  /* The one parse of a board row. A decision issue: the six sections. A PR: no sections; its phrase is the quoted
-     phrase of a "## Approve with" section when the body has that heading (no quoted phrase there is malformed),
-     otherwise a bare "approve". */
+  /* The one parse of a board row. A decision issue: the six sections. A PR: its two sections (## Unblocks and
+     ## Recommendation, written by pr.sh request; one missing is malformed, as on a decision); its phrase is the
+     quoted phrase of a "## Approve with" section when the body has that heading (no quoted phrase there is
+     malformed), otherwise a bare "approve". */
   function parseItem(it) {
-    var p = parseBody(it.body);
-    if (!isPR(it)) { p.kind = "decision"; return p; }
-    var has = /^##\s+Approve with\s*$/im.test(String(it.body || ""));
-    return { kind: "pr", sec: {}, missing: [], phrase: has ? p.phrase : "approve", nested: has && p.nested, approveWith: has };
+    if (!isPR(it)) { var d = parseBody(it.body, SECTIONS); d.kind = "decision"; return d; }
+    var p = parseBody(it.body, PR_SECTIONS), has = /^##\s+Approve with\s*$/im.test(String(it.body || ""));
+    return { kind: "pr", sec: p.sec, missing: p.missing, phrase: has ? p.phrase : "approve", nested: has && p.nested, approveWith: has };
   }
   function titleOf(it) { return String(it.title || "").replace(/^Decision:\s*/i, ""); }
   function linkify(text) {
@@ -348,9 +351,13 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     frag.appendChild(document.createTextNode(text.slice(last)));
     return frag;
   }
+  /* The decider's answer forms, read on a comment's first line (right-trimmed): the phrase, "<phrase> — <comment>", a
+     bare approve/approved, "revise: <what>", "reject: <why>". Any other comment is not an answer, whoever wrote it: it
+     never takes a row out of the viewer's turn. No phrase (a row without one) matches only the bare forms. The twin of
+     lib.sh answer_kind, the owner; plugin/tests/board-page.test.mjs runs both on one table of comments. */
   function answerKind(body, phrase) {
-    var b = String(body || "").trim();
-    if (b === phrase || b.indexOf(phrase + " — ") === 0 || /^approved?$/i.test(b)) return "approve";
+    var b = String(body || "").split(/\r?\n/)[0].replace(/\s+$/, "");
+    if ((phrase && (b === phrase || b.indexOf(phrase + " — ") === 0)) || /^[Aa]pproved?$/.test(b)) return "approve";
     if (/^reject:\s*\S/.test(b)) return "reject";
     if (/^revise:\s*\S/.test(b)) return "revise";
     return null;
@@ -369,7 +376,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     list.forEach(function (c) {
       if (!c) return;
       if (AMEND_RE.test(String(c.body || "").split(/\r?\n/)[0]) && (!amended || String(c.created_at) > String(amended.at))) amended = { at: c.created_at, url: c.html_url };
-      if (phrase && c.user && String(c.user.login).toLowerCase() === me && answerKind(c.body, phrase)) answer = c;
+      if (c.user && String(c.user.login).toLowerCase() === me && answerKind(c.body, phrase)) answer = c;
     });
     var out = { answer: answer, kind: answer ? answerKind(answer.body, phrase) : null, amended: amended, stale: null, gap: null, reply: null, replies: 0, revised: null };
     if (out.kind === "approve" && amended && !(String(answer.created_at) > String(amended.at))) { out.stale = answer; out.answer = null; out.kind = null; }
@@ -413,7 +420,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     s.comments.forEach(function (c) {
       if (!c) return;
       var body = String(c.body || ""), who = c.user ? String(c.user.login).toLowerCase() : "";
-      if (phrase && who === login.toLowerCase() && answerKind(body, phrase)) bump(c.created_at, "answered");
+      if (who === login.toLowerCase() && answerKind(body, phrase)) bump(c.created_at, "answered");
       var a = ackLine(body, it.closed_at, c.created_at);
       if (a === "malformed") { bad++; return; }
       if (!a) return;
@@ -1237,18 +1244,44 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     ditems = itemsOf(res, "dbanner", "rows decided in the last 7 days");
     render();
   }
-  /* The board and the desks: decision issues and PRs labelled needs-review, and desk issues, assigned to the viewer
-     (a comma in label: is OR). */
-  function query() {
-    return { query: "is:open assignee:" + login + " label:decision,needs-review,desk", perPage: 100, sort: "updated", order: "desc", fields: FIELDS.slice() };
-  }
-  function queryDecided() {
+  /* The board and the desks, assigned to the viewer (a comma in label: is OR), as two searches per list: the connector's
+     search_issues is scoped to is:issue and never returns a pull request, so decision issues and desks come from it and
+     PRs labelled needs-review from search_pull_requests. queries(open): [{tool, args}], the one owner of both. */
+  function queries(open) {
     var since = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
-    return { query: "is:closed assignee:" + login + " label:decision,needs-review closed:>=" + since, perPage: 100, sort: "updated", order: "desc", fields: FIELDS.concat(["closed_at"]) };
+    var q = function (labels) {
+      return open ? { query: "is:open assignee:" + login + " label:" + labels, perPage: 100, sort: "updated", order: "desc", fields: FIELDS.slice() }
+                  : { query: "is:closed assignee:" + login + " label:" + labels + " closed:>=" + since, perPage: 100, sort: "updated", order: "desc", fields: FIELDS.concat(["closed_at"]) };
+    };
+    return [{ tool: "search_issues", args: q(open ? "decision,desk" : "decision") }, { tool: "search_pull_requests", args: q("needs-review") }];
+  }
+  /* Both searches of a list as one reply: the items merged by URL, the counts added. A search that fails fails the list,
+     naming its tool: the board never shows the issues alone as if no PR waited. */
+  function searchBoth(open) {
+    return Promise.all(queries(open).map(function (s) {
+      return read(function () { return mcp.callTool(SERVER, s.tool, s.args, { cache: { refresh: true } }); }).then(function (res) {
+        var p = res && res.payload;
+        if (!p || typeof p !== "object" || !Array.isArray(p.items)) return { bad: s.tool, payload: p };
+        return res;
+      }, function (e) { if (e && typeof e === "object") e.tool = s.tool; throw e; });
+    })).then(function (all) {
+      var bad = all.filter(function (r) { return r.bad; })[0];
+      if (bad) return { payload: typeof bad.payload === "string" ? bad.tool + ": " + bad.payload : bad.tool + " returned no item list" };
+      var seen = new Set(), items = [], total = 0, cache = null;
+      all.forEach(function (r) {
+        if (typeof r.payload.total_count === "number") total += r.payload.total_count; else total = null;
+        r.payload.items.forEach(function (it) { if (it && !seen.has(it.html_url)) { seen.add(it.html_url); items.push(it); } });
+        if (r.cache && r.cache.storedAt && (!cache || r.cache.storedAt < cache.storedAt)) cache = r.cache;
+      });
+      var out = { payload: { items: items } };
+      if (total !== null) out.payload.total_count = total;
+      if (cache) out.cache = cache;
+      return out;
+    });
   }
 
-  /* ---------- searches: the one owner of every search_issues call the page makes ---------- */
-  /* Budget: the open search every 2 min, the closed search every 15 min and when the viewer opens Decided or presses
+  /* ---------- searches: the one owner of every search call the page makes ---------- */
+  /* Budget: the open searches (two calls) every 2 min, the closed searches (two calls) every 15 min and when the viewer opens Decided or presses
      Refresh. A rate-limit answer pauses both until max(the retry-after it carries, 60 s), doubled on each consecutive
      one up to 15 min, reset by a success; meanwhile the lists stay and one muted line under the header says so. */
   var OPEN_EVERY = 120000, CLOSED_EVERY = 900000, SLOW_MIN = 60000, SLOW_MAX = 900000;
@@ -1311,7 +1344,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     tick();
   }
   function runSearch(open) {
-    return read(function () { return mcp.callTool(SERVER, "search_issues", open ? query() : queryDecided(), { cache: { refresh: true } }); }).then(function (res) {
+    return searchBoth(open).then(function (res) {
       sq.strikes = 0; sq.pausedUntil = 0;
       if (open) { sq.nextOpen = Date.now() + OPEN_EVERY; onData(res); } else { sq.nextClosed = Date.now() + CLOSED_EVERY; onDecided(res); }
       slowLine();

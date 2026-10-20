@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # pr.sh — a pull request on the decider's board: request their word, then merge or reject on it.
-#   pr.sh request <owner/repo#N | url> --seat <LABEL | login/LABEL> [--assignee <login>] [--milestone "<title>"]
+#   pr.sh request <owner/repo#N | url> --seat <LABEL | login/LABEL> --unblocks "<text>" --recommendation "<text>"
+#             [--assignee <login>] [--milestone "<title>"]
+#       --unblocks and --recommendation are required (refused before any write when either is missing or empty, or
+#       points elsewhere for its substance: ask_inline_check): they are written into the PR body as its `## Unblocks` and
+#       `## Recommendation` sections (PR_ROW_SECTIONS, section_replace; a rerun replaces them), the sections board.sh and
+#       the board page show on the PR's row, as a decision row's.
 #       --milestone files the PR under that open milestone of its repo; required when the repo has any (milestone_require)
-#       labels the PR `needs-review` and seat:<login>/<LABEL>, assigns the decider (default: the roster's
+#       then labels the PR `needs-review` and seat:<login>/<LABEL>, assigns the decider (default: the roster's
 #       people[] owner; dies when that is not exactly one login). Every seat posts as the decider's login
 #       today, and GitHub refuses a review request to, or an approval by, a PR's own author, so the label
 #       plus the assignee is the request; the decider answers with a comment, as on a decision.
@@ -32,16 +37,25 @@ cmd="${1:-}"; shift || true
 case "$cmd" in
   request)
     ref="${1:-}"; shift || true
-    seat=""; assignee=""; ms=""
+    seat=""; assignee=""; ms=""; secs=()
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --seat) seat="$2"; shift 2 ;;
         --assignee) assignee="$2"; shift 2 ;;
         --milestone) ms="$2"; shift 2 ;;
+        --unblocks) secs+=("Unblocks" "$2"); shift 2 ;;
+        --recommendation) secs+=("Recommendation" "$2"); shift 2 ;;
         *) die "unknown argument $1" ;;
       esac
     done
-    [[ -n "$ref" && -n "$seat" ]] || die "usage: pr.sh request <owner/repo#N | url> --seat <LABEL | login/LABEL> [--assignee <login>] [--milestone \"<title>\"]"
+    usage="usage: pr.sh request <owner/repo#N | url> --seat <LABEL | login/LABEL> --unblocks \"<text>\" --recommendation \"<text>\" [--assignee <login>] [--milestone \"<title>\"]"
+    [[ -n "$ref" && -n "$seat" ]] || die "$usage"
+    # sec_text <section>: the text given for one of PR_ROW_SECTIONS (the last flag wins), or nothing.
+    sec_text() { local i out=""; for ((i = 0; i < ${#secs[@]}; i += 2)); do [[ "${secs[$i]}" == "$1" ]] && out="${secs[$((i+1))]}"; done; printf '%s' "$out"; }
+    for h in "${PR_ROW_SECTIONS[@]}"; do
+      [[ -n "$(sec_text "$h" | tr -d '[:space:]')" ]] || die "pr.sh request needs --$(tr 'A-Z ' 'a-z-' <<< "$h") \"<text>\": a PR on the board carries a non-empty '## $h' as a decision row does; nothing was written. $usage"
+      ask_inline_check "pr.sh request: --$(tr 'A-Z ' 'a-z-' <<< "$h")" "$(sec_text "$h")"
+    done
     seat="$(seat_id "$seat")" || exit 1
     [[ -n "$assignee" ]] || assignee="$(roster_decider)" || exit 1
     rn="$(parse_issue_ref "$ref")" || exit 1; read -r repo number <<< "$rn"
@@ -50,6 +64,12 @@ case "$cmd" in
     [[ "$(jq -r .state <<< "$info")" == open ]] || die "$repo#$number is not open"
     [[ -z "$ms" ]] || milestone_title_check "$ms"
     msn="$(milestone_require "$repo" "$ms")" || exit 1
+    # The body first, so a row is never on the board without its sections: each of PR_ROW_SECTIONS replaced (or appended).
+    body="$(jq -r '.body // ""' <<< "$info")"
+    for h in "${PR_ROW_SECTIONS[@]}"; do body="$(printf '%s\n' "$body" | section_replace "$h" "$(sec_text "$h")")" || die "$repo#$number: cannot write '## $h' into the body"; done
+    for h in "${PR_ROW_SECTIONS[@]}"; do section_required "$h" "$body" "$repo#$number" >/dev/null; done
+    tmp="$(mktemp)"; printf '%s\n' "$body" > "$tmp"
+    issue_edit_body "$repo" "$number" "$tmp"; rm -f "$tmp"
     label_ensure_template "$repo" needs-review
     seat_label_ensure "$repo" "$seat"
     issue_add_labels "$repo" "$number" needs-review "seat:$seat"

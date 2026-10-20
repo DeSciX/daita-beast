@@ -26,7 +26,7 @@ Three reads, all for the viewer:
 
 | Read | Call | Holds |
 |---|---|---|
-| rows | `search_issues` `{query: "is:open label:decision,needs-review assignee:<login>", perPage: 100, sort: "updated", order: "desc", fields: ["number", "title", "html_url", "labels", "updated_at", "repository_url"]}` | every open decision issue and PR waiting on the viewer (a PR when `html_url` contains `/pull/`) |
+| rows | `search_issues` `{query: "is:open label:decision assignee:<login>", perPage: 100, sort: "updated", order: "desc", fields: ["number", "title", "html_url", "labels", "updated_at", "repository_url"]}` and `search_pull_requests` with the same arguments and `label:needs-review` (`search_issues` never returns a PR) | every open decision issue and PR waiting on the viewer (a PR when `html_url` contains `/pull/`) |
 | desks | `search_issues` `{query: "is:open is:issue label:desk assignee:<login>", perPage: 100, fields: ["number", "title", "html_url", "labels", "updated_at", "repository_url"]}` | one desk per seat |
 | desk comments | `issue_read` `get_comments`, only for a desk whose `updated_at` is newer than the cut | its open asks (a `BEAST-ASK n=` with no later `BEAST-ANSWER n=` or `BEAST-WITHDRAW n=` of that n, read in comment order as `desk_parse` does) and its messages created after the cut (`BEAST-MSG … to=<login>/<LABEL>` and `BEAST-MSG … to=<login>` lines, or a plain comment by someone other than the viewer) |
 
@@ -45,10 +45,10 @@ Answers go through the board page or the `connector` skill's recipes (5, 11), ne
 
 1. `list_commits` `{owner: "DeSciX", repo: "daita-beast", path: "plugin/templates/board.html", perPage: 1, fields: ["sha"]}` → `<sha>`, the template's newest commit on the public repo's main.
 2. The viewer's board: the Artifact tool's list action (title `Decisions Board`), then read it; the page's first line is `<!-- board.html @ <published sha> -->` (the `board-ui` skill fills it at publish). A page without that line was published before stamps existed: republish it once.
-3. `<sha>` equals the published sha: nothing. It differs: run the `board-ui` skill's publish step (section 4 of that skill: fetch the template at `<sha>`, fill the stamp, publish byte-exact to the same URL, capabilities kept), and add one line to the reply: `Board page republished at <sha>`. No board artifact exists: say so once per tick (`no board page; publish one with /daita-beast:board-ui`) and republish nothing.
+3. `<sha>` equals the published sha: nothing. It differs: run the `board-ui` skill's publish step (section 4 of that skill: fetch the template at `<sha>`, fill the stamp, publish byte-exact to the same URL with that step's capabilities), and add one line to the reply: `Board page republished at <sha>`. No board artifact exists: say so once per tick (`no board page; publish one with /daita-beast:board-ui`) and republish nothing.
 
 A template that moved republishes exactly once: the next tick reads the new stamp from the page.
 
 ## What a tick costs
 
-A quiet tick: `get_me`, one `get_file_contents` (the roster), one `search_issues` and one `issue_read` (the stamp), two `search_issues` (rows, desks), one `list_commits`, and one Artifact read of the page (the whole page, the one large read). A tick that moved adds one `issue_read` per desk that changed and one comment edit; a template that moved adds the `board-ui` publish (one `get_file_contents` and one Artifact publish). The GitHub search quota (30 a minute) is shared with the board page's own searches (one every 2 min, one every 15 min) and the relay: schedule the task no more often than every 15 minutes.
+A quiet tick: `get_me`, one `get_file_contents` (the roster), one `search_issues` and one `issue_read` (the stamp), three searches (rows: `search_issues` and `search_pull_requests`; desks: `search_issues`), one `list_commits`, and one Artifact read of the page (the whole page, the one large read). A tick that moved adds one `issue_read` per desk that changed and one comment edit; a template that moved adds the `board-ui` publish (one `get_file_contents` and one Artifact publish). The GitHub search quota (30 a minute) is shared with the board page's own searches (two calls every 2 min, two every 15 min) and the relay: schedule the task no more often than every 15 minutes.

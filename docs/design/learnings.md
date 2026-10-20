@@ -76,7 +76,7 @@ All measured; each shapes code.
 
 ## 6. The board works only if seats file before asking
 
-**Rule.** Anything a seat waits on from the decider is a row filed with `decision.sh new` before the seat asks, and stays open until the word. `decision.sh record` (file and close in one act) is only for a significant word already given in a session before any row existed. A minor word goes only into the repo's dated record. Two checks hold it: the Stop hook `ask-guard.sh` blocks once a seated session's turn that ends asking the decider with no row or desk ask filed in that turn, and `lib.sh::ask_inline_check` makes `decision.sh new`, `record` and `desk.sh ask` refuse a question that points elsewhere for its substance ("see session", "as discussed", a local path).
+**Rule.** Anything a seat waits on from the decider is a row filed with `decision.sh new` before the seat asks, and stays open until the word. `decision.sh record` (file and close in one act) is only for a significant word already given in a session before any row existed. A minor word goes only into the repo's dated record. One check holds it: `lib.sh::ask_inline_check` makes `decision.sh new`, `record` and `desk.sh ask` refuse a question that points elsewhere for its substance ("see session", "as discussed", a local path).
 **Why.** A record-and-close row is never pending, so the decider's board never shows it as a question; a question asked in a session or a chat is invisible to the decider's one view.
 **Evidence.** In one repo, 19 of 66 decision rows were closed within two minutes of filing, so they never appeared as pending. A license carve-out question existed only in one seat's session until it was found there.
 

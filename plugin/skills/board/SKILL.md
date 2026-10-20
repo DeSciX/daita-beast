@@ -1,11 +1,11 @@
 ---
 name: board
-description: Render the pending-decisions board — every open decision issue and every PR labelled needs-review assigned to a person, one row each (a decision with what it unblocks, who waits, the recommendation, the exact approving phrase and the record id; a PR with its title and phrase). Use for "what is pending on me", "show the board", "republish the decisions board".
+description: Render the pending-decisions board — every open decision issue and every PR labelled needs-review assigned to a person, one row each (a decision with what it unblocks, who waits, the recommendation, the exact approving phrase and the record id; a PR with its title, what it unblocks, the recommendation and its phrase). Use for "what is pending on me", "show the board", "republish the decisions board".
 ---
 
 # board — the pending-decisions board
 
-The board is a GitHub search, not a system: `is:open label:decision,needs-review assignee:<decider>`, decision issues and PRs for review. This skill renders them as one table with a Kind column: a decision row parsed by shape from its body, a PR row from its title and phrase. Desks (label `desk`) are never board rows.
+The board is a GitHub search, not a system: `is:open label:decision,needs-review assignee:<decider>`, decision issues and PRs for review. This skill renders them as one table with a Kind column: a decision row parsed by shape from its body, a PR row from its title, its `## Unblocks` and `## Recommendation` (written by `pr.sh request`) and its phrase. Desks (label `desk`) are never board rows.
 
 Render in the terminal (defaults to the gh user as assignee):
 ```
@@ -20,7 +20,7 @@ Republish the generated table into the pinned issue "Pending decisions (generate
 ${CLAUDE_PLUGIN_ROOT}/scripts/board.sh --publish --repo <board repo>
 ```
 
-If the script exits non-zero it names a decision issue whose body lacks a required section (a PR needs none). Fix that issue's body (the six sections of the decision template); never patch the renderer to tolerate it.
+If the script exits non-zero it names a row whose body lacks a required section: a decision issue (fix its body: the six sections of the decision template) or a PR (rerun `pr.sh request` with `--unblocks` and `--recommendation`); never patch the renderer to tolerate it.
 
 Hand the person the two URLs (the search and the pinned issue) rather than file paths.
 
