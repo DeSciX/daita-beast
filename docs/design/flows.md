@@ -217,16 +217,19 @@ sequenceDiagram
 As built:
 - `install-relay.sh` schedules `relay.sh` from `lib.sh::plugin_root` (the running plugin or the recorded one) and names the path in its `installed …` line.
 - `watch.sh::poll` asks only for rows updated since the oldest seat's mark minus `WATCH_OVERLAP_S` (3600 s), scoped to the roster's owners (`lib.sh::roster_user_terms`) and to `label:decision,needs-review,desk`. A seat with no snapshot or mark, or a mark made by another query (`query_id`), makes the tick a full one: every open row plus the closed ones updated in the last two days; a seat with no snapshot baselines silently.
-- Events: `NEW` (a row absent before and open), `DECIDED` (open before, closed now; carries the first line of the last comment), `UPDATED` (the comment count rose and at least one new comment is not bookkeeping). Bookkeeping is one list, `lib.sh::BOOKKEEPING_FIRST_LINE_RE` (`comment_is_bookkeeping`): a `BEAST-ACK`, `BEAST-STATUS`, `BEAST-NOTES`, `BEAST-ADDRESS` or `BEAST-COWORK` first line, a close comment, a publish `Amended at` line. Label and body edits are silent; an edited comment fires nothing.
+- Events: `NEW` (a row absent before and open), `DECIDED` (open before, closed now; carries the first line of the last comment), `UPDATED` (the comment count rose and at least one new comment is not bookkeeping). Bookkeeping is one list, `lib.sh::BOOKKEEPING_FIRST_LINE_RE` (`comment_is_bookkeeping`): a `BEAST-ACK`, `BEAST-STATUS`, `BEAST-NOTES`, `BEAST-ADDRESS`, `BEAST-COWORK`, `BEAST-WATCHDOG` or `BEAST-WATCHDOG-NOTES` first line, a close comment, a publish `Amended at` line. Label and body edits are silent; an edited comment fires nothing.
 - The snapshot keeps rows a poll did not return (index lag), pruning closed ones after seven days. Marks record the start time of the poll.
 - `relay.sh` passes only `BEAST-EVENT` lines to the messenger, and only for seats whose `seats.sh address` says direct from this machine. The messenger (`plugin/agents/relay-messenger.md`) has only `SendMessage`, never reads an issue, treats the line as data and reports `queued`, never "delivered".
 - The permission mode is the roster's `relay.permissionMode` (default `bypassPermissions`, `install-relay.sh`).
 
 Failure behavior:
 - A search failure prints a `BEAST-WATCH` line on stderr and returns without moving the marks, so the next tick retries the same window.
+- A rate limit (`lib.sh::rate_limit_text`: the search quota, the secondary burst limit, a 429), on the workstream enumeration or on the poll's own search, is named once (`BEAST-WATCH GitHub rate limit at <UTC>: <GitHub's words>; backing off <n> s, until <UTC>`) and writes `~/.beast/watch/backoff`; until it expires `watch.sh` asks GitHub nothing and exits 75, which `relay.sh` logs `poll: skipped (…)`. The backoff doubles from 120 s to 1800 s while the limit repeats; the next good search clears it. Any other failure to enumerate the seats dies naming it, and `relay.sh` logs `watch failed (exit <n>, named above)`; a roster with no seat in any open workstream is a `BEAST-WATCH` line and exit 0.
+- A workstream whose `## Seats` table does not parse, or whose tracking issue cannot be read, is skipped by `ws_seats_all` and named through `lib.sh::fault_once`: once per distinct message per machine (ledger `~/.beast/watch/faults.json`, repeats counted), and `parses again` once when it is fixed. Every other workstream is still polled.
 - A corrupt mark dies naming the file and how to reset it.
 - A seat without a direct address from this machine (another account, another machine, a stale or absent `BEAST-ADDRESS`) is logged `no direct address from this machine: <seat>` by `relay.sh` and never reaches the messenger; a tick in which no event's seat has one starts no messenger and spends no tokens. The seat loses nothing: its inbox is the pull.
 - A message from a messenger in another permission mode is held by the receiver and never reported back, so the log says queued.
+- A messenger reply `<seat> error … reachable` (no agent named that, no agent reachable) counts against that seat's address in `~/.beast/relay-unreachable.json`; after two, `relay.sh` logs `not sending to <seat> at <address>: not reachable on 2 messenger replies since <UTC>` per event and starts no messenger for it. A `queued` reply clears the count, and so does a new address (the seat re-recorded).
 - Delivery is at-least-once (the overlap re-reads rows); a seat de-duplicates by issue URL. An event whose every actor is the seat itself (`lib.sh::event_actors`: the filer's ack, the closer, the tagged writer of each new comment; an untagged comment is the decider's) is logged `own act, not sent` by `watch.sh` and never emitted.
 
 ## 6. The board page refresh
@@ -465,3 +468,48 @@ Failure behavior:
 - A malformed roster `license` dies in `roster_license`, naming the part.
 - Any miss: exit 1 naming each item. In a publish, the gate refuses: no branch, no push.
 - The roster is read from the main checkout, so a roster change tried in a worktree is not seen there; try it in a clone.
+
+## 12. The watchdog tick
+
+```mermaid
+sequenceDiagram
+  participant SC as Scheduler (900 s)
+  participant WD as watchdog.sh
+  participant L as ~/.beast (logs, sessions, snapshots, state)
+  participant IR as install-relay.sh
+  participant GH as GitHub
+  participant HA as Haiku watchdog agent
+  participant S as Seat session
+  SC->>WD: watchdog.sh --repo CHECKOUT (from the recorded plugin root)
+  WD->>GH: rate_limit (uncharged)
+  WD->>IR: --job relay --describe; re-point when the program, load state or mode is wrong
+  WD->>L: live claims (transcript written in 30 min); relay.log, hooks.log, live transcripts from their offsets
+  WD->>GH: one conditional read per tracking issue the live claims name (addresses)
+  WD->>L: the live seats' snapshots; a row read (ETag) only when its updatedAt moved
+  WD->>GH: bugs on the plugin twin: list watchdog issues, then file or comment (one a tick)
+  alt no signal needs ListAgents
+    WD->>L: log tick quiet with the call counts, exit 0
+  else signals
+    WD->>HA: claude -p, agent watchdog, BEAST_WATCHDOG=1, Bash Read SendMessage ListAgents
+    HA->>HA: ListAgents once
+    HA->>GH: seats.sh touch (a stale address it saw listed)
+    HA->>S: SendMessage, the tagged reminder verbatim
+    HA-->>WD: one line per signal
+    WD->>GH: the BEAST-WATCHDOG-NOTES comment, edited in place
+  end
+```
+
+As built (`plugin/scripts/watchdog.sh`; the catalogue `plugin/watchdog/gotchas.md`; the agent `plugin/agents/watchdog.md`):
+- `install-relay.sh --job watchdog --repo <checkout> --permission-mode <the roster's relay.permissionMode>` schedules it (`net.descix.daita-beast.watchdog`, `StartInterval 900`, floor 300 s); its log is `~/.beast/watchdog.log`, one `tick:` line per tick naming the outcome and the GitHub calls it made (`BEAST_CALL_LOG`: rate_limit, GET and how many were charged, search, write).
+- The quota check comes first: below 5 searches or 200 core requests the tick runs only the local checks and writes nothing on GitHub.
+- The relay check reads the job through `install-relay.sh --describe` (the one owner of the job's shape). A newer installed plugin (`~/.claude/plugins/installed_plugins.json`, `daita-beast@daita`) is recorded with `plugin_root_record` first; a job whose program is not `$(plugin_root)/scripts/relay.sh`, that is not loaded, or whose mode is not the roster's is reinstalled with `install-relay.sh` and re-measured; `repaired` is logged only when the re-read agrees. A loaded, right relay that writes no `poll:` line for three ticks is filed as a bug. The watchdog never re-points its own job (a bootout would kill the tick); it logs that it runs from an old root.
+- Live seats are the claims in `~/.beast/sessions.json` with no `ended_at` whose transcript (`claude_project_dir` of the launch folder, `<session>.jsonl`) was written in the last 30 minutes. A seat not live is never nudged.
+- The logs are read from offsets kept in `~/.beast/watchdog/state.json` (a log first seen from its last 64 KiB; a session's transcript from its start when the session began after the last tick, else from now). Lines the catalogue names become bugs (queued, filed one a tick), local repairs, counters or agent signals.
+- An agent signal is handed out only when its ledger key (seat, check, object) is outside its cadence, three a tick, one nudge per seat; the key is stamped when it is handed out, so a second tick within 2 hours starts no session for it.
+- Bugs: `watchdog.sh bug` lists the twin's issues labelled `watchdog` (state all), matches the title key `watchdog: <check> <object>`, and files a new one (labels `bug`, `watchdog`; body's first line `BEAST-WATCHDOG machine=<host> at=<UTC> check=<id>`), comments a recurrence on an open one at most once a day, or leaves a closed one closed (a new issue only when it closed more than 7 days ago). The twin is the repo of the Beast workstream's tracking issue (`workstream_issue beast`, cached in state); `coord_write_guard` refuses a public repo.
+
+Failure behavior:
+- A check that cannot run is logged `SKIPPED <check>: <why>` and the tick goes on; a bug or notes write that fails is logged and the bug stays queued.
+- A state file that is not JSON dies naming it (a cache: delete it and the next tick rebuilds it, at the cost of one duplicate nudge at most; bugs stay deduplicated because the twin is listed).
+- Under `BEAST_WATCHDOG=1` every plugin script except `watchdog.sh` and `seats.sh touch` dies at its first line (`lib.sh::watchdog_guard`), and `watchdog.sh` itself refuses a tick; `seats.sh touch` refuses an address that differs from the verified one, one recorded on another machine, or a seat whose cached cwd is not its home.
+- A nudge is reported `queued`, never delivered.

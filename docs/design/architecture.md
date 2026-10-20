@@ -19,14 +19,15 @@ flowchart LR
     WS[("Workstream tracking issue in its master repo: labels workstream + ws:SLUG, the Seats table, BEAST-ADDRESS, status, notes")]
     PB[("Public repo acme/widgets: receives publishes only")]
     PJ[("Projects v2: one per workstream")]
-    LB[("Labels: decision, needs-review, desk, seat:LOGIN/LABEL, workstream, ws:SLUG, hands, rejected")]
+    LB[("Labels: decision, needs-review, desk, seat:LOGIN/LABEL, workstream, ws:SLUG, hands, rejected, watchdog")]
   end
 
   subgraph Machine["A seat's machine (optional)"]
-    SCH["launchd, systemd or cron, every 120 s"]
+    SCH["launchd, systemd or cron: the relay every 120 s, the watchdog every 900 s"]
     RS["relay.sh and watch.sh: one search per tick"]
     HM["relay-messenger: Haiku, SendMessage only"]
-    CA[("~/.beast: plugin.json, checkouts.json, sessions.json, ETag cache, marks, snapshots")]
+    WD["watchdog.sh: the checklist, no search; the watchdog agent (Haiku) only on a signal"]
+    CA[("~/.beast: plugin.json, checkouts.json, sessions.json, ETag cache, marks, snapshots, relay.log, hooks.log, watchdog state")]
   end
 
   BP["Board page: Claude.ai artifact via the viewer's GitHub connector"]
@@ -50,7 +51,8 @@ flowchart LR
 
 - The decider answers in their own words: a comment on a row or desk, the board page (which posts the same comment through their connector), or words typed to a seat's session, which the seat quotes verbatim on the row (`docs/protocol.md`, Decisions).
 - Seats on every surface read and write the same objects. Local seats use `gh` through `lib.sh::gh_get`, `gh_get_all` and `gh_send`; cloud seats run the same scripts against the sandbox's REST proxy (GraphQL is refused, so `lib.sh::project_cmd` dies naming it and `lib.sh::pin_issue` warns); Cowork and chat seats follow `plugin/skills/connector/SKILL.md`, and the decider's Cowork hears by a scheduled task running `plugin/skills/cowork-tick/SKILL.md`.
-- The relay is one scheduled job per machine (`install-relay.sh`, run from the recorded plugin root). It searches GitHub once per tick and only when something changed starts a disposable Haiku session that can do nothing but `SendMessage` (`relay.sh`, `plugin/agents/relay-messenger.md`); it sends only to a seat whose recorded address is direct from this machine (`seats.sh address`). A seat it cannot reach loses nothing: its inbox is computed from GitHub (`decision.sh inbox`).
+- The relay is one scheduled job per machine (`install-relay.sh`, run from the recorded plugin root). It searches GitHub once per tick and only when something changed starts a disposable Haiku session that can do nothing but `SendMessage` (`relay.sh`, `plugin/agents/relay-messenger.md`); it sends only to a seat whose recorded address is direct from this machine (`seats.sh address`). A seat it cannot reach loses nothing: its inbox is computed from GitHub (`decision.sh inbox`). An address it could not reach twice is not sent to again until the seat records a new one; a GitHub rate limit is named once and backed off.
+- The machine watchdog is a second job on the same machine (`install-relay.sh --job watchdog`, every 900 s). Its shell checklist (`watchdog.sh`) runs with no model and no search; it re-points a mispointed relay, files measured defects on the plugin twin (labelled `watchdog`, deduplicated by listing), and starts its Haiku agent (`plugin/agents/watchdog.md`; tools Bash, Read, SendMessage, ListAgents) only for a finding that needs `ListAgents`: a live seat's stale address it re-stamps (`seats.sh touch`), or a tagged reminder (`BEAST-WATCHDOG to=…`) of an unacked row. Under its session every plugin script but two refuses to run (`lib.sh::watchdog_guard`).
 - The private twin holds all work and coordination; the public repo receives only what `publish.sh` writes (`publish.sh::public_push`, `publish.sh::public_send`). `lib.sh::coord_write_guard` refuses every coordination write to a public or public-intended repo, the `## Seats` table and the master's CLAUDE.md block included.
 
 ## 2. Roles, identities, seats and workstreams
@@ -107,6 +109,7 @@ flowchart TB
     W1[watch.sh]
     W2[relay.sh]
     W3[install-relay.sh]
+    W4[watchdog.sh]
   end
 
   subgraph PLAN["Workstreams and scheduling"]
@@ -143,6 +146,7 @@ flowchart TB
     A0["seat (the generic role)"]
     A1["relay-messenger (Haiku)"]
     A2[relay-installer]
+    A7["watchdog (Haiku)"]
     A3[seat-clerk]
     A4[license-reviewer]
     A5[moderator]
@@ -218,7 +222,9 @@ One owner per fact. Every other place that shows a fact is a rendered copy of it
 | The plugin's scripts path on a machine | `~/.beast/plugin.json` `{root, version, recorded_at}` (`lib.sh::plugin_root_record`; `$CLAUDE_PLUGIN_ROOT` wins while a plugin runs) | the hook's `scripts:` line; the relay job | a committed file |
 | Which checkouts exist on this machine | `~/.beast/checkouts.json` (`lib.sh::checkouts_record`) | none | the roster |
 | A read's ETag and body | `~/.beast/cache/<login>/` (`lib.sh::gh_request`); every read still asks GitHub | none | trusted without asking GitHub |
-| The relay's position | `~/.beast/watch/<login>/<LABEL>.mark` and `.json` (`watch.sh`) | none | the contract (the inbox is) |
+| The relay's position | `~/.beast/watch/<login>/<LABEL>.mark` and `.json` (`watch.sh`); its rate-limit backoff `~/.beast/watch/backoff` and fault ledger `~/.beast/watch/faults.json`; its unreachable ledger `~/.beast/relay-unreachable.json` (`relay.sh`) | none | the contract (the inbox is) |
+| A hook's block or fault | one line in `~/.beast/hooks.log` (`lib.sh::hook_log`) | the watchdog's bug on the twin | the session's context alone |
+| What the machine watchdog learned | one `BEAST-WATCHDOG-NOTES machine=<host>` comment on the Beast workstream's tracking issue, edited in place (`watchdog.sh`); its offsets, ledgers and row cache in `~/.beast/watchdog/state.json`, a cache | the agent's memory digest | its own instructions (the catalogue `plugin/watchdog/gotchas.md` changes by a commit) |
 | The Cowork tick's cut | the viewer's one `BEAST-COWORK by=<login> at=<UTC> …` comment on the pinned board issue (`cowork-tick`), bookkeeping, never news | none | a second stamp per login |
 | Which template a board page was published from | the page's first line `<!-- board.html @ <sha> -->`, filled by `board-ui` at publish from the template's stamp line | none | a page edited apart from the template |
 | A milestone and its due date | GitHub milestone; `due_on` is the only copy of the date; the description's fixed lines (`lib.sh::milestone_desc`) | the inbox's due flags | a date in prose |

@@ -22,21 +22,63 @@
 # made by another query (the roster's owners or the row labels changed), makes that poll a full one: every open
 # row plus the closed ones updated in the last two days; a seat with no snapshot baselines silently. Meant to be
 # run --once from a scheduler (relay.sh); the loop form exists for a terminal.
+# A rate limit (the search quota, the secondary burst limit: lib.sh rate_limit_text) is named once, loud, with the
+# backoff it starts (~/.beast/watch/backoff: "<until epoch> <seconds> <UTC named>"; WATCH_BACKOFF_S doubling to
+# WATCH_BACKOFF_MAX_S); until then every poll asks GitHub nothing and exits 75 (relay.sh logs it as a skipped poll),
+# and the next good search clears it. A workstream whose `## Seats` table does not parse is skipped and named once per
+# distinct message (lib.sh fault_once, ledger ~/.beast/watch/faults.json); every other workstream is still polled.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 need gh jq
 
-seats=(); interval=120; once=0
+export BEAST_FAULT_LEDGER="${BEAST_FAULT_LEDGER:-$HOME/.beast/watch/faults.json}"
+WATCH_BACKOFF_S=120; WATCH_BACKOFF_MAX_S=1800
+backoff_file="$HOME/.beast/watch/backoff"
+mkdir -p "$HOME/.beast/watch"
+
+# backoff_active: status 0, silently, while a rate-limit backoff runs (backoff_start named it); a corrupt file is named and removed.
+backoff_active() {
+  local until secs
+  [[ -f "$backoff_file" ]] || return 1
+  read -r until secs _ < "$backoff_file" || true
+  if ! [[ "$until" =~ ^[0-9]+$ && "$secs" =~ ^[0-9]+$ ]]; then echo "BEAST-WATCH the backoff file $backoff_file is corrupt ('$(cat "$backoff_file")'); removed" >&2; rm -f "$backoff_file"; return 1; fi
+  [[ "$(date -u +%s)" -lt "$until" ]]
+}
+# backoff_start <stderr file>: a rate limit was hit: name it once, loud, and back off (doubling while it repeats).
+backoff_start() {
+  local secs=$WATCH_BACKOFF_S prev until
+  if [[ -f "$backoff_file" ]]; then read -r _ prev _ < "$backoff_file" || true; [[ ! "$prev" =~ ^[0-9]+$ ]] || secs=$(( prev * 2 )); fi
+  (( secs <= WATCH_BACKOFF_MAX_S )) || secs=$WATCH_BACKOFF_MAX_S
+  until=$(( $(date -u +%s) + secs ))
+  printf '%s %s %s\n' "$until" "$secs" "$(utc_now)" > "$backoff_file"
+  echo "BEAST-WATCH GitHub rate limit at $(utc_now): $(grep -m1 -iE 'rate limit|quota|HTTP 429' "$1" | sed 's/^daita-beast: //'); backing off ${secs} s, until $(jq -rn --argjson t "$until" '$t | todate'); no search runs until then" >&2
+}
+# backoff_clear: a search answered; the backoff is over.
+backoff_clear() { [[ ! -f "$backoff_file" ]] || { rm -f "$backoff_file"; echo "BEAST-WATCH searches answer again at $(utc_now); backoff cleared" >&2; }; }
+
+seats=(); interval=120; once=0; roster=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --roster) ids="$(ws_seats_all | cut -f2)" || exit 1; while IFS= read -r s; do [[ -n "$s" ]] && seats+=("$s"); done <<< "$ids"; shift ;;
+    --roster) roster=1; shift ;;
     --interval) interval="$2"; shift 2 ;;
     --once) once=1; shift ;;
     -*) die "unknown argument $1" ;;
     *) s="$(seat_rostered "$1")" || exit 1; seats+=("$s"); shift ;;
   esac
 done
-[[ ${#seats[@]} -gt 0 ]] || die "usage: watch.sh --roster | <LABEL | login/LABEL>... [--once] [--interval N]"
+[[ $roster -eq 1 || ${#seats[@]} -gt 0 ]] || die "usage: watch.sh --roster | <LABEL | login/LABEL>... [--once] [--interval N]"
 [[ "$interval" -ge 30 ]] || die "interval must be 30 s or more"
+if [[ $roster -eq 1 ]]; then
+  ! backoff_active || exit 75
+  errf="$(mktemp)"
+  if ! ids="$(ws_seats_all 2>"$errf" | cut -f2)"; then
+    if rate_limit_text "$(cat "$errf")"; then backoff_start "$errf"; rm -f "$errf"; exit 75; fi
+    cat "$errf" >&2; rm -f "$errf"
+    die "watch.sh --roster: cannot enumerate the seats of the open workstreams (named above)"
+  fi
+  cat "$errf" >&2; rm -f "$errf"
+  while IFS= read -r s; do [[ -n "$s" ]] && seats+=("$s"); done <<< "$ids"
+  if [[ ${#seats[@]} -eq 0 ]]; then echo "BEAST-WATCH no seat in any open workstream among $(workstream_user_terms) at $(utc_now); nothing to poll" >&2; exit 0; fi
+fi
 mkdir -p "$HOME/.beast"
 # The label names each seat's rows carry, resolved once (seat_label_terms is the one owner of which count).
 names=()
@@ -51,6 +93,16 @@ query_id="$(beast_sha "label:$RELAY_ROW_LABELS $scope")"
 
 # write_atomic <file> <content>: several watchers (the relay, a terminal) may write one seat's files.
 write_atomic() { local t; t="$(mktemp "$1.XXXXXX")"; printf '%s\n' "$2" > "$t" && mv -f "$t" "$1"; }
+
+# watch_search <var> "<query>" "<what>": search_issues into <var>. A rate limit starts the backoff (status 75); any other
+# failure is named and the poll ends (status 1; the next poll retries); a success clears a backoff.
+watch_search() {
+  local e got; e="$(mktemp)"
+  if got="$(search_issues "$2" 2>"$e")"; then cat "$e" >&2; rm -f "$e"; backoff_clear; printf -v "$1" '%s' "$got"; return 0; fi
+  if rate_limit_text "$(cat "$e")"; then backoff_start "$e"; rm -f "$e"; return 75; fi
+  cat "$e" >&2; rm -f "$e"
+  echo "BEAST-WATCH GitHub search ($3) failed at $(utc_now); retrying next poll" >&2; return 1
+}
 
 poll() {
   # Scoped to the roster's owners: a `decision` label exists in strangers' repos too, and an unscoped search
@@ -69,15 +121,12 @@ poll() {
     # The bounded first window: every OPEN row, plus every CLOSED one updated in the last two days (a close
     # older than that is caught up by `decision.sh inbox`).
     m="$(date -u -v-2d +%Y-%m-%d 2>/dev/null || date -u -d '2 days ago' +%Y-%m-%d)"
-    open_="$(search_issues "label:$RELAY_ROW_LABELS is:open $scope")" \
-      || { echo "BEAST-WATCH GitHub search (open) failed at $(utc_now); retrying next poll" >&2; return 0; }
-    closed_="$(search_issues "label:$RELAY_ROW_LABELS is:closed updated:>=$m $scope")" \
-      || { echo "BEAST-WATCH GitHub search (closed) failed at $(utc_now); retrying next poll" >&2; return 0; }
+    watch_search open_ "label:$RELAY_ROW_LABELS is:open $scope" "open" || return $?
+    watch_search closed_ "label:$RELAY_ROW_LABELS is:closed updated:>=$m $scope" "closed" || return $?
     echo "BEAST-WATCH full poll (a seat has no snapshot or mark of this query) at $started" >&2
   else
     since="$(jq -rn --arg m "$since" --argjson o "$WATCH_OVERLAP_S" '$m | fromdateiso8601 - $o | todateiso8601')"
-    open_="$(search_issues "label:$RELAY_ROW_LABELS updated:>=$since $scope")" \
-      || { echo "BEAST-WATCH GitHub search (since $since) failed at $(utc_now); retrying next poll" >&2; return 0; }
+    watch_search open_ "label:$RELAY_ROW_LABELS updated:>=$since $scope" "since $since" || return $?
     closed_='[]'
     echo "BEAST-WATCH poll since $since ($(jq length <<< "$open_") row(s) updated) at $started" >&2
   fi
@@ -130,8 +179,9 @@ poll() {
 }
 
 while true; do
-  poll
-  [[ $once -eq 1 ]] && exit 0
+  # 75: a rate limit backs off (named once by backoff_start); any other failed search was named and the next poll retries.
+  if backoff_active; then rc=75; else rc=0; poll || rc=$?; [[ $rc -eq 75 ]] || rc=0; fi
+  [[ $once -eq 1 ]] && exit $rc
   sleep "$interval"
   run_cache_clear   # a new poll asks GitHub again: the run's memoized searches are the last poll's
 done

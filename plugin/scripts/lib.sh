@@ -145,6 +145,34 @@ sessions_end() {
   sessions_update 'with_entries(if .value.session == $s then .value.ended_at = $t else . end)' --arg s "$1" --arg t "$(utc_now)"
 }
 
+# ---- hooks.log: the one record of a hook's block or fault ---------------------------------------------------------
+# A hook never fails a session: it puts a fault into the session's context (seat-hello.sh) or onto stderr (seat-bye.sh,
+# permit.sh), where no log keeps it. hook_log appends one line to ~/.beast/hooks.log (BEAST_HOOKS_LOG moves it):
+#   <UTC>\t<hook>\t<block|fault>\tsession=<id or ->\t<the message, one line>
+# The machine watchdog reads the file from its last offset and files one deduplicated bug per hook and message class.
+hooks_log_path() { echo "${BEAST_HOOKS_LOG:-$HOME/.beast/hooks.log}"; }
+hook_log() {
+  [[ $# -eq 4 ]] || die "hook_log takes <hook> <block|fault> <session id | -> \"<message>\", not $*"
+  case "$2" in block|fault) ;; *) die "hook_log: kind is block or fault, not '$2'" ;; esac
+  local f; f="$(hooks_log_path)"; mkdir -p "$(dirname "$f")"
+  printf '%s\t%s\t%s\tsession=%s\t%s\n' "$(utc_now)" "$1" "$2" "${3:--}" "$(printf '%s' "$4" | tr '\t\n\r' '   ')" >> "$f"
+}
+
+# ---- the watchdog's allowlist: the one owner of what a watchdog session may run ------------------------------------
+# The watchdog (watchdog.sh, plugin/agents/watchdog.md) starts its Haiku session with BEAST_WATCHDOG=1. Every plugin
+# script sources this file at its top, so under that variable a script runs only when its name and first argument are
+# listed here, and dies naming the rule otherwise: the watchdog never answers, acks, closes, labels, files a row, posts
+# status or notes, records or forgets an address, or makes a seat or a workstream. The hooks run in its session too.
+WATCHDOG_ALLOWED='watchdog.sh:* seats.sh:touch permit.sh:* seat-hello.sh:* seat-bye.sh:*'
+watchdog_guard() {
+  [[ "${BEAST_WATCHDOG:-}" == 1 ]] || return 0
+  local name a; name="$(basename "$0")"
+  [[ "$name" == *.sh ]] || return 0   # a shell or a test sourcing this file is not a plugin script run
+  for a in $WATCHDOG_ALLOWED; do [[ "$a" == "$name:*" || "$a" == "$name:${1:-}" ]] && return 0; done
+  die "refused: $name ${1:-} under the watchdog (BEAST_WATCHDOG=1): it may run only $WATCHDOG_ALLOWED; answering, acking, closing, labelling, filing, status, notes and address records are a seat's or the decider's acts"
+}
+watchdog_guard "$@"
+
 # ---- the run cache: one search per query per run ---------------------------------------------------------------
 # A run is a top-level script and every script it starts (join.sh starts seats.sh record, resume.sh, seats.sh list,
 # notes.sh, decision.sh inbox, desk.sh inbox). GitHub's search quota is 30 a minute per login, shared by every seat
@@ -509,20 +537,64 @@ ws_seats_write() {
 # an index of other repos' seats. Computed once per run ($BEAST_WS_CACHE/ws-seats.tsv; one search, one read per
 # workstream issue) and served from there after; ws_seats_write, the table's one writer, forgets it.
 ws_seats_all() {
-  local slug r n title url body rows memo="$BEAST_WS_CACHE/ws-seats.tsv"
+  local slug r n title url body rows cands err memo="$BEAST_WS_CACHE/ws-seats.tsv"
   if [[ -f "$memo" ]]; then cat "$memo"; return 0; fi
+  # The candidates first, as a value: a search that fails (a rate limit, GitHub down) fails this enumeration loud,
+  # never an empty seat list a caller would take for "no seats".
+  cands="$(workstream_candidates)" || exit 1
   while IFS=$'\t' read -r slug r n title url; do
     [[ -n "$slug" ]] || continue
-    body="$(issue_get "$r" "$n" | jq -r '.body // ""')" || exit 1
-    if ! rows="$(ws_seats_table_parse "$r#$n" "$(printf '%s\n' "$body" | section Seats)" 2>&1)"; then
-      # one repo's malformed table never blinds every seat on the machine: named once, skipped; ws_seats_parse <slug> still dies on it
-      echo "daita-beast: workstream $slug ($r#$n): its \`## Seats\` table does not parse; skipped by ws_seats_all (${rows#daita-beast: })" >&2; continue
+    if ! body="$(issue_get "$r" "$n" 2>"$BEAST_WS_CACHE/ws-read.err")"; then
+      err="$(cat "$BEAST_WS_CACHE/ws-read.err")"
+      # A rate limit is everyone's, not this workstream's: the enumeration fails. Any other unreadable issue is skipped, named.
+      ! rate_limit_text "$err" || { echo "$err" >&2; exit 1; }
+      fault_once "ws-read:$r#$n" "daita-beast: workstream $slug ($r#$n): its tracking issue cannot be read; skipped by ws_seats_all ($(tr '\n' ' ' <<< "${err#daita-beast: }"))"; continue
     fi
+    cat "$BEAST_WS_CACHE/ws-read.err" >&2
+    body="$(jq -r '.body // ""' <<< "$body")" || exit 1
+    if ! rows="$(ws_seats_table_parse "$r#$n" "$(printf '%s\n' "$body" | section Seats)" 2>&1)"; then
+      # one repo's malformed table never blinds every seat on the machine: named, skipped (once per distinct message where
+      # the caller keeps a fault ledger, fault_once); ws_seats_parse <slug> still dies on it
+      fault_once "ws-seats:$r#$n" "daita-beast: workstream $slug ($r#$n): its \`## Seats\` table does not parse; skipped by ws_seats_all (${rows#daita-beast: })"; continue
+    fi
+    fault_clear "ws-seats:$r#$n" "daita-beast: workstream $slug ($r#$n): its \`## Seats\` table parses again"
+    fault_clear "ws-read:$r#$n" ""
     [[ -z "$rows" ]] || awk -F'\t' -v s="$slug" -v t="$r#$n" -v ti="$title" 'NF {print s "\t" $0 "\t" t "\t" ti}' <<< "$rows"
-  done < <(workstream_candidates) > "$memo.tmp" || { rm -f "$memo.tmp"; exit 1; }
+  done <<< "$cands" > "$memo.tmp" || { rm -f "$memo.tmp"; exit 1; }
   mv -f "$memo.tmp" "$memo"
   cat "$memo"
 }
+
+# ---- faults named once: a scheduled caller's ledger ------------------------------------------------------------
+# A job that runs every tick (the relay's watch.sh) would otherwise write the same skipped-workstream line 720 times a
+# day. Such a caller exports BEAST_FAULT_LEDGER=<file> (JSON {key: {sha, first, last, n}}); fault_once then prints a
+# fault on stderr the first time it is seen and again only when its message changes, and counts the repeats; without
+# the variable (a person's run) every fault is printed. fault_clear forgets a key whose fault is gone, saying so once.
+fault_once() {
+  local key="$1" msg="$2" f="${BEAST_FAULT_LEDGER:-}" sha t
+  if [[ -z "$f" ]]; then printf '%s\n' "$msg" >&2; return 0; fi
+  sha="$(beast_sha "$msg")"; mkdir -p "$(dirname "$f")"; [[ -s "$f" ]] || echo '{}' > "$f"
+  if [[ "$(jq -r --arg k "$key" '.[$k].sha // ""' "$f" 2>/dev/null)" == "$sha" ]]; then
+    t="$(mktemp "$f.XXXXXX")"; jq --arg k "$key" --arg at "$(utc_now)" '.[$k].n += 1 | .[$k].last = $at' "$f" > "$t" && mv -f "$t" "$f"
+    return 0
+  fi
+  t="$(mktemp "$f.XXXXXX")"
+  jq --arg k "$key" --arg s "$sha" --arg at "$(utc_now)" '.[$k] = {sha: $s, first: $at, last: $at, n: 1}' "$f" > "$t" 2>/dev/null \
+    || { rm -f "$t"; echo "daita-beast: the fault ledger $f is not JSON; fix or delete it" >&2; printf '%s\n' "$msg" >&2; return 0; }
+  mv -f "$t" "$f"
+  printf '%s (named once; repeats are counted in %s)\n' "$msg" "$f" >&2
+}
+fault_clear() {
+  local key="$1" msg="${2:-}" f="${BEAST_FAULT_LEDGER:-}" t
+  [[ -n "$f" && -s "$f" ]] || return 0
+  [[ "$(jq -r --arg k "$key" 'has($k)' "$f" 2>/dev/null)" == true ]] || return 0
+  t="$(mktemp "$f.XXXXXX")"; jq --arg k "$key" 'del(.[$k])' "$f" > "$t" && mv -f "$t" "$f"
+  [[ -z "$msg" ]] || printf '%s\n' "$msg" >&2
+}
+
+# rate_limit_text "<stderr text>": status 0 when GitHub's answer was a rate limit (the primary quota, which gh_request
+# names "quota: resets at", or the secondary burst limit, or a 429), 1 otherwise. The one reader of that fact.
+rate_limit_text() { grep -qiE 'quota: resets at|secondary rate limit|rate limit exceeded|HTTP 429' <<< "${1:-}"; }
 
 # ---- a seat's address: the one owner is its BEAST-ADDRESS comment on its workstream tracking issue -------------
 # BEAST-ADDRESS seat=<composite> account=<claude account> address="<name [ref]>" machine=<hostname> at=<UTC>
@@ -807,6 +879,14 @@ seat_homes_on_machine() {
       printf '%s/%s\t%s\t%s\t%s\t%s\t%s\n' "$g" "$l" "$c" "$h" "$k" "$ws" "$ret"
     done <<< "$rows"
   done <<< "$cs"
+}
+
+# seat_home_on_machine <identity>: the home path on this machine of the seat <slug>/<LABEL>/<login> (seat_homes_on_machine
+# over every checkout the machine index names, the one formula), or nothing when no roster here names it.
+seat_home_on_machine() {
+  [[ "${1:-}" =~ $SEAT_IDENTITY_RE ]] || die "seat_home_on_machine takes <slug>/<LABEL>/<login>, not '${1:-}'"
+  local short; short="$(seat_short "$1")" || exit 1
+  seat_homes_on_machine "$PWD" machine | awk -F'\t' -v s="$short" -v w="${1%%/*}" '$1 == s && $5 == w && !d {print $3; d = 1}'
 }
 
 # seat_locate <LABEL | login/LABEL | composite> <launch dir>: "<id>\t<main checkout>" of the one seat it names on this
@@ -2509,9 +2589,10 @@ msg_header() {
 
 # ---- bookkeeping comments: the one list of first lines the relay never reports as news -------------------------
 # A comment whose first line is a seat's or a tool's own bookkeeping (an ack, a status, the notes, an address, the
-# Cowork tick's stamp, a close comment, a publish amend line) is not an UPDATED event for a seat (watch.sh); edits
-# never bump a comment count, so an edited one fires nothing either. One owner: comment_is_bookkeeping is the test.
-BOOKKEEPING_FIRST_LINE_RE="^(BEAST-ACK|BEAST-STATUS|BEAST-NOTES|BEAST-ADDRESS|BEAST-COWORK)( |\$)|^(Closed|Rejected) on the (decider.s )?word|$AMEND_LINE_RE"
+# Cowork tick's stamp, the machine watchdog's lines and its notes, a close comment, a publish amend line) is not an UPDATED
+# event for a seat (watch.sh); edits never bump a comment count, so an edited one fires nothing either. One owner:
+# comment_is_bookkeeping is the test.
+BOOKKEEPING_FIRST_LINE_RE="^(BEAST-ACK|BEAST-STATUS|BEAST-NOTES|BEAST-ADDRESS|BEAST-COWORK|BEAST-WATCHDOG|BEAST-WATCHDOG-NOTES)( |\$)|^(Closed|Rejected) on the (decider.s )?word|$AMEND_LINE_RE"
 
 # comment_is_bookkeeping "<first line>": status 0 when the line is bookkeeping, 1 when it is news.
 comment_is_bookkeeping() { jq -en --arg l "$1" --arg re "$BOOKKEEPING_FIRST_LINE_RE" '$l | test($re)' >/dev/null; }
@@ -2616,6 +2697,7 @@ desk_parse() {
              elif $a == null then .dropped += ["malformed BEAST-MSG line (BEAST-MSG from=<composite> to=<composite> re=<ref|none> blocking=no): \($c.url)"]
              elif ($a.to | short) != $seat then .dropped += ["a message to \($a.to) on the desk of \($seat): \($c.url)"]
              else .messages += [{from: $a.from, re: $a.re, at: $c.at, url: $c.url, text: ([$rest[] | select(test("\\S"))] | join("\n"))}] end
+         elif ($f | test("^BEAST-WATCHDOG(-NOTES)?( |$)")) then .dropped += ["a BEAST-WATCHDOG line is the machine watchdog'"'"'s, never an answer or a message (the watchdog posts only on the plugin twin): \($c.url)"]
          elif ($f | startswith("BEAST-")) then .
          elif ($as | index($c.by)) != null then .messages += [{from: "@\($c.by)", at: $c.at, url: $c.url, text: ($c.lines | map(select(test("\\S"))) | join("\n"))}]
          else .dropped += ["a plain comment by \($c.by), not an assignee of the desk, is neither an answer nor a message: \($c.url)"] end)

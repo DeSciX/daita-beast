@@ -21,7 +21,7 @@ It writes `.beast/wrapup/<slug>/plan.json` and prints three lists:
      - on the seats' tracking issues: the `BEAST-STATUS` and `BEAST-ACK` comments older than the plan, except each seat's newest handoff;
      - the dated record files the closed rows name;
      - the plan's own directory.
-   - **KEEP:** the open items, carried to the next milestone, and every seat's `BEAST-NOTES`.
+   - **KEEP:** the open items, carried to the next milestone, every seat's `BEAST-NOTES` and every machine's `BEAST-WATCHDOG-NOTES`.
    - **FOLD IN:** each closed row's title, words and record, and the milestone's `Report:` line.
 
 2. **Request.** It files one row:

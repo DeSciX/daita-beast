@@ -9,7 +9,8 @@
 #       and close comments) under the milestone; on the repo's desks, the asks answered or withdrawn (the ask and its
 #       answer: those under the milestone, and those under none answered before the plan) and the messages older than
 #       the plan; on the tracking issues of the repo's seats, the BEAST-STATUS and BEAST-ACK comments older than the
-#       plan except each seat's newest handoff (BEAST-NOTES is never deleted); the record files (RECORD_PATH_RE) named on
+#       plan except each seat's newest handoff (BEAST-NOTES and the watchdog's BEAST-WATCHDOG-NOTES are never deleted, and the plan
+#       lists them under keep); the record files (RECORD_PATH_RE) named on
 #       the closed rows that exist in the repo; and the plan's own directory. What it keeps: the open items (carried to
 #       --carry, by default the soonest other open milestone; the plan refuses open items with nowhere to carry them).
 #       What the fold-in must cover: each closed row's title, words and record, and the milestone's Report: line.
@@ -151,9 +152,10 @@ for p in dict.fromkeys(out):
       [.[] | {id, url: .html_url, at: .created_at, first: ((.body // "") | split("\n")[0])}] as $all
       | ([$all[] | select(.first | test("^BEAST-STATUS seat=\\S+ at=\\S+ state=handoff( |$)")) | . + {seat: (.first | capture("^BEAST-STATUS seat=(?<s>\\S+)").s)}]
          | group_by(.seat) | map(max_by(.at) | .id)) as $newest
-      | $all[] | select((.first | test("^BEAST-(STATUS|ACK) ")) and .at <= $cut)
-      | .id as $i | if any($newest[]; . == $i) then {keep: {url, why: "the newest handoff of \(.first | capture("seat=(?<s>\\S+)").s)"}}
-        else {del: {id, url, on: $tr, why: (.first | .[:60])}} end' <<< "$cs" > "$tmp/t"
+      | ($all[] | select((.first | test("^BEAST-(STATUS|ACK) ")) and .at <= $cut)
+         | .id as $i | if any($newest[]; . == $i) then {keep: {url, why: "the newest handoff of \(.first | capture("seat=(?<s>\\S+)").s)"}}
+           else {del: {id, url, on: $tr, why: (.first | .[:60])}} end),
+        ($all[] | select(.first | test("^BEAST-(NOTES|WATCHDOG-NOTES) ")) | {keep: {url, why: "notes, kept across milestones: \(.first | .[:60])"}})' <<< "$cs" > "$tmp/t"
     jq -c 'select(.del) | .del' "$tmp/t" >> "$tmp/comments"
     jq -c 'select(.keep) | .keep' "$tmp/t" >> "$tmp/keep"
   done < <(jq -r --arg r "$(lc "$repo")" '[.seats[]? | select((.repo // "" | ascii_downcase) == $r) | .workstream] | unique | .[]' "$(roster_path)" \
