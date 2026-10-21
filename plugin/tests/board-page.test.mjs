@@ -272,6 +272,29 @@ test("page: an opened desk shows its open asks first, then the messages newer th
     "Waiting on you sits above the desks and the drill-down, so an opened desk never pushes it down");
 });
 
+// ---- a row's seats: one table, both readers (lib.sh row_seats, the owner; the page's rowSeats, the twin) ----
+test("row_seats and the page's rowSeats agree: the seat: labels, else the filer's first BEAST-ACK, else none", () => {
+  const { rowSeats } = pageFns(PAGE, ["rowSeats", "seatsOf", "labelNames", "ackLine", "ms"], ["SEAT_LABEL_RE", "ACK_RE", "CLOSER_RE"]);
+  const c = (body, login = "alice") => ({ body, user: { login }, created_at: "2026-10-20T22:12:34Z", html_url: "x" });
+  const filed = c(`${P}ACK seat=alice/DEVPLANE at=2026-10-20T22:12:33Z state=seen next=filed`);
+  const TABLE = [
+    [["decision", "seat:alice/DEVX"], [filed], ["alice/DEVX"], "a labelled row is its labels' alone"],
+    [["decision", "seat:alice/DEVX", "seat:alice/DEVPLANE"], [], ["alice/DEVX", "alice/DEVPLANE"], "every label, in order"],
+    [["decision"], [filed], ["alice/DEVPLANE"], "no seat label: the filer"],
+    [["decision"], [c("go"), filed, c(`${P}ACK seat=alice/DEVX at=2026-10-20T23:00:00Z state=seen next=x`)], ["alice/DEVPLANE"], "the first ack is the filer's"],
+    [["decision"], [c(`${P}ACK seat=DEVPLANE at=2026-10-20T22:12:33Z state=seen next=filed`, "bob")], ["bob/DEVPLANE"], "a bare ack is its login's"],
+    [["decision"], [c("go")], [], "no label, no ack: none"],
+    [["decision"], [], [], "no comments: none"],
+    [["decision"], [c(`${P}ACK seat=alice/DEVPLANE state=seen`)], [], "a malformed first ack: none"],
+  ];
+  for (const [labels, comments, want, why] of TABLE) {
+    const lib = sh(`row_seats "$1" "$2"`, [JSON.stringify(labels.map((name) => ({ name }))), JSON.stringify(comments)]);
+    assert.equal(lib.status, 0, `${why}: ${lib.err}`);
+    assert.deepEqual(lib.out ? lib.out.split("\n") : [], want, `lib.sh row_seats: ${why}`);
+    assert.deepEqual(Array.from(rowSeats({ labels }, comments)), want, `page rowSeats: ${why}`);
+  }
+});
+
 test("waitSince: the newest seat event the decider has not answered (the filing, an amend line, a reply after a revise)", () => {
   const { waitSince, standingOf } = pageFns(PAGE, ["waitSince", "standingOf", "answerKind", "ackLine", "ms"], ["AMEND_RE", "ACK_RE", "CLOSER_RE"]);
   const at = (list) => waitSince("2026-10-20T19:00:00Z", standingOf(list, PHRASE, "alice"));

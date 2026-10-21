@@ -591,7 +591,7 @@ case "$cmd" in
     fi
     pr="https://github.com/$PUB/pull/$n"
     echo "PR: $pr"
-    "$BEAST_SCRIPTS/decision.sh" new --decides "$PUB" --title "$(row_title "$slug")" --assignee "$decider" --by "$seat" --seat "$seat" \
+    "$BEAST_SCRIPTS/decision.sh" new --decides "$PUB" --title "$(row_title "$slug")" --assignee "$decider" --by "$seat" \
       --decision "Publish $pr to $PUB: one new commit ($(G rev-parse --short "$br"), \"$(G log -1 --format=%s "$br")\"), $(G diff --shortstat "$base" "$br" | sed 's/^ //'). Read the diff there; your word goes on this row, never on the PR." \
       --unblocks "the squash-merge of $pr into $PUB $db" \
       --waits "your review of the PR's diff and description, written for outside readers" \

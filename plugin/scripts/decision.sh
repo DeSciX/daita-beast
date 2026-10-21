@@ -34,8 +34,9 @@
 #       closed) is newer than the seat's newest BEAST-ACK, then the seat's desk (desk.sh inbox); computed from
 #       GitHub, nothing local, the same on every machine and surface. It opens with the seat's home milestones due
 #       within 3 days or overdue (milestone_due_flags, lib.sh), one line each, when there are any
-# `--seat` takes a LABEL (resolved through the roster) or an id, and adds the label seat:<login>/<LABEL> for
-# each seat that waits on the decision (created in the repo when missing), so the waiting seat is visible
+# The row carries the label seat:<login>/<LABEL> of the filing seat (--by) and of each --seat (a LABEL resolved through
+# the roster, or an id) that waits on the decision, each created in the repo when missing and read back after the
+# write (seat_labels_require dies naming a label that did not land), so every row is in its seats' inboxes and relay
 # and filterable in the GitHub UI.
 # `close` comments the verbatim word with its record, closes the issue, republishes the decider's board
 # (the roster's "board" repo, or --board), and prints the waiting seats with their live addresses so the
@@ -79,8 +80,13 @@ case "$cmd" in
     coord_write_guard "$repo" "$by"
     [[ -z "$ms" ]] || milestone_title_check "$ms"
     msn="$(milestone_require "$repo" "$ms")" || exit 1
-    ids=()   # every --seat resolved to its id before anything is written
-    for s in "${seats[@]:-}"; do [[ -n "$s" ]] || continue; s="$(seat_id "$s")" || exit 1; ids+=("$s"); done
+    # The row's seats, each resolved to its id before anything is written: the filer first, always (a row without a
+    # seat: label reaches no seat's inbox or relay), then every --seat that is not the filer.
+    ids=("$by")
+    for s in "${seats[@]:-}"; do
+      [[ -n "$s" ]] || continue; s="$(seat_id "$s")" || exit 1
+      [[ " ${ids[*]} " == *" $s "* ]] || ids+=("$s")
+    done
     tmp="$(mktemp)"
     if [[ -n "$body_file" ]]; then
       cp "$body_file" "$tmp"
@@ -137,12 +143,12 @@ $body"
     # (the board and the relay find decisions by label, so an unlabelled issue is invisible).
     label_ensure_template "$repo" decision
     labels=(--label decision); [[ $hands -eq 1 ]] && { label_ensure_template "$repo" hands; labels+=(--label hands); }
-    for s in "${ids[@]:-}"; do [[ -n "$s" ]] || continue; seat_label_ensure "$repo" "$s"; labels+=(--label "seat:$s"); done
+    for s in "${ids[@]}"; do seat_label_ensure "$repo" "$s"; labels+=(--label "seat:$s"); done
     [[ "$title" == Decision:* ]] || title="Decision: $title"
     # Idempotent: a rerun after a failure part-way (the create landed, a later step died) finds the row it filed
     # instead of filing a second. The list API, not search (the search index lags a create): an OPEN decision
     # issue with this exact title, filed by this login, carrying exactly these seat labels, is reused.
-    want_seats="$(printf '%s\n' "${ids[@]:-}" | sed '/^$/d; s/^/seat:/' | jq -R . | jq -sc 'sort')"
+    want_seats="$(printf 'seat:%s\n' "${ids[@]}" | jq -R . | jq -sc 'sort')"
     url="$(issues_list "$repo" -f labels=decision -f state=open | jq -r --arg t "$title" --arg me "$(gh_login)" --argjson s "$want_seats" '
       [.[] | select(.pull_request == null and .title == $t and .user.login == $me
                     and ([.labels[].name | select(startswith("seat:"))] | sort) == $s)] | sort_by(.number) | .[0].html_url // empty')" \
@@ -157,6 +163,7 @@ $body"
       issues_list_shows "$repo" "${url##*/}" -f labels=decision -f state=open   # so a rerun finds it (the list lags a create)
     fi
     rm -f "$tmp"
+    seat_labels_require "$repo" "${url##*/}" "${ids[@]}"
     # The filer's seen ack, the row's first comment (a rerun that reuses the row posts it only when it is missing).
     acked=0
     if [[ $reused -eq 1 ]]; then rd="$(row_read "$repo" "${url##*/}")" || exit 1; seat_acks "$rd" | cut -f1 | grep -qxF -- "$by" && acked=1; fi

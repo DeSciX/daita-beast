@@ -7,7 +7,8 @@
 #       `## Recommendation` sections (PR_ROW_SECTIONS, section_replace; a rerun replaces them), the sections board.sh and
 #       the board page show on the PR's row, as a decision row's.
 #       --milestone files the PR under that open milestone of its repo; required when the repo has any (milestone_require)
-#       then labels the PR `needs-review` and seat:<login>/<LABEL>, assigns the decider (default: the roster's
+#       then labels the PR `needs-review` and seat:<login>/<LABEL> of the requesting seat (read back: seat_labels_require
+#       dies when it did not land), assigns the decider (default: the roster's
 #       people[] owner; dies when that is not exactly one login). Every seat posts as the decider's login
 #       today, and GitHub refuses a review request to, or an approval by, a PR's own author, so the label
 #       plus the assignee is the request; the decider answers with a comment, as on a decision.
@@ -73,6 +74,7 @@ case "$cmd" in
     label_ensure_template "$repo" needs-review
     seat_label_ensure "$repo" "$seat"
     issue_add_labels "$repo" "$number" needs-review "seat:$seat"
+    seat_labels_require "$repo" "$number" "$seat"
     issue_add_assignees "$repo" "$number" "$assignee"
     [[ -z "$msn" ]] || milestone_set "$repo" "$number" "$msn"
     # The requester's seen ack (ack_line, lib.sh): the seat is current on the row it put on the board, and the relay

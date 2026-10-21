@@ -37,17 +37,20 @@ issues="$(search_issues "$q")" || die "GitHub search failed for: $q"
 # The search index lags a close by seconds; the live issue is the owner of its state, so every
 # candidate is re-read and a closed one is dropped here. The count is of rendered rows.
 errors=0; count=0
-# seat_cells <row> <labels-json> <event_at>: "SEAT ✓state · SEAT —" per seat of the row (a row_read), from its
-# newest ack vs the latest event; a seat shows as LABEL when it is the viewer's own, else as its id.
+# seat_cells <row> <labels-json> <event_at>: "SEAT ✓state · SEAT —" per seat of the row (a row_read; row_seats: its
+# seat: labels, else its filer), from its newest ack vs the latest event; a seat shows as LABEL when it is the viewer's
+# own, else as its id. A row with no seat at all is the one cell "—".
 seat_cells() {
-  local rd="$1" labels="$2" ev="$3" acks out="" seat line shown
+  local rd="$1" labels="$2" ev="$3" acks out="" seat line shown seats
+  seats="$(row_seats "$labels" "$(jq -c .comments <<< "$rd")")" || exit 1
+  [[ -n "$seats" ]] || { printf '—'; return 0; }
   acks="$(seat_acks "$rd" 2>/dev/null || true)"
   while read -r seat; do
     [[ -n "$seat" ]] || continue
     shown="$(seat_display "$seat" "$viewer")"
     line="$(printf '%s\n' "$acks" | awk -F'\t' -v s="$seat" '$1==s')"
     if [[ -n "$line" && ! "$(cut -f2 <<< "$line")" < "$ev" ]]; then out="$out$shown ✓$(cut -f3 <<< "$line") · "; else out="$out$shown — · "; fi
-  done < <(row_seat_ids "$labels")
+  done <<< "$seats"
   printf '%s' "${out% · }"
 }
 table="| Kind | # | Decision | Unblocks | Waits | Recommendation | Approve with | Record | Seats |
@@ -107,7 +110,7 @@ while IFS=$'\t' read -r num url_ full closed_at kind title labels; do
   cells="$(seat_cells "$rd" "$labels" "$closed_at")"
   dcount=$((dcount+1))
   drow="| $closed_at | $kind | [$full#$num]($url_) | $(printf '%s' "$title" | sed 's/^Decision: //' | cell) | $(printf '%s' "$last" | cell) | $cells |"
-  if [[ "$cells" == *"—"* ]]; then dunacked=$((dunacked+1)); drows_unacked="$drows_unacked
+  if [[ "$cells" == *" —"* ]]; then dunacked=$((dunacked+1)); drows_unacked="$drows_unacked
 $drow"; else acked+=("$drow"); fi
 done < <(jq -r 'sort_by(.closed_at) | reverse | .[] | [.number, .html_url, (.repository_url | sub(".*/repos/"; "")), .closed_at, (if .pull_request then (if .pull_request.merged_at then "PR merged" else "PR" end) else "decision" end), .title, (.labels | tojson)] | @tsv' <<< "$decided")
 # Milestones due within 3 days or overdue, per home repo of the roster (the roster repo and each seat's repo), naming
@@ -130,7 +133,7 @@ else
 fi
 stamp="$(utc_now)"
 header="Pending decisions for @$assignee — $count open (decision issues and PRs for review), $dcount decided in the last 7 days ($dunacked not yet acked by every seat) — generated $stamp by daita-beast board.sh. Live list: $url
-Do not edit this issue: file a decision issue (an act without code) or request review on a PR (pr.sh request) to add a row, close it (quoting the word and its record id; a PR merged or rejected by pr.sh close) to remove one. Questions across the desk live on each seat's desk issue, never here. A decision given in a session before a row existed is filed and closed in one act (decision.sh record), so it appears below. Seats: ✓ and the ack state when the seat's newest BEAST-ACK is newer than the row's latest event, — when it is not."
+Do not edit this issue: file a decision issue (an act without code) or request review on a PR (pr.sh request) to add a row, close it (quoting the word and its record id; a PR merged or rejected by pr.sh close) to remove one. Questions across the desk live on each seat's desk issue, never here. A decision given in a session before a row existed is filed and closed in one act (decision.sh record), so it appears below. Seats: ✓ and the ack state when the seat's newest BEAST-ACK is newer than the row's latest event, — when it is not; a lone — is a row with no seat (no seat: label, no filer ack)."
 # GitHub refuses an issue body over 65536 characters. The published body keeps every open row and every
 # decided row some seat has not acked; acked decided rows (newest first) fill the rest of BOARD_BUDGET, and
 # a line says how many older acked rows are left out. Nothing open or unacked is ever dropped: if those
