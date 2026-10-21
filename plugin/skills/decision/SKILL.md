@@ -35,6 +35,12 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh revise acme/widgets#12 --by <YOUR SEAT
 ```
 It refuses unless the decider's standing answer is a revise, rewrites only the named sections (`--body-file` replaces the six), and posts one comment whose first line is the amend line. Until then `close` refuses an approval, naming the revise; a reject still closes.
 
+If a hand edit broke your row's body (the watchdog's `row-shape` reminder, or the board shows it malformed), put back the last body a Beast script wrote, from the issue's edit history; no word of the decider's is needed:
+```
+${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh restore acme/widgets#12 --by <YOUR SEAT>
+```
+Only the row's filer or one of its seats may run it. It writes the recorded body back byte for byte (each script that writes a body records its digest as the last line `BEAST-BODY digest=…` of the comment it posts) and posts one comment whose first line is the amend line, so an approval given before it no longer counts. It refuses a closed row, a pending `revise:` (answer that with `revise`), a row with no recorded body, a body that already is the recorded one, an unreadable edit history, and a recorded body that is itself malformed; then the repair is the decider's `revise:` and `decision.sh revise`. Never edit a row's body by hand.
+
 `record` is ONLY for a significant decision the decider already gave in a session before a row existed (scope, engine, ship-or-cut, release; anything needing explanatory content): it is filed AND closed in one act. Never use it for something you are about to ask: that is `new`, filed before you ask, open until the word; a minor word (wording, copy, a link) goes only into the repo's dated record, never onto the board. Filing it closed puts it in the board's decided table; the dated record is committed first and cited:
 ```
 ${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh record --assignee <login> [--decides <owner/repo>] [--seat <SEAT>]... --title "…" <the six sections or --body-file> --words "<verbatim>" --record "<repo commit — path>" --by <YOUR SEAT> [--rejected]

@@ -70,7 +70,7 @@ while IFS=$'\t' read -r num url_ full; do
       if text="$(section_required "$h" "$body" "$who (rerun pr.sh request with --unblocks and --recommendation)" 2>/tmp/board.err)"; then
         text="$(printf '%s' "$text" | cell)"
       else
-        cat /tmp/board.err >&2; errors=$((errors+1)); text="(missing: $h)"
+        cat /tmp/board.err >&2; errors=$((errors+1)); text="(empty or missing ## $h)"
       fi
       case "$h" in Unblocks) pu="$text" ;; Recommendation) pr_="$text" ;; *) die "board.sh has no column for the PR section '$h'" ;; esac
     done
@@ -81,7 +81,7 @@ while IFS=$'\t' read -r num url_ full; do
       if text="$(section_required "$h" "$body" "$who" 2>/tmp/board.err)"; then
         row="$row | $(printf '%s' "$text" | cell)"
       else
-        cat /tmp/board.err >&2; errors=$((errors+1)); row="$row | (missing: $h)"
+        cat /tmp/board.err >&2; errors=$((errors+1)); row="$row | (empty or missing ## $h)"
       fi
     done
   fi

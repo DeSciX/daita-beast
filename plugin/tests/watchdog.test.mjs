@@ -57,3 +57,16 @@ test("fault_once: a scheduled caller's ledger names a fault once per message; wi
   const none = run({ BEAST_FAULT_LEDGER: "" });
   assert.equal(none.stderr.split("\n").filter((l) => l.includes("table broken")).length, 3);
 });
+
+test("row_shape_missing: an open assigned row's empty or missing required sections, by section_required; nothing otherwise", () => {
+  const full = "## Decision\nd\n\n## Unblocks\nu\n\n## Waits\nw\n\n## Recommendation\nr\n\n## Approve with\n\"go\"\n\n## Record\nrec\n";
+  const row = (body, o = {}) => JSON.stringify({ issue: { state: "open", assignees: [{ login: "alice" }], labels: [{ name: "decision" }], pull_request: null, body, ...o }, comments: [] });
+  const run = (r) => { const x = sh(`source '${LIB}'; row_shape_missing "$1"`, [r]); assert.equal(x.status, 0, x.stderr); return x.stdout.split("\n").filter(Boolean); };
+  assert.deepEqual(run(row(full)), []);
+  assert.deepEqual(run(row(full.replace("## Recommendation\nr\n", "## Recommendation\n\n"))), ["Recommendation"]);
+  assert.deepEqual(run(row(full.replace("## Waits\nw\n\n", "").replace("## Record\nrec\n", "## Record\n   \n"))), ["Waits", "Record"]);
+  assert.deepEqual(run(row("## What\nx\n", { pull_request: {}, labels: [{ name: "needs-review" }] })), ["Unblocks", "Recommendation"]);
+  assert.deepEqual(run(row("", { state: "closed" })), [], "a closed row waits on no one");
+  assert.deepEqual(run(row("", { assignees: [] })), [], "an unassigned row waits on no decider");
+  assert.deepEqual(run(row("", { labels: [{ name: "desk" }] })), [], "a desk is no row");
+});

@@ -804,7 +804,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     var foot = h("footer", { class: "cfoot" });
     card.appendChild(foot);
     if (p.missing.length || !p.phrase || !r) {
-      var why = p.missing.length ? p.missing.join(", ") : (!r ? "repository" : "Approve with has no quoted phrase");
+      var why = p.missing.length ? "empty or missing " + p.missing.map(function (n) { return "## " + n; }).join(", ") : (!r ? "repository" : "Approve with has no quoted phrase");
       foot.appendChild(h("div", { class: "note err", text: "malformed: " + why }));
       return card;
     }

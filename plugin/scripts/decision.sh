@@ -26,6 +26,17 @@
 #       <sections>"). An approval older than the amend no longer counts (row_answer_url), and until the amend no approval
 #       closes the row (row_revise_pending: decision.sh close, pr.sh close --merge, publish.sh merge). A reply comment
 #       is not a revision. On a pull request, push the change first; --body-file then replaces the PR body whole.
+#   decision.sh restore <owner/repo#N | url> --by <LABEL | login/LABEL>
+#       puts a row's body back to exactly the last body a Beast script wrote (new, revise, restore, pr.sh request; publish.sh
+#       request files through new), after a hand edit broke it: the newest comment whose last line is a body line
+#       (body_line: "BEAST-BODY digest=<digest of the body written>", body_record_last) names it, and the version of the
+#       body in the issue's edit history (issue_body_versions, GraphQL userContentEdits) with that digest is written back
+#       byte for byte; no text is composed. Seat-only: --by is the row's filer (row_filer) or one of its seats (row_seats).
+#       Posts ONE comment whose first line is the amend line ("restored the body recorded at <url>; changed: <sections>"),
+#       so an approval older than it no longer counts (row_answer_url), then edits the body. Refused on a closed row, while
+#       the decider's revise: is pending (decision.sh revise answers it), when no body line exists, when the current body
+#       already is that body, when the edit history cannot be read or does not hold it, and when that body is itself
+#       malformed (section_required over ROW_SECTIONS, or PR_ROW_SECTIONS on a pull request).
 #   decision.sh record --repo ... --title ... --assignee ... <the new sections or --body-file> --words "<verbatim>" --record "<repo commit>" --by <LABEL | login/LABEL> [--seat ...] [--rejected]
 #       files the row AND closes it on the words in one act: for a decision the decider gave in session before a
 #       row existed, so the board's decided table carries it (nothing is decided off the board).
@@ -169,7 +180,10 @@ $body"
     if [[ $reused -eq 1 ]]; then rd="$(row_read "$repo" "${url##*/}")" || exit 1; seat_acks "$rd" | cut -f1 | grep -qxF -- "$by" && acked=1; fi
     if [[ $acked -eq 0 ]]; then
       line="$(ack_line "$by" seen "filed; waits on the decider's word")" || exit 1
-      issue_comment "$repo" "${url##*/}" "$line" >/dev/null \
+      # Its last line records the body this filing wrote (body_line, lib.sh): what decision.sh restore puts back.
+      issue_comment "$repo" "${url##*/}" "$line
+
+$(body_line "$body")" >/dev/null \
         || die "$url is filed but the filer's ack was NOT posted (named above): rerun the same decision.sh new, which reuses the row and posts it"
     fi
     echo "$url"
@@ -304,12 +318,76 @@ $body"
 The row's body is revised in answer to the decider's revise (by seat $by). ${summary:+The changed sections now open:
 $summary
 
-}Approve with \"$np\", or answer again; an approval given before this line no longer counts."
+}Approve with \"$np\", or answer again; an approval given before this line no longer counts.
+
+$(body_line "$new")"
     url="$(issue_comment "$repo" "$number" "$cbody")" \
       || die "the body of $who is revised but the amend comment was NOT posted (named above): the row still reads as not revised; rerun the same decision.sh revise"
     echo "revised $who: $changed"
     echo "$url"
     echo "approves with \"$np\""
+    ;;
+  restore)
+    ref="${1:-}"; shift || true
+    by=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --by) by="$2"; shift 2 ;;
+        *) die "unknown argument $1" ;;
+      esac
+    done
+    [[ -n "$ref" && -n "$by" ]] || die "usage: decision.sh restore <issue> --by <SEAT>"
+    by="$(seat_id "$by")" || exit 1
+    rn="$(parse_issue_ref "$ref")" || exit 1; read -r repo number <<< "$rn"
+    coord_write_guard "$repo" "$by"
+    rd="$(row_read "$repo" "$number")" || exit 1
+    info="$(jq '.issue' <<< "$rd")"
+    who="$repo#$number"
+    [[ "$(jq -r .state <<< "$info")" == open ]] || die "$who is closed: a decided row is not restored"
+    # Seat-only: the row's filer (row_filer) or one of its seats (row_seats).
+    filer="$(tag_jq -r 'row_filer(.comments) // empty' <<< "$rd")" || die "$who: cannot read the row's filer"
+    [[ -z "$filer" ]] || filer="$(seat_resolve "$filer" 2>/dev/null || true)"
+    seats="$(row_seats "$(jq -c .issue.labels <<< "$rd")" "$(jq -c .comments <<< "$rd")")" || exit 1
+    [[ "$by" == "$filer" ]] || grep -qxF -- "$by" <<< "$seats" \
+      || die "$who: $by is neither the row's filer (${filer:-none}) nor one of its seats ($(paste -sd, - <<< "$seats" | sed 's/^$/none/')): only the row's own seat restores its body"
+    pend="$(row_revise_pending "$rd")" || exit 1
+    [[ -z "$pend" ]] || die "$who: the decider asked for a revision at $pend: decision.sh revise answers it (--body-file restores and revises in one act); a restore is not a revision"
+    if jq -e '.pull_request != null' <<< "$info" >/dev/null; then list=("${PR_ROW_SECTIONS[@]}"); else list=("${ROW_SECTIONS[@]}"); fi
+    # The last body a Beast script wrote: the newest body line (body_record_last), matched by digest against the body's
+    # edit history (issue_body_versions). Restore never composes text: it writes that version back byte for byte.
+    rec="$(body_record_last "$(jq -c .comments <<< "$rd")")" || die "$who: cannot read the row's comments"
+    [[ -n "$rec" ]] || die "$who: no comment records a body a Beast script wrote (no BEAST-BODY line: filed before this plugin recorded one, or from a surface without a shell): there is nothing to restore from; the decider's revise: and decision.sh revise repair it"
+    IFS=$'\t' read -r want recurl <<< "$rec"
+    cur="$(jq -r '.body // ""' <<< "$info")"
+    [[ "$(body_digest "$cur")" != "$want" ]] || die "$who: nothing to restore: the body already is the last body a Beast script wrote (recorded at $recurl)"
+    vers="$(issue_body_versions "$repo" "$number")" || exit 1
+    tmp="$(mktemp)"; found=0
+    for ((i = $(jq length <<< "$vers") - 1; i >= 0; i--)); do
+      jq -j --argjson i "$i" '.[$i].body' <<< "$vers" > "$tmp"
+      if [[ "$(body_digest "$(cat "$tmp")")" == "$want" ]]; then found=1; break; fi
+    done
+    [[ $found -eq 1 ]] || { rm -f "$tmp"; die "$who: the body recorded at $recurl is not in the body's edit history ($(jq length <<< "$vers") version(s) read): nothing is restored"; }
+    old="$(cat "$tmp")"
+    for h in "${list[@]}"; do
+      ( section_required "$h" "$old" "$who" >/dev/null ) 2>/dev/null \
+        || { rm -f "$tmp"; die "$who: the last body a Beast script wrote (recorded at $recurl) is itself malformed: empty or missing '## $h'; restoring it repairs nothing; the decider's revise: and decision.sh revise --body-file repair it"; }
+    done
+    changed="$(for h in "${list[@]}"; do [[ "$(printf '%s\n' "$cur" | section "$h")" == "$(printf '%s\n' "$old" | section "$h")" ]] || echo "$h"; done | paste -sd, - | sed 's/,/, /g')"
+    np="$(row_phrase "$who" "$(jq --arg b "$old" '.body = $b' <<< "$info")" 2>/dev/null)"
+    # The amend line first, then the body: a failure between them leaves an earlier approval not counting (the safe
+    # direction), and a rerun finds the body still broken and restores it.
+    line="$(amend_line "restored the body recorded at $recurl; changed: ${changed:-the text outside the sections}")"
+    cbody="$line
+
+The row's body is restored by seat $by to the last body a Beast script wrote, from the issue's edit history: a hand edit had changed it. ${np:+Approve with \"$np\", or answer again; }an approval given before this line no longer counts.
+
+$(body_line "$old")"
+    url="$(issue_comment "$repo" "$number" "$cbody")" || { rm -f "$tmp"; die "$who: the amend comment was NOT posted (named above): nothing is restored; rerun decision.sh restore"; }
+    issue_edit_body "$repo" "$number" "$tmp" || { rm -f "$tmp"; die "$who: the amend line is posted ($url) but the body was NOT restored (named above): rerun decision.sh restore"; }
+    rm -f "$tmp"
+    echo "restored $who to the body recorded at $recurl: ${changed:-the text outside the sections}"
+    echo "$url"
+    [[ -z "$np" ]] || echo "approves with \"$np\""
     ;;
   inbox)
     seat="${1:-}"; shift || true
@@ -371,5 +449,5 @@ $summary
     [[ "$url" == https://github.com/* ]] || die "record: the row was not filed: $url"
     "$0" close "$url" --words "$words" --record "$rec" --by "$by" $([[ $rejected -eq 1 ]] && echo --rejected)
     ;;
-  *) die "usage: decision.sh new|close|revise|record|inbox" ;;
+  *) die "usage: decision.sh new|close|revise|restore|record|inbox" ;;
 esac

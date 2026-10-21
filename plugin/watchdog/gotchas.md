@@ -2,7 +2,7 @@
 
 The data file the watchdog agent (`plugin/agents/watchdog.md`) reads for each SIGNAL, and the list of what the tick (`plugin/scripts/watchdog.sh`) does without a model. Severity: **S1** a seat is missing the decider's word or a peer's message now; **S2** a defect that will cause an S1; **S3** hygiene. "Tick" means the shell acts alone; "agent" means the signal reaches the Haiku session. A new gotcha is filed as `watchdog: NEW:<slug> …` on the plugin twin and promoted into this file by the BEAST seat in a commit; the watchdog never edits this file.
 
-Bounds, the same for every check: a nudge once per (seat, check, object) every 2 h (`unacked`, `unreachable`, `milestone-required`, `duplicate-address`) or once a week (`untagged-comment`, `old-plugin`); at most 3 nudges a tick and 1 per seat; at most 1 new bug a tick and 5 a day; at most 1 relay re-point a tick. Tuning: three `false-alarm` replies on one check within 7 days double its parameter, once per three: `unacked.grace` 900 to 7200 s, `<check>.every` 7200 to 28800 s; each change is a `TUNE` line in the notes.
+Bounds, the same for every check: a nudge once per (seat, check, object) every 2 h (`unacked`, `unreachable`, `milestone-required`, `duplicate-address`) or once a week (`untagged-comment`, `old-plugin`, `row-shape`); at most 3 nudges a tick and 1 per seat; at most 1 new bug a tick and 5 a day; at most 1 relay re-point a tick. Tuning: three `false-alarm` replies on one check within 7 days double its parameter, once per three: `unacked.grace` 900 to 7200 s, `<check>.every` 7200 to 28800 s; each change is a `TUNE` line in the notes.
 
 ## unreachable (S2, agent: nudge the live session)
 
@@ -18,6 +18,11 @@ Bounds, the same for every check: a nudge once per (seat, check, object) every 2
 
 - **Signal.** On a row the tick re-read, a comment by the seats' login since the last tick whose first line is neither bookkeeping, an answer form, nor a seat tag, and whose body carries a seat's tell (`Closed by seat`, `seat=`, `--by `, a `cd /Users/…` command, "builder"). Such a comment is read as the decider's (`event_actors`: the `-` actor) and relayed to every seat on the row as the decider's news.
 - **Act.** A heuristic: when the comment reads as the decider's own words, reply `false-alarm <why>`. Otherwise send the block (delete it and repost through `ack.sh --text`; delete, never edit). The watchdog never deletes or edits a comment.
+
+## row-shape (S1, agent: nudge)
+
+- **Signal.** On a row the tick re-read for check 7 (no other read, no search): an open decision issue or `needs-review` pull request, assigned (it waits on its decider), whose required sections (`ROW_SECTIONS`, `PR_ROW_SECTIONS`) are empty or missing by `section_required`, the one owner (`lib.sh::row_shape_missing`). The decider's board shows it `malformed: empty or missing ## <section>` with no buttons, so the row cannot be answered. Only the filing seat hears it (`row_filer`, the seat of the row's first `BEAST-ACK`; a row with none, its `row_seats`), and only while it is live. Measured 2026-10-21: a decision row was filed whole by `decision.sh new`; 33 s later a hand edit of its body under the shared login emptied `## Recommendation`.
+- **Act.** Send the block: the row, the empty or missing sections, the repair path: `decision.sh restore <row> --by <SEAT>` (the seat puts back the last body a Beast script wrote, read from the body's edit history; no word of the decider's needed). Only when restore refuses (that body is itself malformed, or the row carries no `BEAST-BODY` record): a PR row, `pr.sh request` again; a publish row, `publish.sh request --amend`; a decision row, `decision.sh revise` after the decider's `revise:`. The object is the row and its missing set, so a fresh breakage of a repaired row is a fresh nudge. The watchdog never edits the row.
 
 ## old-plugin (S2, agent: nudge)
 

@@ -22,13 +22,17 @@
 #                recorded on this machine whose name is not the live session's name, or older than 24 h, is re-stamped
 #                by the tick itself (seats.sh touch <identity>: the live name, at=now)
 #   7 unacked    the live seats' relay snapshots (~/.beast/watch/<login>/<LABEL>.json): a row or desk read only when its
-#                updatedAt moved (row_read, row_events, seat_acks, desk_parse; the result cached per row and seat)
+#                updatedAt moved (row_read, row_events, seat_acks, desk_parse; the result cached per row and seat); on
+#                the same read, row-shape: an open row waiting on its decider whose required sections are empty or
+#                missing (row_shape_missing, lib.sh: section_required over ROW_SECTIONS / PR_ROW_SECTIONS), for the
+#                filing seat only (row_filer, else row_seats); the row itself is never edited
 #   8 weekly     the relay caches of retired seats and the legacy ~/.beast/watch-*.json files, deleted
 # Shell acts (no model): the relay re-point (one per tick), a corrupt mark the watcher named, deleted; bugs (hook misfires
 # from hooks.log and transcripts, an unparseable `## Seats` table, an unexplained watch failure, a rate-limit burst),
 # queued and filed at most one per tick and five a day; the address re-stamp (seats.sh touch). Agent signals (need
 # SendMessage): unreachable (report; nudge the live session), unacked, untagged-comment, old-plugin, milestone-required,
-# duplicate-address (nudges). At most 3 nudges a tick, 1 per seat, and once per (seat, check, object) every 2 h
+# duplicate-address, row-shape (nudges). At most 3 nudges a tick, 1 per seat, and once per (seat, check, object) every 2 h
+# (once a week: untagged-comment, old-plugin, row-shape)
 # (bounded self-tuning: three false alarms on a check double its grace or cadence, up to the catalogue's bound).
 # Memory: ~/.beast/watchdog/state.json (offsets, ledgers, row cache; a cache: losing it costs a duplicate nudge at most)
 # and ONE comment "BEAST-WATCHDOG-NOTES machine=<host> …" on the Beast workstream's tracking issue, edited in place.
@@ -429,7 +433,7 @@ if [[ $low -eq 0 ]]; then
       [[ -n "$url" ]] || continue
       ck="$url|$id"; c="$(st --arg k "$ck" '.rows[$k] // empty')"
       if [[ -z "$c" || "$(jq -r .updatedAt <<< "$c")" != "$upd" ]]; then
-        read -r rr rn < <(parse_issue_ref "$url")
+        read -r rr rn < <(parse_issue_ref "$url"); shape=""; shape_to=false
         if ! rd="$(row_read "$rr" "$rn" 2>/dev/null)"; then wlog "SKIPPED unacked: cannot read $url"; continue; fi
         if ! ack="$(seat_acks "$rd" 2>/dev/null | awk -F'\t' -v s="$short" '$1 == s {print $2}')"; then wlog "SKIPPED unacked: cannot read the acks of $url"; continue; fi
         if [[ "$isdesk" == true ]]; then
@@ -447,9 +451,21 @@ if [[ $low -eq 0 ]]; then
           while IFS= read -r uc; do
               signal "$(jq -nc --arg i "$id" --arg a "$addr" --arg r "$url" --argjson c "$uc" '{check: "untagged-comment", seat: $i, object: $c.html_url, address: $a, row: $r, evidence: "an untagged comment on \($r) reads as a seat'"'"'s: \"\($c.first)\" \($c.html_url)"}')"
           done < "$WD_DIR/untagged.tmp"; rm -f "$WD_DIR/untagged.tmp" "$WD_DIR/untagged.err"
+          # row-shape (catalogue): the required sections empty or missing (row_shape_missing: section_required over
+          # ROW_SECTIONS / PR_ROW_SECTIONS), heard by the filing seat only (row_filer, else row_seats)
+          if ! shape="$(row_shape_missing "$rd" 2>/dev/null | paste -sd, -)"; then wlog "SKIPPED row-shape: cannot read the body of $url"; shape=""; fi
+          if [[ -n "$shape" ]]; then
+            filer="$(tag_jq -r 'row_filer(.comments) // empty' <<< "$rd" 2>/dev/null || true)"
+            if [[ -n "$filer" ]]; then [[ "$(seat_short "$filer" 2>/dev/null)" != "$short" ]] || shape_to=true
+            elif row_seats "$(jq -c .issue.labels <<< "$rd")" "$(jq -c .comments <<< "$rd")" 2>/dev/null | grep -qxF "$short"; then shape_to=true; fi
+          fi
         fi
-        st_set '.rows[$k] = {updatedAt: $u, event_at: $e, kind: $kd, ack_at: $a}' --arg k "$ck" --arg u "$upd" --arg e "${ev:-}" --arg kd "${kind:-}" --arg a "${ack:-}"
+        st_set '.rows[$k] = {updatedAt: $u, event_at: $e, kind: $kd, ack_at: $a, shape: $sh, shape_to: ($to == "true")}' --arg k "$ck" --arg u "$upd" --arg e "${ev:-}" --arg kd "${kind:-}" --arg a "${ack:-}" --arg sh "${shape:-}" --arg to "${shape_to:-false}"
         c="$(st --arg k "$ck" '.rows[$k]')"
+      fi
+      if [[ "$isdesk" != true && -n "$(jq -r '.shape // ""' <<< "$c")" && "$(jq -r '.shape_to // false' <<< "$c")" == true ]]; then
+        sh_="$(jq -r .shape <<< "$c")"
+        signal "$(jq -nc --arg i "$id" --arg a "$addr" --arg r "$url" --arg m "$sh_" '{check: "row-shape", seat: $i, object: ($r + "#" + ($m | gsub(","; "+") | gsub(" "; "_"))), address: $a, row: $r, missing: $m, evidence: "\($r): empty or missing \($m | split(",") | map("## " + .) | join(", "))"}')"
       fi
       ev="$(jq -r .event_at <<< "$c")"; ack="$(jq -r .ack_at <<< "$c")"
       [[ -n "$ev" && ( -z "$ack" || "$ack" < "$ev" ) ]] || continue
@@ -492,7 +508,7 @@ nudges=0
 while IFS= read -r s; do
   [[ -n "$s" ]] || continue
   c="$(jq -r .check <<< "$s")"; i="$(jq -r .seat <<< "$s")"; o="$(jq -r .object <<< "$s")"
-  case "$c" in untagged-comment|old-plugin) every=$ONCE_S ;; *) every="$(tune "$c.every" "$EVERY_DEFAULT")" ;; esac
+  case "$c" in untagged-comment|old-plugin|row-shape) every=$ONCE_S ;; *) every="$(tune "$c.every" "$EVERY_DEFAULT")" ;; esac
   [[ "$c" == unacked ]] || ledger_due "$i|$c|$o" "$every" || continue
   (( nudges < NUDGES_PER_TICK )) || continue
   [[ "$(jq -rs --arg i "$i" '[.[] | select(.seat == $i)] | length' "$PICK")" -eq 0 ]] || continue
@@ -528,6 +544,10 @@ msg_for() {  # msg_for <signal json>: the nudge text the agent sends verbatim (e
     untagged-comment) printf '%s. If it is yours, delete it and repost it through %s/ack.sh <row> --seat %s --state seen --next "…" --text "…" (an untagged comment is read as the decider'"'"'s; delete, never edit).\n' "$(jq -r .evidence <<< "$s")" "$S" "$label" ;;
     old-plugin) printf 'This session %s. Restart it at a seam (post the handoff first: %s/status.sh <tracking> --seat %s --state handoff …).\n' "$(jq -r .evidence <<< "$s")" "$S" "$label" ;;
     milestone-required) printf 'Your scripts refused twice for a missing --milestone: %s. Pass --milestone "<title>" with one of the open milestones it lists.\n' "$(jq -r .evidence <<< "$s")" ;;
+    row-shape)
+      printf 'Your row %s shows as malformed on the decider'"'"'s board, with no answer buttons: empty or missing %s. A row body changes only through decision.sh revise, pr.sh request, publish.sh request --amend or decision.sh restore; a hand edit is not a path. Repair: %s/decision.sh restore %s --by %s puts back the last body a Beast script wrote (it refuses when that body is itself malformed, or the row carries no record of one); if it refuses: ' "$(jq -r .row <<< "$s")" "$(jq -r '.missing | split(",") | map("## " + .) | join(", ")' <<< "$s")" "$S" "$(jq -r .row <<< "$s")" "$label"
+      if [[ "$(jq -r .row <<< "$s")" == */pull/* ]]; then printf 'rerun %s/pr.sh request <pr> --seat %s --unblocks "…" --recommendation "…" (it replaces the sections).\n' "$S" "$label"
+      else printf 'a publish row, %s/publish.sh request <slug> --amend --seat %s; any other decision row, %s/decision.sh revise <row> --by %s --<section> "…" once the decider has answered revise: on it.\n' "$S" "$label" "$S" "$label"; fi ;;
     duplicate-address) printf 'Every script that reads your address dies: %s. Delete all but one of the comments it names (your own fact; the watchdog deletes nothing).\n' "$(jq -r .evidence <<< "$s")" ;;
     *) printf '%s\n' "$(jq -r '.evidence // ""' <<< "$s")" ;;
   esac
