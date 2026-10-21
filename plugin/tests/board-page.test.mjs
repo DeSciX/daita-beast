@@ -171,6 +171,116 @@ test("page: when the pull-request search is refused the list fails naming the to
   assert.match(p.text("banner"), /search_pull_requests/, p.text("banner"));
 });
 
+// ---- what waits on the decider: desk asks beside the rows, longest waiting first ----
+// Two decisions (#1 filed first but amended later, #2 filed after #1), one answered (#3), and three desks. BEAST's desk
+// body still says "1 open ask(s)" (desk.sh publish ran before the answer, as the BEAST desk's did on
+// 2026-10-21) while its comments answer n=3; FRAQTL's has two open asks (n=36 the oldest thing waiting, n=37) and a
+// message after its last ack; DEVPLANE's is quiet. The seats sort BEAST < DEVPLANE < FRAQTL by name.
+const dk = (n, seat, body) => ({ number: n, title: `Desk: alice/${seat}`, body, state: "open", html_url: `https://github.com/${REPO}/issues/${n}`,
+  labels: ["desk", `seat:alice/${seat}`], assignees: ["alice"], created_at: "2026-10-15T21:00:00Z", updated_at: "2026-10-21T03:00:00Z", repository_url: `https://api.github.com/repos/${REPO}`, comments: 6 });
+const dc = (n, body, at) => ({ body, user: { login: "alice" }, created_at: at, html_url: `https://github.com/${REPO}/issues/${n}#issuecomment-${Date.parse(at) / 1000}` });
+const ASK = (n, seat, at, ...lines) => [`${P}ASK n=${n} seat=alice/${seat} at=${at}`, ...lines].join("\n");
+const deskWorld = () => {
+  const d1 = { ...item(1, false, DBODY, ["decision"]), created_at: "2026-10-20T06:00:00Z" };
+  const d2 = { ...item(2, false, DBODY, ["decision"]), created_at: "2026-10-20T12:00:00Z" };
+  const d3 = item(3, false, DBODY, ["decision"]);
+  const rows = [d1, d2, d3,
+    dk(21, "BEAST", "Desk of alice/BEAST: 1 open ask(s), 2 answered or withdrawn, 6 message(s).\n\n## Open asks\n\n| n | Question |\n|---|---|\n| 3 | Must the two outputs agree? |\n"),
+    dk(184, "FRAQTL", "Desk of alice/FRAQTL: 2 open ask(s)."), dk(19, "DEVPLANE", "Desk of alice/DEVPLANE: 0 open ask(s).")];
+  const comments = {
+    [`${REPO}#1`]: [cm(ack("2026-10-20T06:00:05Z"), "2026-10-20T06:00:05Z"), cm("Amended at 2026-10-21T09:00:00Z: revised; changed: Decision", "2026-10-21T09:00:00Z")],
+    [`${REPO}#2`]: [cm(ack("2026-10-20T12:00:05Z"), "2026-10-20T12:00:05Z")],
+    [`${REPO}#3`]: [cm(ack("2026-10-20T19:35:38Z"), "2026-10-20T19:35:38Z"), cm(PHRASE, "2026-10-20T20:00:00Z")],
+    [`${REPO}#21`]: [dc(21, ASK(3, "BEAST", "2026-10-20T23:21:03Z", "Must the two outputs agree?", "options: leave as is | make LICENSE.md match", "default: leave as is"), "2026-10-20T23:21:03Z"),
+      dc(21, `${P}ANSWER n=3 leave as is`, "2026-10-21T00:31:19Z")],
+    [`${REPO}#184`]: [dc(184, `${P}MSG from=platform/DEVX/alice to=platform/FRAQTL/alice re=none blocking=no at=2026-10-20T07:00:00Z\nthe older message`, "2026-10-20T07:00:00Z"),
+      dc(184, ASK(36, "FRAQTL", "2026-10-20T08:00:00Z", "Exclude site-src/handoff from the Corpus?", "options: a | b", "default: a"), "2026-10-20T08:00:00Z"),
+      dc(184, `${P}ACK seat=alice/FRAQTL at=2026-10-21T01:00:00Z state=seen next=x`, "2026-10-21T01:00:00Z"),
+      dc(184, ASK(37, "FRAQTL", "2026-10-21T02:30:00Z", "Two of your words disagree; which stands?"), "2026-10-21T02:30:00Z"),
+      dc(184, "the newer message, after the seat's last ack", "2026-10-21T03:00:00Z")],
+    [`${REPO}#19`]: [dc(19, ASK(1, "DEVPLANE", "2026-10-19T10:00:00Z", "Name?"), "2026-10-19T10:00:00Z"), dc(19, `${P}ANSWER n=1 desk`, "2026-10-19T11:00:00Z")],
+  };
+  for (const r of rows) r.comments = comments[`${REPO}#${r.number}`].length;
+  return { rows, comments };
+};
+
+test("desk open asks: lib.sh desk_parse and the page's parseDesk read the same open asks from the comments, never the desk body", () => {
+  const { parseDesk } = pageFns(PAGE, ["parseDesk", "ackLine", "ms", "seatMatch", "seatParts"], ["ACK_RE", "CLOSER_RE", "ASK_RE", "WAITS_RE", "ANSWER_RE", "WITHDRAW_RE", "MSG_RE", "DESK_FORM_RE"]);
+  const { rows, comments } = deskWorld();
+  for (const [n, seat, want] of [[21, "BEAST", []], [184, "FRAQTL", [36, 37]], [19, "DEVPLANE", []]]) {
+    const it = rows.find((r) => r.number === n);
+    const lib = JSON.parse(sh(`desk_parse "$1" "$2" 2>/dev/null | jq -c '[.asks[] | select(.state == "open") | .n]'`, [`alice/${seat}`, JSON.stringify({ issue: { assignees: [{ login: "alice" }], number: n }, comments: comments[`${REPO}#${n}`] })]).out);
+    const page = JSON.parse(JSON.stringify(parseDesk(comments[`${REPO}#${n}`], `alice/${seat}`).open.map((a) => a.n)));
+    assert.deepEqual({ lib, page }, { lib: want, page: want }, `desk #${n} (${seat}); its body says ${/(\d+) open ask/.exec(it.body)[1]}`);
+  }
+});
+
+test("page: open desk asks are counted in the headline and listed in Waiting on you, longest waiting first, beside the rows", async () => {
+  const p = await loadPage(PAGE, deskWorld());
+  assert.match(p.text("turn"), /^2 decisions and 2 desk asks are waiting on you/, p.text("turn"));
+  assert.equal(p.text("count"), "(4 waiting)");
+  const order = p.doc.getElementById("list").childNodes.map((n) => n.attrs.id || n.className);
+  assert.deepEqual(order, ["turn-ask-acme.twin.184-36", "acme.twin.2.turn", "turn-ask-acme.twin.184-37", "acme.twin.1.turn"],
+    "ask n=36 (asked 10-20 08:00), #2 (filed 10-20 12:00), ask n=37 (10-21 02:30), #1 (filed first, amended 10-21 09:00)");
+  const asks = p.turnAsks();
+  assert.equal(asks.length, 2, "the BEAST desk's stale body (1 open ask) adds no card: its n=3 is answered in the comments");
+  assert.match(asks[0].head, /^FRAQTL asks.*desk ask n=36.*waiting \d/);
+  assert.match(asks[0].question, /Exclude site-src\/handoff from the Corpus\?/);
+  assert.deepEqual(asks[0].buttons.slice(0, 3), ["Open the desk", "a", "b"], "the options, answerable in place");
+  for (const c of p.turnRows()) assert.match(c.text, /waiting \d+(m|h|d)/, `${c.key} shows how long it has waited`);
+});
+
+test("page: Your turn sorts the rows by the time the decider's turn began (an amend restarts it), not by filing", async () => {
+  const { rows, comments } = deskWorld();
+  const p = await loadPage(PAGE, { rows: rows.filter((r) => r.number <= 3), comments });
+  assert.deepEqual(p.turnRows().map((c) => c.key), [`${REPO}#2`, `${REPO}#1`], "#1 was filed first but amended after #2 was filed");
+});
+
+test("page: an ask answered in Waiting on you posts BEAST-ANSWER on the desk and leaves the list", async () => {
+  const w = deskWorld(), p = await loadPage(PAGE, w);
+  const card = () => p.turnAsks().find((a) => /n=36/.test(a.head)).el;
+  p.click(card().all().find((n) => n.tagName === "button" && n.textContent === "a"));
+  assert.match(card().textContent, /BEAST-ANSWER n=36 a/, "the confirm step shows the exact comment");
+  p.click(card().all().find((n) => n.tagName === "button" && n.textContent === "Post this comment"));
+  await p.settle();
+  const wrote = p.calls.filter((c) => c.tool === "add_issue_comment");
+  assert.deepEqual(wrote.map((c) => [c.args.issue_number, c.args.body]), [[184, `${P}ANSWER n=36 a`]]);
+  assert.deepEqual(p.turnAsks().map((a) => /n=(\d+)/.exec(a.head)[1]), ["37"]);
+  assert.match(p.text("turn"), /^2 decisions and 1 desk ask are waiting on you/);
+});
+
+test("page: a desk with open asks sorts first in the strip, highlighted, and Hide quiet desks never hides it", async () => {
+  const p = await loadPage(PAGE, deskWorld());
+  const chips = () => p.doc.getElementById("desks").find("dchip");
+  assert.deepEqual(chips().map((c) => c.textContent), ["FRAQTL · 2 open asks"], "quiet desks folded; the stale BEAST body is no open ask");
+  assert.match(chips()[0].className, /\bhas\b/);
+  p.click(p.doc.getElementById("desks").all().find((n) => n.tagName === "button" && /quiet/.test(n.textContent)));
+  assert.deepEqual(chips().map((c) => c.textContent.split(" · ")[0]), ["FRAQTL", "BEAST", "DEVPLANE"], "asks first, then by seat");
+  p.click(p.doc.getElementById("desks").all().find((n) => n.tagName === "button" && n.textContent === "Hide quiet desks"));
+  assert.deepEqual(chips().map((c) => c.textContent.split(" · ")[0]), ["FRAQTL"]);
+});
+
+test("page: an opened desk shows its open asks first, then the messages newer than the seat's last ack, before the history", async () => {
+  const p = await loadPage(PAGE, { ...deskWorld(), hash: "#desk.alice.FRAQTL" });
+  const t = p.text("deskview");
+  const at = (s) => { const i = t.indexOf(s); assert.ok(i >= 0, `the desk panel has no "${s}": ${t.slice(0, 400)}`); return i; };
+  assert.ok(at("Open asks (2)") < at("New since FRAQTL's last ack") && at("New since FRAQTL's last ack") < at("the newer message, after the seat's last ack")
+    && at("the newer message, after the seat's last ack") < at("History") && at("History") < at("the older message"), t.slice(0, 600));
+  assert.ok(at("Open asks (2)") < at("Exclude site-src/handoff"), "the asks come before every message");
+  const html = readFileSync(PAGE, "utf8");
+  assert.ok(html.indexOf('id="list"') < html.indexOf('id="desks"') && html.indexOf('id="desks"') < html.indexOf('id="deskview"'),
+    "Waiting on you sits above the desks and the drill-down, so an opened desk never pushes it down");
+});
+
+test("waitSince: the newest seat event the decider has not answered (the filing, an amend line, a reply after a revise)", () => {
+  const { waitSince, standingOf } = pageFns(PAGE, ["waitSince", "standingOf", "answerKind", "ackLine", "ms"], ["AMEND_RE", "ACK_RE", "CLOSER_RE"]);
+  const at = (list) => waitSince("2026-10-20T19:00:00Z", standingOf(list, PHRASE, "alice"));
+  assert.equal(at([cm(ack("2026-10-20T19:00:05Z"), "2026-10-20T19:00:05Z")]), "2026-10-20T19:00:00Z", "filed, acked: the filing");
+  assert.equal(at([cm("Amended at 2026-10-20T21:00:00Z: x", "2026-10-20T21:00:00Z")]), "2026-10-20T21:00:00Z", "amended before any answer");
+  assert.equal(at([cm(PHRASE, "2026-10-20T20:00:00Z"), cm("Amended at 2026-10-20T21:00:00Z: x", "2026-10-20T21:00:00Z")]), "2026-10-20T21:00:00Z", "an approve the amend made stale");
+  assert.equal(at([cm("revise: more", "2026-10-20T20:00:00Z"), cm("a reply", "2026-10-20T20:30:00Z", "bob")]), "2026-10-20T20:30:00Z", "the seat's reply after a revise");
+});
+
 // ---- pr.sh request and board.sh against a stub gh ----
 function checkout(name) {
   const H = join(W, name);

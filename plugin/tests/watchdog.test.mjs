@@ -36,12 +36,12 @@ test("desk_parse names a BEAST-WATCHDOG line on a desk as dropped, never a messa
 });
 
 test("under BEAST_WATCHDOG=1 a plugin script runs only when allowlisted (watchdog_guard)", () => {
-  for (const [s, a] of [["ack.sh", ["o/r#1"]], ["decision.sh", ["close"]], ["desk.sh", ["answer"]], ["seats.sh", ["record"]], ["seats.sh", ["forget"]], ["status.sh", []], ["notes.sh", ["DEV", "set"]]]) {
+  for (const [s, a] of [["ack.sh", ["o/r#1"]], ["decision.sh", ["close"]], ["desk.sh", ["answer"]], ["seats.sh", ["record"]], ["seats.sh", ["forget"]], ["seats.sh", ["touch"]], ["status.sh", []], ["notes.sh", ["DEV", "set"]]]) {
     const r = spawnSync(join(SCRIPTS, s), a, { encoding: "utf8", cwd: tmpdir(), env: { ...process.env, BEAST_WATCHDOG: "1" } });
     assert.notEqual(r.status, 0, s);
     assert.match(r.stderr, /refused: .* under the watchdog \(BEAST_WATCHDOG=1\)/, `${s}: ${r.stderr}`);
   }
-  const ok = spawnSync(join(SCRIPTS, "seats.sh"), ["touch"], { encoding: "utf8", cwd: tmpdir(), env: { ...process.env, BEAST_WATCHDOG: "1" } });
+  const ok = spawnSync(join(SCRIPTS, "watchdog.sh"), ["bug"], { encoding: "utf8", cwd: tmpdir(), env: { ...process.env, BEAST_WATCHDOG: "1" } });
   assert.doesNotMatch(ok.stderr, /under the watchdog/);
   const plain = spawnSync(join(SCRIPTS, "ack.sh"), [], { encoding: "utf8", cwd: tmpdir(), env: { ...process.env, BEAST_WATCHDOG: "" } });
   assert.doesNotMatch(plain.stderr, /under the watchdog/);

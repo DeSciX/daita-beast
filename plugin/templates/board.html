@@ -2,7 +2,7 @@
 <title>Decisions Board</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
 <style>
-/* Layout: one docket column (max 46rem). Board tab: the desks strip (one chip per seat desk), the open seat drill-down, then the rows (decision issues and PRs) grouped by seat; each row is a collapsed summary that opens into a ruled sheet with a phrase box and three answers at the foot. */
+/* Layout: one docket column (max 46rem). Board tab: what waits on the viewer (rows and desk asks, longest waiting first), then the desks strip (one chip per seat desk) and the open seat drill-down, then the rows with the seats grouped by seat; each row is a collapsed summary that opens into a ruled sheet with a phrase box and three answers at the foot. */
 :root {
   --bg: #f2f4f7; --surface: #ffffff; --sunk: #e9ecf1; --ink: #161a24; --muted: #596177; --line: #d7dbe5;
   --accent: #0d6b63; --on-accent: #ffffff; --hands: #b3261e; --hands-bg: #fbe9e7; --ok: #1d7a46; --warn: #8a5a00; --warn-bg: #fff4d6;
@@ -128,7 +128,12 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
 .dchip { font: 600 0.8rem var(--mono); padding: 4px 10px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; white-space: nowrap; }
 .dchip:hover { border-color: var(--muted); }
 .dchip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-.dchip.has { border-color: var(--warn); }
+.dchip.has { border-color: var(--warn); background: var(--warn-bg); color: var(--warn); }
+.dchip.has[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.crow .since, .arow .since { font: 400 0.78rem var(--mono); color: var(--warn); white-space: nowrap; }
+.arow { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding-block: 10px 8px; }
+.arow .who { font: 600 0.98rem/1.3 var(--display); }
+.card.askcard > .ask { margin: 0 16px 12px; }
 .dchip .bad { color: var(--hands); }
 .dchip[aria-pressed="true"] .bad { color: inherit; }
 .dchip .due { color: var(--warn); }
@@ -160,11 +165,11 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
   <section id="view-decisions">
     <div id="banner"></div>
     <div id="turn"></div>
-    <div id="desks"></div>
-    <div id="deskview"></div>
     <div id="bulk"></div>
     <div id="controls"></div>
-    <div class="list" id="list"><div class="empty" id="boot">Connecting to GitHub. The decisions and PRs waiting on your word will appear here first; the ones already with a seat go below.</div></div>
+    <div class="list" id="list"><div class="empty" id="boot">Connecting to GitHub. The decisions, PRs and desk asks waiting on your word will appear here first; the desks and the rows already with a seat go below.</div></div>
+    <div id="desks"></div>
+    <div id="deskview"></div>
     <details id="theirs" class="theirs" hidden><summary id="theirs-sum"></summary><div id="tcontrols"></div><div class="list" id="tlist"></div></details>
   </section>
   <section id="view-decided" hidden>
@@ -393,6 +398,21 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     return out;
   }
 
+  /* waitSince(createdAt, w): when the decider's turn on a row began, from standingOf's result w: the newest seat event
+     the decider has not answered (the row's filing, its newest amend line, the seat's reply after a revise). Only a row
+     whose turn is the decider's is asked; an answer is older than each of these, or the row would not be waiting. */
+  function waitSince(createdAt, w) {
+    var best = createdAt || null;
+    [w && w.amended && w.amended.at, w && w.reply && w.reply.created_at].forEach(function (t) { if (t && ms(t) !== null && (!best || ms(t) > ms(best))) best = t; });
+    return best;
+  }
+  /* "3d 4h", "5h", "12m": how long the decider has been waited on since t. */
+  function waitText(t) {
+    var at = ms(t); if (at === null) return "";
+    var m = Math.max(0, Math.floor((Date.now() - at) / 60000));
+    return m < 60 ? m + "m" : m < 1440 ? Math.floor(m / 60) + "h" : Math.floor(m / 1440) + "d " + Math.floor((m % 1440) / 60) + "h";
+  }
+
   /* ---------- acks ---------- */
   /* A seat acknowledges a decision by commenting a BEAST-ACK line: the first line of a comment, or the last line of a
      close comment. A close comment also names its closer ("Closed by seat X at T."): that comment is X's seen ack at the
@@ -539,7 +559,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
 
   /* ---------- decisions ---------- */
   function state(key) {
-    if (!st.has(key)) st.set(key, { mode: null, draft: "", pending: false, err: null, ambiguous: false, answered: null, checked: null, checkErr: null, comments: null, acks: null, event: null, malformedAcks: 0, open: {} });
+    if (!st.has(key)) st.set(key, { mode: null, draft: "", pending: false, err: null, ambiguous: false, answered: null, checked: null, checkErr: null, comments: null, acks: null, event: null, malformedAcks: 0, since: null, open: {} });
     return st.get(key);
   }
   function keyOf(it, r) { return (r ? r.owner + "/" + r.repo : "?") + "#" + it.number; }
@@ -567,6 +587,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
       /* One derivation (standingOf). A revise holds the card until the seat revises the row (an amend line after it);
          a reply in the meantime is shown above the buttons and makes it the decider's turn, without an approval. */
       var w = standingOf(list, phrase, login), mine = w.answer;
+      s.since = waitSince(it.created_at, w);
       if (mine && s.ignoreBefore && String(mine.created_at) <= s.ignoreBefore) mine = null;
       s.gap = w.gap;
       s.stale = w.stale ? { at: w.stale.created_at, url: w.stale.html_url, amendAt: w.amended.at, amendUrl: w.amended.url } : null;
@@ -695,10 +716,11 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
      is the viewer's turn whatever the seats acked — an ack says how the seat handled the row's latest event (filed it,
      executed a part, is blocked), never who decides (docs/protocol.md: the board is a queue of rows waiting on the
      decider's word). The newest current blocked / executed ack is then a muted note after "Your turn", with the ack's
-     next= text when it is blocked. */
+     next= text when it is blocked. since: when the viewer's turn began (waitSince; the filing until the thread is read). */
   function turnOf(row) {
     var s = row.s, d = row.d, seats = d.seats, names = seats.length ? seats.map(seatText).join(", ") : "the seat";
-    if (s.gap === "replied") return { mine: true, cls: "turn", text: "Your turn — " + names + " replied, row not yet revised" };
+    var since = s.since || row.it.created_at || null;
+    if (s.gap === "replied") return { mine: true, cls: "turn", text: "Your turn — " + names + " replied, row not yet revised", since: since };
     var newest = null;
     if (d.known) seats.forEach(function (x) { var a = ackFor(d.acks, x); if (a && d.current.indexOf(x) >= 0 && (!newest || a.cAt >= newest.a.cAt)) newest = { a: a, x: x }; });
     if (s.answered) {
@@ -714,7 +736,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     if (s.gap === "waiting") return { mine: false, cls: "wait", text: "Revision requested — waiting on " + names };
     var note = !newest ? "" : newest.a.state === "blocked" ? seatText(newest.x) + " blocked" + (newest.a.next ? ": " + newest.a.next : "")
              : newest.a.state === "executed" ? seatText(newest.x) + " executed its part" : "";
-    return { mine: true, cls: "turn", text: "Your turn", note: note };
+    return { mine: true, cls: "turn", text: "Your turn", note: note, since: since };
   }
 
   /* ---------- cards ---------- */
@@ -744,7 +766,11 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     });
     if (s.malformedAcks) chips.appendChild(h("span", { class: "chip warn", title: "A BEAST-ACK line that does not parse is not counted as an ack", text: s.malformedAcks + " malformed BEAST-ACK line" + (s.malformedAcks > 1 ? "s" : "") }));
     if (chips.childNodes.length) bar.appendChild(chips);
-    if (tab === "decisions") { var tn = turnOf(row); bar.insertBefore(h("span", { class: "status " + tn.cls, text: tn.text }, tn.note ? h("small", { class: "note", text: " · " + tn.note }) : null), bar.querySelector(".chips")); }
+    if (tab === "decisions") {
+      var tn = turnOf(row), ref = bar.querySelector(".chips");
+      bar.insertBefore(h("span", { class: "status " + tn.cls, text: tn.text }, tn.note ? h("small", { class: "note", text: " · " + tn.note }) : null), ref);
+      if (tn.mine && tn.since) bar.insertBefore(h("span", { class: "since", title: "waiting since " + utc(tn.since), text: "waiting " + waitText(tn.since) }), ref);
+    }
     return bar;
   }
 
@@ -878,7 +904,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
   function byUpdated(a, b) { return String(b.it.updated_at || "").localeCompare(String(a.it.updated_at || "")); }
   function mount(map, ck, row, seat, tab, expanded) {
     var s = row.s, it = row.it;
-    var sig = JSON.stringify([tab, seat, ui.flat, expanded, it.updated_at, it.title, it.body, it.closed_at, labelNames(it), s.mode, s.pending, s.err && s.err.code, s.ambiguous, s.answered && s.answered.at, s.thread && s.thread.reply.at, s.gap, s.stale && s.stale.at, s.revised && s.revised.at, s.checkErr && s.checkErr.code, selected.has(row.key), bulkBusy, s.ctx && [s.ctx.open, s.ctx.loading, s.ctx.v], s.comments ? [s.acks, s.event, s.malformedAcks] : null]);
+    var sig = JSON.stringify([tab, seat, ui.flat, expanded, it.updated_at, it.title, it.body, it.closed_at, labelNames(it), s.mode, s.pending, s.err && s.err.code, s.ambiguous, s.answered && s.answered.at, s.thread && s.thread.reply.at, s.gap, s.stale && s.stale.at, s.revised && s.revised.at, s.checkErr && s.checkErr.code, selected.has(row.key), bulkBusy, s.ctx && [s.ctx.open, s.ctx.loading, s.ctx.v], s.comments ? [s.acks, s.event, s.malformedAcks] : null, tab === "decisions" ? [s.since, waitText(s.since || it.created_at)] : null]);
     var c = map.get(ck);
     if (!c || c.sig !== sig) { c = { el: tab === "decided" ? buildClosed(row, seat, expanded) : buildCard(row, seat, expanded), sig: sig }; map.set(ck, c); }
     return c.el;
@@ -931,30 +957,62 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
       h("button", { class: "btn small", type: "button", "aria-pressed": String(ui.flat), text: "By updated", onclick: sortTo(true) })));
   }
 
-  /* "Your turn": oldest first, open by default when there are three or fewer. */
-  function renderTurn(listEl, rows, map) {
+  /* "Waiting on you": the rows whose turn is the viewer's and every open desk ask, in one list, longest waiting first
+     (a row from turnOf's since, an ask from its comment's time; ties by key). Rows open by default when there are three
+     or fewer; an ask is always shown whole, answerable in place (askCard, the desk drill-down's own card). */
+  function renderTurn(listEl, rows, asks, map) {
     listEl.textContent = "";
     var seen = new Set(), auto = rows.length <= 3;
-    rows.slice().sort(function (a, b) { return String(a.it.created_at || "").localeCompare(String(b.it.created_at || "")); }).forEach(function (row) {
-      var s = row.s, ck = "turn|" + row.key;
+    var all = rows.map(function (row) { return { since: turnOf(row).since, key: row.key, row: row }; })
+      .concat(asks.map(function (x) { return { since: x.a.created_at || x.a.at, key: x.d.key + "@" + x.a.n, ask: x }; }));
+    all.sort(function (a, b) { return (ms(a.since) || 0) - (ms(b.since) || 0) || a.key.localeCompare(b.key); });
+    all.forEach(function (e) {
+      if (e.ask) { var ak = "ask|" + e.key; listEl.appendChild(mountAsk(map, ak, e.ask.d, e.ask.a)); seen.add(ak); return; }
+      var row = e.row, s = row.s, ck = "turn|" + row.key;
       var expanded = (s.open.turn === undefined ? auto : !!s.open.turn) || !!s.mode || !!s.pending || !!(s.draft && s.draft.trim());
       listEl.appendChild(mount(map, ck, row, "turn", "decisions", expanded));
       seen.add(ck);
     });
     map.forEach(function (c, ck) { if (!seen.has(ck)) map.delete(ck); });
   }
+  /* An open ask as a card of "Waiting on you": the seat, n, how long it has waited, a link to the desk, then askCard. */
+  function mountAsk(map, ck, d, a) {
+    var k = d.key + "@" + a.n, x = state(k), since = a.created_at || a.at;
+    var sig = JSON.stringify([d.key, d.s.v, a.n, x.mode, x.pending, x.err && x.err.code, x.ambiguous, x.answered && x.answered.at, x.promote, waitText(since), deskOpen === d.key, login]);
+    var c = map.get(ck);
+    if (!c || c.sig !== sig) {
+      var card = h("article", { class: "card askcard", id: "turn-ask-" + anchorOf(k) });
+      card.appendChild(h("div", { class: "arow" },
+        h("span", { class: "who", text: (d.seat ? seatText(d.seat) : "no seat label") + " asks" }),
+        h("span", { class: "chip warn", text: "desk ask n=" + a.n }),
+        h("span", { class: "since", title: "waiting since " + utc(since), text: "waiting " + waitText(since) }),
+        h("button", { class: "btn small", type: "button", disabled: deskOpen === d.key, text: deskOpen === d.key ? "Desk open below" : "Open the desk", onclick: function () { openDesk(d); } })));
+      card.appendChild(askCard(d, a, "turn"));
+      c = { el: card, sig: sig }; map.set(ck, c);
+    }
+    return c.el;
+  }
+  /* Every open ask of every desk read so far: [{d, a}], with .unread the number of desks not read yet. */
+  function openAsks() {
+    var out = [], unread = 0;
+    deskRows().forEach(function (d) { if (!d.s.desk) { unread++; return; } d.s.desk.open.forEach(function (a) { out.push({ d: d, a: a }); }); });
+    out.unread = unread;
+    return out;
+  }
   function renderDecisions() {
     if (items === null) return;
     var boot = $("boot"); if (boot) boot.remove();
-    var rows = items.map(rowOf), mine = [], theirs = [];
+    var rows = items.map(rowOf), mine = [], theirs = [], asks = openAsks();
     rows.forEach(function (row) { (turnOf(row).mine ? mine : theirs).push(row); });
-    $("count").textContent = mine.length ? "(" + mine.length + " waiting)" : "(nothing waiting)";
+    var waiting = mine.length + asks.length;
+    $("count").textContent = waiting ? "(" + waiting + " waiting)" : "(nothing waiting)";
     var head = $("turn"); head.textContent = "";
     head.appendChild(h("div", { class: "turn-head" },
-      h("span", { class: "big" + (mine.length ? "" : " none"), text: mine.length ? mine.length + (mine.length === 1 ? " decision is" : " decisions are") + " waiting on you" : "Nothing is waiting on you" }),
-      theirs.length ? h("span", { class: "meta", text: theirs.length + " more " + (theirs.length === 1 ? "is" : "are") + " with the seats" }) : null));
-    renderTurn($("list"), mine, cards);
-    if (!mine.length) $("list").appendChild(h("div", { class: "empty", text: rows.length ? "Every open decision is answered or being worked on; see below." : "Nothing on the board is assigned to " + login + ": no open decision, no PR labelled needs-review." }));
+      h("span", { class: "big" + (waiting ? "" : " none"), text: headline(mine.length, asks.length) }),
+      theirs.length ? h("span", { class: "meta", text: theirs.length + " more " + (theirs.length === 1 ? "is" : "are") + " with the seats" }) : null,
+      asks.unread ? h("span", { class: "meta", text: "reading " + asks.unread + " desk" + (asks.unread > 1 ? "s" : "") + "…" }) : null));
+    renderTurn($("list"), mine, asks, cards);
+    if (!waiting) $("list").appendChild(h("div", { class: "empty", text: rows.length || (desks && desks.length) ? "Every open decision is answered or being worked on and no desk has an open ask; see below." : "Nothing on the board is assigned to " + login + ": no open decision, no PR labelled needs-review, no desk." }));
     $("controls").textContent = "";
     var th = $("theirs");
     th.hidden = !theirs.length;
@@ -965,6 +1023,13 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     renderControls($("tcontrols"), "decisions", names);
     rows.forEach(function (row) { if (row.r) checkAnswered(row.it, row.r, row.key, row.p.phrase, false); });
     renderBulk();
+  }
+  /* The headline of "Waiting on you": "5 decisions and 2 desk asks are waiting on you". */
+  function headline(nd, na) {
+    var parts = [];
+    if (nd) parts.push(nd + (nd === 1 ? " decision" : " decisions"));
+    if (na) parts.push(na + (na === 1 ? " desk ask" : " desk asks"));
+    return parts.length ? parts.join(" and ") + (nd + na === 1 ? " is" : " are") + " waiting on you" : "Nothing is waiting on you";
   }
   function renderDecided() {
     if (ditems === null) return;
@@ -999,9 +1064,9 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
   }
   function render() {
     var j = planJump();
+    renderDesks();
     renderDecisions();
     renderDecided();
-    renderDesks();
     if (j && j.theirs) $("theirs").open = true;
     if (j) { var target = document.getElementById(j.id); if (target) { show(j.tab); target.scrollIntoView({ block: "start" }); } }
   }
@@ -1076,6 +1141,11 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     if (desks === null) return;
     var rows = deskRows();
     rows.forEach(function (d) { loadDesk(d, false); });
+    /* Desks with open asks first (the one whose oldest open ask has waited longest first), then the rest by seat. */
+    var oldest = function (d) { var o = d.s.desk ? d.s.desk.open : []; return o.length ? Math.min.apply(null, o.map(function (a) { return ms(a.created_at || a.at) || 0; })) : null; };
+    rows = rows.map(function (d, i) { return { d: d, i: i, t: oldest(d) }; })
+      .sort(function (x, y) { return (x.t === null) - (y.t === null) || (x.t || 0) - (y.t || 0) || x.i - y.i; })
+      .map(function (x) { return x.d; });
     /* Deep link #desk.<login>.<LABEL> opens that seat's drill-down (once, after the desks are listed). */
     if (!deskJumped) {
       deskJumped = true;
@@ -1119,7 +1189,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
 
   /* The confirm step every desk write shares: a textarea, the exact comment, Post / Cancel. */
   function deskComposer(d, k, opts) {
-    var s = state(k), id = "t-" + anchorOf(k), box = h("div", { class: "cfoot" });
+    var s = state(k), id = opts.id || "t-" + anchorOf(k), box = h("div", { class: "cfoot" });
     var preview = h("pre", { class: "copy" });
     var go = h("button", { class: "btn primary", type: "button", disabled: s.pending, text: s.pending ? "Posting…" : "Post this comment",
       onclick: function () { var b = opts.body(s.draft); if (b) deskPost(d, k, b); } });
@@ -1142,9 +1212,11 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     if (s.ambiguous) { foot.appendChild(h("div", { class: "row" }, h("button", { class: "btn", type: "button", text: "Check the desk", onclick: function () { deskCheck(d, k); } }))); return true; }
     return false;
   }
-  function askCard(d, a) {
-    var k = d.key + "@" + a.n, s = state(k), label = d.seat ? seatText(d.seat) : "the seat";
-    var card = h("div", { class: "ask", id: "ask-" + anchorOf(k) });
+  /* One open ask, answerable in place; where is "desk" (the drill-down) or "turn" (Waiting on you): both copies share
+     the ask's state, so an answer given in one shows in the other. */
+  function askCard(d, a, where) {
+    var k = d.key + "@" + a.n, s = state(k), label = d.seat ? seatText(d.seat) : "the seat", tid = "t-" + where + "-" + anchorOf(k);
+    var card = h("div", { class: "ask", id: "ask-" + where + "-" + anchorOf(k) });
     card.appendChild(h("div", { class: "meta" }, h("a", { class: "ref", href: a.url, target: "_blank", rel: "noopener noreferrer", text: "ask n=" + a.n }), " · asked " + utc(a.at) + (a.def !== null ? " · default: " + a.def : "") + (a.milestone ? " · milestone " + a.milestone : "") + (a.waits.length ? " · waits on " + a.waits.join(", ") : "")));
     var q = h("div", { class: "q" }); q.appendChild(linkify(a.question)); card.appendChild(q);
     if (s.answered) { card.appendChild(h("div", { class: "note ok" }, "answered " + utc(s.answered.at) + " ", h("a", { href: s.answered.url, target: "_blank", rel: "noopener noreferrer", text: "the record" }))); return card; }
@@ -1153,13 +1225,13 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
       var row = h("div", { class: "row" });
       (a.options || []).forEach(function (o) {
         row.appendChild(h("button", { class: "btn" + (o === a.def ? " primary" : ""), type: "button", text: o, title: o === a.def ? "the seat's default" : null,
-          onclick: function () { s.mode = "answer"; s.draft = o; s.err = null; render(); var t = $("t-" + anchorOf(k)); if (t) t.focus(); } }));
+          onclick: function () { s.mode = "answer"; s.draft = o; s.err = null; render(); var t = $(tid); if (t) t.focus(); } }));
       });
-      row.appendChild(h("button", { class: "btn", type: "button", text: a.options ? "Other answer" : "Answer", onclick: function () { s.mode = "answer"; s.draft = ""; s.err = null; render(); var t = $("t-" + anchorOf(k)); if (t) t.focus(); } }));
+      row.appendChild(h("button", { class: "btn", type: "button", text: a.options ? "Other answer" : "Answer", onclick: function () { s.mode = "answer"; s.draft = ""; s.err = null; render(); var t = $(tid); if (t) t.focus(); } }));
       row.appendChild(h("button", { class: "btn small", type: "button", "aria-pressed": String(!!s.promote), text: "Promote to decision", onclick: function () { s.promote = !s.promote; render(); } }));
       card.appendChild(row);
     } else {
-      card.appendChild(deskComposer(d, k, { hint: "Your answer (an option or your words)", body: function (t) { return deskAnswerBody(a.n, t); },
+      card.appendChild(deskComposer(d, k, { id: tid, hint: "Your answer (an option or your words)", body: function (t) { return deskAnswerBody(a.n, t); },
         empty: function () { return "BEAST-ANSWER n=" + a.n + " <your answer, required>"; }, cancel: function () { s.mode = null; s.draft = ""; render(); } }));
     }
     if (s.promote) {
@@ -1178,31 +1250,40 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     else if (!d.titleOk) panel.appendChild(h("div", { class: "note warn", text: "The desk's title is “" + (d.it.title || "") + "”, not “Desk: " + d.seat + "”." }));
     if (s.deskErr) panel.appendChild(h("div", null, errNote(s.deskErr, "Could not read the desk."), h("div", { class: "row", style: "margin-top:8px" }, h("button", { class: "btn small", type: "button", text: "Read the desk again", onclick: function () { loadDesk(d, true); } }))));
     if (!dk) { if (!s.deskErr) panel.appendChild(h("div", { class: "meta", text: "Reading the desk…" })); return panel; }
+    /* Open asks first, then the messages newer than the seat's last ack on the desk (its last read: the ones it has not
+       acted on), newest first, and the message box; then the answered asks and the earlier messages, folded. */
+    panel.appendChild(h("div", { class: "lbl", text: "Open asks (" + dk.open.length + ")" }));
+    if (!dk.open.length) panel.appendChild(h("div", { class: "meta", text: "No open asks." }));
+    dk.open.forEach(function (a) { panel.appendChild(askCard(d, a, "desk")); });
+    var msgView = function (m) {
+      var body = h("div"); body.appendChild(linkify(m.body));
+      return h("div", { class: "cmt" }, h("div", { class: "meta" }, (m.from || "?") + (m.to ? " → " + m.to : "") + " · " + utc(m.at) + " ", h("a", { href: m.url, target: "_blank", rel: "noopener noreferrer", text: "link" })), body);
+    };
+    var newest = dk.messages.slice().reverse();
+    var fresh = newest.filter(function (m) { return dk.ackAt === null || String(m.at) > dk.ackAt; });
+    var earlier = newest.filter(function (m) { return fresh.indexOf(m) < 0; });
+    panel.appendChild(h("div", { class: "lbl", text: "New since " + label + "'s last ack" + (dk.ackAt ? " (" + utc(dk.ackAt) + ")" : " (none)") + " · " + fresh.length + " message" + (fresh.length === 1 ? "" : "s") }));
+    if (!fresh.length) panel.appendChild(h("div", { class: "meta", text: "No new messages." }));
+    fresh.forEach(function (m) { panel.appendChild(msgView(m)); });
+    var mk = d.key + "@msg", msx = state(mk);
+    panel.appendChild(h("div", { class: "lbl", text: "Message this seat" }));
+    if (msx.answered) panel.appendChild(h("div", { class: "note ok" }, "posted " + utc(msx.answered.at) + " ", h("a", { href: msx.answered.url, target: "_blank", rel: "noopener noreferrer", text: "the comment" })));
+    if (!writeState(d, mk, panel)) panel.appendChild(deskComposer(d, mk, { hint: "A message to " + label + " (a plain comment on the desk)", body: deskMessageBody, again: true,
+      empty: function (t) { return /^\s*BEAST-/.test(t || "") ? "A message cannot start with BEAST-: that is a protocol line." : "<your message>"; } }));
+    var last = dk.answered.slice(0, 10);
+    var hist = h("details", { class: "theirs" }, h("summary", { text: "History: last answered (" + last.length + " of " + dk.answered.length + ")" + (dk.withdrawn.length ? " · " + dk.withdrawn.length + " withdrawn" : "") + " · " + earlier.length + " earlier message" + (earlier.length === 1 ? "" : "s") + (dk.other ? " · " + dk.other + " other BEAST- comments not shown" : "") }));
+    last.forEach(function (a) {
+      hist.appendChild(h("div", { class: "cmt" }, h("div", { class: "meta" }, "n=" + a.n + " · answered " + utc(a.answer.at) + " ", h("a", { href: a.answer.url, target: "_blank", rel: "noopener noreferrer", text: "the answer" })),
+        h("div", { text: a.question.split("\n")[0] }), h("div", { class: "mono", text: "→ " + a.answer.text })));
+    });
+    earlier.forEach(function (m) { hist.appendChild(msgView(m)); });
+    panel.appendChild(hist);
     if ((d.it.comments || 0) > (s.comments || []).length) panel.appendChild(h("div", { class: "note warn", text: "The desk has " + d.it.comments + " comments; the page read the first " + s.comments.length + ". Asks, answers and messages after those are not shown here." }));
     if (dk.malformed.length) {
       panel.appendChild(h("div", { class: "note err", text: dk.malformed.length + " malformed desk line" + (dk.malformed.length > 1 ? "s" : "") + ", not counted:" }));
       dk.malformed.forEach(function (x) { panel.appendChild(h("div", { class: "cmt" }, h("div", { class: "meta" }, h("a", { href: x.url, target: "_blank", rel: "noopener noreferrer", text: utc(x.at) }), " · " + x.why), h("div", { class: "mono", text: x.line }))); });
     }
     if (dk.history) panel.appendChild(h("div", { class: "meta", text: dk.history + " earlier message line" + (dk.history > 1 ? "s" : "") + " (pre-1.5.0 tag) older than the seat's last ack (" + utc(dk.ackAt) + "): history, not read." }));
-    panel.appendChild(h("div", { class: "lbl", text: "Open asks (" + dk.open.length + ")" }));
-    if (!dk.open.length) panel.appendChild(h("div", { class: "meta", text: "No open asks." }));
-    dk.open.forEach(function (a) { panel.appendChild(askCard(d, a)); });
-    var last = dk.answered.slice(0, 10);
-    panel.appendChild(h("div", { class: "lbl", text: "Last answered (" + last.length + " of " + dk.answered.length + ")" + (dk.withdrawn.length ? " · " + dk.withdrawn.length + " withdrawn" : "") }));
-    last.forEach(function (a) {
-      panel.appendChild(h("div", { class: "cmt" }, h("div", { class: "meta" }, "n=" + a.n + " · answered " + utc(a.answer.at) + " ", h("a", { href: a.answer.url, target: "_blank", rel: "noopener noreferrer", text: "the answer" })),
-        h("div", { text: a.question.split("\n")[0] }), h("div", { class: "mono", text: "→ " + a.answer.text })));
-    });
-    panel.appendChild(h("div", { class: "lbl", text: "Messages (" + dk.messages.length + ")" + (dk.other ? " · " + dk.other + " other BEAST- comments not shown" : "") }));
-    dk.messages.forEach(function (m) {
-      var body = h("div"); body.appendChild(linkify(m.body));
-      panel.appendChild(h("div", { class: "cmt" }, h("div", { class: "meta" }, (m.from || "?") + (m.to ? " → " + m.to : "") + " · " + utc(m.at) + " ", h("a", { href: m.url, target: "_blank", rel: "noopener noreferrer", text: "link" })), body));
-    });
-    var mk = d.key + "@msg", msx = state(mk);
-    panel.appendChild(h("div", { class: "lbl", text: "Message this seat" }));
-    if (msx.answered) panel.appendChild(h("div", { class: "note ok" }, "posted " + utc(msx.answered.at) + " ", h("a", { href: msx.answered.url, target: "_blank", rel: "noopener noreferrer", text: "the comment" })));
-    if (!writeState(d, mk, panel)) panel.appendChild(deskComposer(d, mk, { hint: "A message to " + label + " (a plain comment on the desk)", body: deskMessageBody, again: true,
-      empty: function (t) { return /^\s*BEAST-/.test(t || "") ? "A message cannot start with BEAST-: that is a protocol line." : "<your message>"; } }));
     return panel;
   }
 

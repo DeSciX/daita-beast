@@ -16,6 +16,8 @@
 # messenger starts and the tick spends no tokens. An address the messenger answered "not reachable" for twice in a row is
 # not sent to again until the seat records a new one (the unreachable ledger, below). A poll watch.sh skips while it
 # backs off a GitHub rate limit is logged "poll: skipped"; any other watch failure is logged "watch failed".
+# The messenger is sent the address's name (address_name, lib.sh: a recorded "name [ref]" loses its ref): SendMessage
+# takes the bare name of a live session. The unreachable ledger is keyed on the address as recorded.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$here/lib.sh"   # checkout_require_root; the run cache it makes is shared with the watch and the address reads
@@ -59,7 +61,7 @@ unreach="$HOME/.beast/relay-unreachable.json"; RELAY_UNREACHABLE_MAX=2
 if [[ ! -s "$unreach" ]]; then echo '{}' > "$unreach"
 elif ! jq -e 'type == "object"' "$unreach" >/dev/null 2>&1; then echo "$(stamp) the unreachable ledger $unreach is not a JSON object; reset (its counts are lost)" >> "$log"; echo '{}' > "$unreach"; fi
 unreach_set() { local t; t="$(mktemp "$unreach.XXXXXX")"; jq "${@:2}" "$1" "$unreach" > "$t" && mv -f "$t" "$unreach"; }
-addresses=""; send=""
+addresses=""; send=""; recorded=""
 while IFS= read -r seat; do
   [[ -n "$seat" ]] || continue
   # seats.sh address: line 1 the address, then the facts, then "path: direct|desk — <why>"; only a direct path is relayed
@@ -72,7 +74,9 @@ while IFS= read -r seat; do
       echo "$(stamp) not sending to $seat at $addr: not reachable on $(jq -r .n <<< "$u") messenger replies since $(jq -r .first <<< "$u") (the seat re-records with seats.sh record; a new address resets this; its inbox still holds every row)" >> "$log"
       continue
     fi
-    addresses+="ADDRESS $seat = $addr"$'\n'
+    if ! name="$(address_name "$addr" 2>&1)"; then echo "$(stamp) not sending to $seat: ${name#daita-beast: }" >> "$log"; continue; fi
+    addresses+="ADDRESS $seat = $name"$'\n'
+    recorded+="$seat"$'\t'"$addr"$'\n'
     send+="$(printf '%s\n' "$events" | awk -v s="seat=$seat" '$3 == s')"$'\n'
   else
     echo "$(stamp) no direct address from this machine: $seat ($(grep '^path:' <<< "${out:-}" | head -1 || echo "none recorded"))" >> "$log"
@@ -90,8 +94,7 @@ echo "$(stamp) relay ($model, $pmode):" >> "$log"
 printf '%s\n' "$addresses" | sed '/^$/d; s/^/  /' >> "$log"
 printf '%s\n' "$out" | sed 's/^/  /' >> "$log"
 # Count the replies per addressed seat: an error naming reachability counts against that address, a queued one clears it.
-while IFS= read -r line; do
-  a_seat="$(sed -n 's/^ADDRESS \([^ ]*\) = .*/\1/p' <<< "$line")"; a_addr="${line#* = }"
+while IFS=$'\t' read -r a_seat a_addr; do
   [[ -n "$a_seat" ]] || continue
   reply="$(grep -E "^$a_seat (queued|no-address|error)( |$)" <<< "$out" | tail -1 || true)"
   if grep -qiE "^$a_seat error .*(reachable|no agent named)" <<< "$reply"; then
@@ -99,5 +102,5 @@ while IFS= read -r line; do
   elif grep -q "^$a_seat queued" <<< "$reply"; then
     unreach_set 'del(.[$s])' --arg s "$a_seat"
   fi
-done <<< "$addresses"
+done <<< "$recorded"
 printf '%s\n' "$out"

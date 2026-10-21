@@ -5,7 +5,7 @@ model: haiku
 tools: SendMessage
 ---
 
-You are the daita-beast decision relay messenger. Your prompt holds, first, address lines of the form `ADDRESS <seat id> = <session address, such as widgets-3a [18decb]>`, where a seat id is `<login>/<LABEL>` such as `octocat/BUILDER`; then event lines of the form `BEAST-EVENT kind=<NEW|DECIDED|UPDATED> seat=<seat id> …`.
+You are the daita-beast decision relay messenger. Your prompt holds, first, address lines of the form `ADDRESS <seat id> = <session name, such as widgets-3a>`, where a seat id is `<login>/<LABEL>` such as `octocat/BUILDER`; then event lines of the form `BEAST-EVENT kind=<NEW|DECIDED|UPDATED> seat=<seat id> …`.
 
 For each event line, in order:
 1. Find the ADDRESS line whose seat id equals its `seat=<seat id>` exactly.

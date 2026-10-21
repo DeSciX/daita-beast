@@ -6,6 +6,7 @@
 //   state: {login, repos: {"o/r": {private}}, issues: {"o/r#N": <issue, REST shape>}, comments: {"o/r#N": [...]},
 //           milestones: {"o/r": [...]}, files: {"o/r": {"<full sha>": ["<path>", ...]}}, pulls: {"o/r": [<PR, REST shape,
 //           head.ref>]}, git: {"o/r": "<bare repo dir>"}}
+//   rate_limit answers a full quota; issues/comments/<id> takes PATCH (body) and DELETE.
 //   files serves commits/<sha or prefix> and contents/<path>?ref=<sha>; pulls serves the PR list (state, head=<owner>:<ref>)
 //   and the squash-merge, made for real in the bare repo git names (a commit with the PR head's tree on main); a
 //   DELETE git/refs/heads/<ref> deletes it there.
@@ -42,6 +43,7 @@ const key = (o, r, n) => o + "/" + r + "#" + n;
 const now = () => new Date().toISOString().replace(/\.\d+Z$/, "Z");
 if (method === "GET") {
   if (route === "user") out(200, { login: S.login }, head);
+  if (route === "rate_limit") out(200, { resources: { core: { remaining: 5000, limit: 5000 }, search: { remaining: 30, limit: 30 } } }, head);
   if ((m = /^repos\/([^/]+)\/([^/]+)$/.exec(route))) { const r = S.repos[m[1] + "/" + m[2]]; if (!r) out(404, { message: "Not Found" }, head); out(200, { full_name: m[1] + "/" + m[2], private: r.private, default_branch: "main" }, head); }
   if ((m = /^repos\/([^/]+)\/([^/]+)\/issues\/(\d+)$/.exec(route))) { const it = S.issues[key(m[1], m[2], m[3])]; if (!it) out(404, { message: "Not Found" }, head); out(200, it, head); }
   if ((m = /^repos\/([^/]+)\/([^/]+)\/issues\/(\d+)\/comments$/.exec(route))) { const all = S.comments[key(m[1], m[2], m[3])] || [], pg = Number(q.get("page") || 1), pp = Number(q.get("per_page") || 30); out(200, all.slice((pg - 1) * pp, pg * pp), head); }
@@ -95,6 +97,15 @@ if ((m = /^repos\/([^/]+)\/([^/]+)\/git\/refs\/heads\/(.+)$/.exec(route)) && met
   require("child_process").execFileSync("git", ["-C", bare, "update-ref", "-d", "refs/heads/" + m[3]]); process.exit(0);
 }
 if ((m = /^repos\/([^/]+)\/([^/]+)\/labels(\/.*)?$/.exec(route))) out(200, { name: fields.name || fields.new_name });
+if ((m = /^repos\/([^/]+)\/([^/]+)\/issues\/comments\/(\d+)$/.exec(route)) && (method === "PATCH" || method === "DELETE")) {
+  const r = m[1] + "/" + m[2], id = Number(m[3]);
+  for (const k of Object.keys(S.comments).filter((x) => x.startsWith(r + "#"))) {
+    const i = S.comments[k].findIndex((c) => c.id === id); if (i < 0) continue;
+    if (method === "DELETE") { S.comments[k].splice(i, 1); save(); process.exit(0); }
+    S.comments[k][i].body = fields.body; S.comments[k][i].updated_at = now(); save(); out(200, S.comments[k][i]);
+  }
+  out(404, { message: "Not Found" });
+}
 if ((m = /^repos\/([^/]+)\/([^/]+)\/issues\/(\d+)(\/(labels|assignees|comments))?$/.exec(route))) {
   const k = key(m[1], m[2], m[3]), it = S.issues[k]; if (!it) out(404, { message: "Not Found" });
   it.updated_at = now();

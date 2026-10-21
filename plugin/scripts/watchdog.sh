@@ -2,7 +2,7 @@
 # watchdog.sh — the machine watchdog: every 15 minutes (its own scheduled job, install-relay.sh --job watchdog) it runs
 # the checklist below with no model, repairs what it may, files what it must, and starts one disposable Haiku session
 # (the agent daita-beast:watchdog, plugin/agents/watchdog.md; its catalogue plugin/watchdog/gotchas.md) only when a
-# finding needs ListAgents or SendMessage. A quiet tick starts no session, runs no search and spends no tokens.
+# finding needs SendMessage. A quiet tick starts no session, runs no search and spends no tokens.
 #   watchdog.sh --repo <coordinating checkout> [--model haiku] [--permission-mode <mode>] [--dry-run]
 #       one tick (the scheduler's entry point; --dry-run prints the findings and the prompt, and writes nothing)
 #   watchdog.sh bug --check <id> --object <token> --summary "<one line>" --body-file <f>
@@ -14,17 +14,21 @@
 #                the roster's relay.permissionMode; the newest "poll:" line of ~/.beast/relay.log under 6 minutes old
 #   3 plugin     ~/.beast/plugin.json vs ~/.claude/plugins/installed_plugins.json (daita-beast@daita): a newer install is
 #                recorded (plugin_root_record) and the relay re-pointed (install-relay.sh, then --describe re-measures)
-#   4 live       ~/.beast/sessions.json claims with no ended_at whose transcript was written in the last 30 minutes
+#   4 live       ~/.beast/sessions.json claims with no ended_at whose session is live in Claude Code's session files
+#                (claude_sessions_read, lib.sh: session id -> name, pid alive); a claim whose session is not live is
+#                reported in the log, never re-stamped; an unreadable session file is a bug
 #   5 logs       ~/.beast/relay.log, ~/.beast/hooks.log and the live transcripts, each from its offset at the last tick
-#   6 addresses  the live seats' BEAST-ADDRESS comments (one conditional read per tracking issue the claims name)
+#   6 addresses  the live seats' BEAST-ADDRESS comments (one conditional read per tracking issue the claims name): one
+#                recorded on this machine whose name is not the live session's name, or older than 24 h, is re-stamped
+#                by the tick itself (seats.sh touch <identity>: the live name, at=now)
 #   7 unacked    the live seats' relay snapshots (~/.beast/watch/<login>/<LABEL>.json): a row or desk read only when its
 #                updatedAt moved (row_read, row_events, seat_acks, desk_parse; the result cached per row and seat)
 #   8 weekly     the relay caches of retired seats and the legacy ~/.beast/watch-*.json files, deleted
 # Shell acts (no model): the relay re-point (one per tick), a corrupt mark the watcher named, deleted; bugs (hook misfires
 # from hooks.log and transcripts, an unparseable `## Seats` table, an unexplained watch failure, a rate-limit burst),
-# queued and filed at most one per tick and five a day. Agent signals (need ListAgents): stale-address (touch it:
-# seats.sh touch), unreachable (report; nudge a renamed session), unacked, untagged-comment, old-plugin,
-# milestone-required (nudges). At most 3 nudges a tick, 1 per seat, and once per (seat, check, object) every 2 h
+# queued and filed at most one per tick and five a day; the address re-stamp (seats.sh touch). Agent signals (need
+# SendMessage): unreachable (report; nudge the live session), unacked, untagged-comment, old-plugin, milestone-required,
+# duplicate-address (nudges). At most 3 nudges a tick, 1 per seat, and once per (seat, check, object) every 2 h
 # (bounded self-tuning: three false alarms on a check double its grace or cadence, up to the catalogue's bound).
 # Memory: ~/.beast/watchdog/state.json (offsets, ledgers, row cache; a cache: losing it costs a duplicate nudge at most)
 # and ONE comment "BEAST-WATCHDOG-NOTES machine=<host> …" on the Beast workstream's tracking issue, edited in place.
@@ -38,7 +42,6 @@ need gh jq python3
 WD_DIR="$HOME/.beast/watchdog"; STATE="$WD_DIR/state.json"; LOG="$HOME/.beast/watchdog.log"
 RELAY_LOG="$HOME/.beast/relay.log"; HOOKS_LOG="$(hooks_log_path)"
 WATCHDOG_WS=beast                       # the plugin's own workstream: its tracking issue holds the notes, its repo the bugs
-LIVE_S=1800                             # a claim is live when its transcript was written this recently
 RELAY_STALE_S=360                       # three relay ticks of 120 s
 QUOTA_SEARCH_MIN=5; QUOTA_CORE_MIN=200
 GRACE_DEFAULT=900; GRACE_MAX=7200       # unacked grace (TUNE bounds)
@@ -275,22 +278,27 @@ relay_check() {
 relay_check
 S="$(plugin_root)/scripts"   # after the check: a re-recorded plugin root is the one this tick names
 
-# 4 live sessions: identity, session, transcript, home cwd, tracking (TSV)
+# 4 live sessions: identity, session, transcript, the session's cwd, tracking, its live name, launch (TSV; "-" unknown)
 LIVE="$(mktemp)"; on_exit 'rm -f "$LIVE"'
 sf="$(sessions_path)"
-if [[ -s "$sf" ]]; then
-  while IFS=$'\t' read -r id sid launch cwd tracking address; do
+if ! csess="$(claude_sessions_read 2>&1)"; then
+  wlog "SKIPPED live: ${csess#daita-beast: }"
+  bug_enqueue claude-sessions "$host" "Claude Code's session files cannot be read" "The tick on $host reads ~/.claude/sessions/<pid>.json (lib.sh claude_sessions_read, an undocumented Claude Code internal) for each claimed session's liveness and name. It failed:"$'\n\n'"    ${csess#daita-beast: }"$'\n\n'"Until it reads again no seat is live to the watchdog: no address is re-stamped and no nudge is sent."
+  csess=""
+elif [[ -s "$sf" ]]; then
+  while IFS=$'\t' read -r id sid launch; do
     [[ -n "$id" ]] || continue
+    l="$( [[ -z "$csess" ]] || jq -c --arg s "$sid" 'select(.session == $s and .alive)' <<< "$csess" | head -1)"
+    if [[ -z "$l" ]]; then wlog "dead-claim: $id is claimed by session $sid, which no live Claude Code session file names (killed, or ended without its SessionEnd hook): reported, not re-stamped"; continue; fi
     tp=""
     if [[ -n "$launch" && -f "$(claude_project_dir "$launch")/$sid.jsonl" ]]; then tp="$(claude_project_dir "$launch")/$sid.jsonl"
     else tp="$(find "$HOME/.claude/projects" -mindepth 2 -maxdepth 2 -name "$sid.jsonl" 2>/dev/null | head -1 || true)"; fi
-    [[ -n "$tp" ]] || continue
-    (( $(now_s) - $(file_mtime "$tp") <= LIVE_S )) || continue
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$sid" "$tp" "$cwd" "$tracking" "$address" >> "$LIVE"
-  done < <(jq -r 'to_entries[] | select(.value.session != null and .value.ended_at == null) | [.key, .value.session, (.value.launch // ""), (.value.cwd // ""), (.value.tracking // ""), (.value.address // "")] | @tsv' "$sf")
+    # a tab is IFS whitespace, so an empty field would shift the later ones: an unknown one is "-"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$sid" "${tp:--}" "$(jq -r .cwd <<< "$l")" "$(jq -r --arg k "$id" '.[$k].tracking // "-"' "$sf")" "$(jq -r .name <<< "$l")" "${launch:--}" >> "$LIVE"
+  done < <(jq -r 'to_entries[] | select(.value.session != null and .value.ended_at == null) | [.key, .value.session, (.value.launch // "")] | @tsv' "$sf")
 fi
 wlog "live: $(grep -c . "$LIVE" || true) seat session(s) on this machine"
-live_identity_of_short() { awk -F'\t' -v s="$1" '{ split($1, p, "/"); if (p[3] "/" p[2] == s) { print $1; exit } }' "$LIVE"; }
+live_row_of_short() { awk -F'\t' -v s="$1" '{ split($1, p, "/"); if (p[3] "/" p[2] == s) { print; exit } }' "$LIVE"; }
 
 # 5 logs: each read from its offset (a log first seen: its last FIRST_SCAN_BYTES; a shrunk one: from its start)
 log_tail() {  # log_tail <file> <state key>: the new bytes on stdout; the offset advanced
@@ -335,8 +343,10 @@ if [[ -n "$rl_new" ]]; then
       *"not sending to "*": not reachable on "*)
         seat="$(sed -n 's/.*not sending to \([^ ]*\) at .*/\1/p' <<< "$line")"; addr="$(sed -n 's/.*not sending to [^ ]* at \(.*\): not reachable on .*/\1/p' <<< "$line")"
         st_set '.counts[$k] = ((.counts[$k] // {n: 0, first: $t}) | .n += 1 | .last = $t)' --arg k "waste:$seat" --arg t "$(utc_now)"
-        lid="$(live_identity_of_short "$seat")"
-        if [[ -n "$lid" ]]; then signal "$(jq -nc --arg i "$lid" --arg a "$addr" --arg l "$line" --arg h "$(seat_home_on_machine "$lid" 2>/dev/null || true)" '{check: "unreachable", seat: $i, object: ($a | capture("\\[(?<r>[0-9a-f]{6})\\]$").r // "address"), address: $a, home: $h, evidence: $l}')"
+        lrow="$(live_row_of_short "$seat")"
+        if [[ -n "$lrow" && "$(address_name "$addr" 2>/dev/null)" != "$(cut -f6 <<< "$lrow")" ]]; then
+          wlog "unreachable: $seat at $addr, live here as \"$(cut -f6 <<< "$lrow")\": the address check (6) re-stamps it, which resets the relay's count"
+        elif [[ -n "$lrow" ]]; then lid="$(cut -f1 <<< "$lrow")"; signal "$(jq -nc --arg i "$lid" --arg d "$addr" --arg a "$(cut -f6 <<< "$lrow")" --arg l "$line" '{check: "unreachable", seat: $i, object: ($d | gsub("[^A-Za-z0-9._-]"; "_")), address: $a, dead: $d, evidence: $l}')"
         else wlog "unreachable: $seat at $addr (the relay stopped sending; the seat has no live session here): reported"; fi ;;
       *" has "*" BEAST-ADDRESS comments: "*)
         id2="$(sed -n 's/.*daita-beast: \([a-z0-9-]*\/[A-Z0-9_-]*\/[A-Za-z0-9-]*\) has [0-9]* BEAST-ADDRESS comments.*/\1/p' <<< "$line")"
@@ -357,8 +367,8 @@ fi
 # transcripts of the live seats: the tail since the last tick (a session first seen: from its start when it began after
 # the last tick, else from now). Excerpts leave this machine only inside a bug on the private twin.
 inst_v="$(jq -r '.plugins["daita-beast@daita"][0].version // empty' "$HOME/.claude/plugins/installed_plugins.json" 2>/dev/null || true)"
-while IFS=$'\t' read -r id sid tp cwd tracking address; do
-  [[ -n "$id" ]] || continue
+while IFS=$'\t' read -r id sid tp cwd tracking address launch; do
+  [[ -n "$id" && "$tp" != - ]] || continue
   if [[ -z "$(st --arg k "tx:$sid" '.offsets[$k] // empty')" ]]; then
     if [[ -n "$last_tick" ]] && (( $(file_birth "$tp") > $(iso_s "$last_tick") )); then st_set '.offsets[$k] = 0' --arg k "tx:$sid"
     else st_set '.offsets[$k] = $o' --arg k "tx:$sid" --argjson o "$(file_size "$tp")"; fi
@@ -387,29 +397,33 @@ if [[ $low -eq 0 ]]; then
   ADDR="$(mktemp)"; on_exit 'rm -f "$ADDR"'
   # 6 the live seats' addresses: one conditional read per tracking issue
   for tr_ref in $(cut -f5 "$LIVE" | sort -u); do
-    [[ -n "$tr_ref" ]] || continue
+    [[ -n "$tr_ref" && "$tr_ref" != - ]] || continue
     if ! seat_addresses_at "$tr_ref" >> "$ADDR" 2>/dev/null; then wlog "SKIPPED addresses: cannot read the comments of $tr_ref"; fi
   done
-  while IFS=$'\t' read -r id sid tp cwd tracking address; do
+  while IFS=$'\t' read -r id sid tp cwd tracking address launch; do
     [[ -n "$id" ]] || continue
     a="$(jq -c --arg s "$id" 'select(.seat == $s)' "$ADDR" | tail -1)"
-    [[ -n "$a" ]] || continue
-    [[ "$(address_age "$(jq -r .at <<< "$a")" | cut -f2)" == stale && "$(jq -r .machine <<< "$a")" == "$host" ]] || continue
-    home="$(seat_home_on_machine "$id" 2>/dev/null || true)"
-    [[ -n "$home" && -n "$cwd" && "$(cd "$cwd" 2>/dev/null && pwd -P)" == "$(cd "$home" 2>/dev/null && pwd -P)" ]] || { wlog "stale-address: $id recorded $(jq -r .at <<< "$a"), but its cached cwd '${cwd:-none}' is not its home '${home:-unknown}': not touched"; continue; }
-    signal "$(jq -nc --arg i "$id" --arg a "$(jq -r .address <<< "$a")" --arg at "$(jq -r .at <<< "$a")" --arg h "$home" --arg u "$(jq -r .url <<< "$a")" --arg cmd "$S/seats.sh touch $id --verified \"$(jq -r .address <<< "$a")\"" \
-      '{check: "stale-address", seat: $i, object: $u, address: $a, evidence: "BEAST-ADDRESS \($u) recorded \($at) (over 24 h): the relay routes this live seat to its desk", run: $cmd, home: $h}')"
+    [[ -n "$a" ]] || { wlog "address: $id (live as \"$address\") has no BEAST-ADDRESS comment on its tracking issue ($tracking): not touched (its join records one)"; continue; }
+    [[ "$(jq -r .machine <<< "$a")" == "$host" ]] || { wlog "address: $id is live here as \"$address\", but its address was recorded on $(jq -r .machine <<< "$a"): not touched"; continue; }
+    why=""
+    [[ "$(jq -r .name <<< "$a")" == "$address" ]] || why="renamed: recorded \"$(jq -r .address <<< "$a")\", live \"$address\""
+    [[ "$(address_age "$(jq -r .at <<< "$a")" | cut -f2)" != stale ]] || why="${why:+$why; }stale: recorded $(jq -r .at <<< "$a") (over 24 h)"
+    [[ -n "$why" ]] || continue
+    if [[ $dry -eq 1 ]]; then wlog "address: would touch $id ($why)"; continue; fi
+    if out="$("$here/seats.sh" touch "$id" 2>&1)"; then
+      wlog "address: repaired $id ($why): $(grep -m1 '^touched ' <<< "$out")"
+      ! grep -q '^ambiguous: ' <<< "$out" || wlog "address: $(grep -m1 '^ambiguous: ' <<< "$out")"
+      note_add GOTCHA address "$id" "re-stamped ($why)"
+    else wlog "address: $id not touched ($why): $(tail -1 <<< "$out" | sed 's/^daita-beast: //')"; fi
   done < "$LIVE"
 
   # 7 unacked rows and desk items of the live seats, from the relay's snapshots
   grace="$(tune unacked.grace "$GRACE_DEFAULT")"
-  while IFS=$'\t' read -r id sid tp cwd tracking address; do
+  while IFS=$'\t' read -r id sid tp cwd tracking address launch; do
     [[ -n "$id" ]] || continue
     short="$(seat_short "$id")"; snap="$HOME/.beast/watch/$short.json"
     [[ -f "$snap" ]] || continue
-    a="$(jq -c --arg s "$id" 'select(.seat == $s)' "$ADDR" | tail -1)"; addr="$address"
-    [[ -z "$a" ]] || addr="$(jq -r .address <<< "$a")"
-    [[ -n "$addr" ]] || continue
+    addr="$address"   # the live session's name (check 4): where a nudge reaches the seat now
     rows=""
     while IFS=$'\t' read -r url upd isdesk; do
       [[ -n "$url" ]] || continue
@@ -470,9 +484,9 @@ if [[ -z "$lw" ]] || (( $(now_s) - $(iso_s "$lw") >= 604800 )); then
   [[ $dry -eq 1 ]] || st_set '.last_weekly = $t' --arg t "$tick_at"
 fi
 
-# ---- the agent: only when a signal needs ListAgents or SendMessage --------------------------------------------
+# ---- the agent: only when a signal needs SendMessage --------------------------------------------------------------
 # Keep what is due: a nudge is handed out once per (seat, check, object) per cadence, at most NUDGES_PER_TICK a tick and
-# one per seat a tick; a stale-address (a touch, not a nudge) is due once per cadence too. The key is stamped here.
+# one per seat a tick. The key is stamped here.
 PICK="$(mktemp)"; on_exit 'rm -f "$PICK"'
 nudges=0
 while IFS= read -r s; do
@@ -480,13 +494,11 @@ while IFS= read -r s; do
   c="$(jq -r .check <<< "$s")"; i="$(jq -r .seat <<< "$s")"; o="$(jq -r .object <<< "$s")"
   case "$c" in untagged-comment|old-plugin) every=$ONCE_S ;; *) every="$(tune "$c.every" "$EVERY_DEFAULT")" ;; esac
   [[ "$c" == unacked ]] || ledger_due "$i|$c|$o" "$every" || continue
-  if [[ "$c" != stale-address ]]; then
-    (( nudges < NUDGES_PER_TICK )) || continue
-    [[ "$(jq -rs --arg i "$i" '[.[] | select(.seat == $i and .check != "stale-address")] | length' "$PICK")" -eq 0 ]] || continue
-    nudges=$((nudges + 1))
-  fi
+  (( nudges < NUDGES_PER_TICK )) || continue
+  [[ "$(jq -rs --arg i "$i" '[.[] | select(.seat == $i)] | length' "$PICK")" -eq 0 ]] || continue
+  nudges=$((nudges + 1))
   printf '%s\n' "$s" >> "$PICK"
-done < <(jq -sc 'sort_by(if .check == "unacked" then 0 elif .check == "stale-address" then 1 else 2 end) | .[]' "$SIG" 2>/dev/null)
+done < <(jq -sc 'sort_by(if .check == "unacked" then 0 else 1 end) | .[]' "$SIG" 2>/dev/null)
 n_sig="$(grep -c . "$PICK" || true)"
 
 # calls <kind>: this tick's GitHub calls from the call log (lib.sh gh_request, gh_send_try): rate_limit (uncharged by
@@ -512,7 +524,7 @@ msg_for() {  # msg_for <signal json>: the nudge text the agent sends verbatim (e
   printf 'BEAST-WATCHDOG to=%s check=%s at=%s\n' "$i" "$c" "$tick_at"
   case "$c" in
     unacked) printf 'These wait on your ack past the %s s grace (their latest event is newer than your newest BEAST-ACK):\n%s\nAct, then ack each: %s/ack.sh <row> --seat %s --state seen|executed|blocked --next "<act>"; or run %s/decision.sh inbox %s.\n' "$grace" "$(jq -r .rows <<< "$s")" "$S" "$label" "$S" "$label" ;;
-    unreachable) printf 'The relay stopped sending to the address "%s" (not reachable on two replies). If this session holds %s, re-record: cd <home> && %s/seats.sh record %s "<your ListAgents name [ref]>". Rows parked meanwhile are in %s/decision.sh inbox %s.\n' "$(jq -r .address <<< "$s")" "$i" "$S" "$label" "$S" "$label" ;;
+    unreachable) printf 'The relay stopped sending to the address "%s" (not reachable on two replies). If this session holds %s, re-record: cd <home> && %s/seats.sh record %s (it reads this session'"'"'s name itself). Rows parked meanwhile are in %s/decision.sh inbox %s.\n' "$(jq -r .dead <<< "$s")" "$i" "$S" "$label" "$S" "$label" ;;
     untagged-comment) printf '%s. If it is yours, delete it and repost it through %s/ack.sh <row> --seat %s --state seen --next "…" --text "…" (an untagged comment is read as the decider'"'"'s; delete, never edit).\n' "$(jq -r .evidence <<< "$s")" "$S" "$label" ;;
     old-plugin) printf 'This session %s. Restart it at a seam (post the handoff first: %s/status.sh <tracking> --seat %s --state handoff …).\n' "$(jq -r .evidence <<< "$s")" "$S" "$label" ;;
     milestone-required) printf 'Your scripts refused twice for a missing --milestone: %s. Pass --milestone "<title>" with one of the open milestones it lists.\n' "$(jq -r .evidence <<< "$s")" ;;
@@ -532,9 +544,7 @@ prompt="$(mktemp)"; on_exit 'rm -f "$prompt"'
     k=$((k + 1)); c="$(jq -r .check <<< "$s")"
     printf 'SIGNAL %s check=%s seat=%s object=%s address="%s"\n' "$k" "$c" "$(jq -r .seat <<< "$s")" "$(jq -r .object <<< "$s")" "$(jq -r '.address // ""' <<< "$s")"
     printf '  evidence: %s\n' "$(jq -r '.evidence // .rows // ""' <<< "$s" | tr '\n' ' ')"
-    [[ -z "$(jq -r '.home // empty' <<< "$s")" ]] || printf '  home: %s\n' "$(jq -r .home <<< "$s")"
-    if [[ "$c" == stale-address ]]; then printf '  run (only when ListAgents lists the address exactly): %s\n' "$(jq -r .run <<< "$s")"
-    else printf '  send (only when ListAgents lists the address exactly; for check=unreachable, the address ListAgents lists for a session whose cwd is the seat'"'"'s home), verbatim:\n'; msg_for "$s" | sed 's/^/  | /'; fi
+    printf '  send (to the address, the seat'"'"'s live session name, only when a ListAgents row carries that name), verbatim:\n'; msg_for "$s" | sed 's/^/  | /'
     # the ledger keys handed out: an unacked nudge stamps each of its rows, every other signal its (seat, check, object)
     for key in $(jq -r '. as $s | if $s.check == "unacked" then ($s.object | split(",")[] | "\($s.seat)|unacked|\(.)") else "\($s.seat)|\($s.check)|\($s.object)" end' <<< "$s"); do
       st_set '.nudges[$k] = $t' --arg k "$key" --arg t "$tick_at"
