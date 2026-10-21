@@ -50,6 +50,13 @@
 #       amended row an approval is only the decider's comment newer than the latest amend line (--record is refused).
 #       An approval is refused while the decider's revise: on the row has no amend line after it (row_revise_pending):
 #       request --amend's line, or decision.sh revise, answers it.
+#   publish.sh merge <slug> --latitude '<owner/repo> <commit> — <path>' --by <SEAT>
+#       the same merge under the seat's standing latitude, with no words of the decider's on the row: the record is a file
+#       at a commit in the seat's own repo, which is private and not public-intended (latitude_record, lib.sh, verified
+#       through GitHub before anything is written). The row closes as "Merged under standing latitude <<link>> by <seat>",
+#       quoting no words (row_close_comment, kind latitude). --latitude excludes --words and --record. Refused while a
+#       revise is pending (row_revise_pending) and on an amended row with no approval of the decider's after the amend.
+#       Which publishes fall inside a latitude is the seat's own repo's rule, never this script's.
 #   publish.sh pull
 #       merges the public default branch into twin main (outside contributions), in the twin's main checkout on
 #       main with a clean tree; on a conflict it aborts the merge and names the conflicted files.
@@ -594,18 +601,26 @@ case "$cmd" in
     ;;
   merge)
     slug="${1:-}"; shift || true; slug_check "$slug"
-    words=""; by=""; rec=""
+    words=""; by=""; rec=""; lat=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --words) words="$2"; shift 2 ;;
+        --latitude) lat="$2"; shift 2 ;;
         --by) by="$2"; shift 2 ;;
         --record) rec="$2"; shift 2 ;;
         *) die "unknown argument $1" ;;
       esac
     done
-    [[ -n "$words" && -n "$by" ]] || die "usage: publish.sh merge <slug> --words \"<verbatim>\" --by <SEAT> [--record <url | commit — path>]"
+    [[ -z "$words" || -z "$lat" ]] || die "--latitude and --words exclude each other: a merge under a standing latitude quotes no words, and a merge on the decider's words is not one under a latitude; nothing merged"
+    [[ -z "$lat" || -z "$rec" ]] || die "--latitude and --record exclude each other: the latitude names its own record; nothing merged"
+    [[ ( -n "$words" || -n "$lat" ) && -n "$by" ]] || die "usage: publish.sh merge <slug> --words \"<verbatim>\" --by <SEAT> [--record <url | commit — path>] | publish.sh merge <slug> --latitude '<owner/repo> <commit> — <path>' --by <SEAT>"
     by="$(seat_id "$by")" || exit 1
-    kind="$(answer_kind "$words" "publish $slug")"
+    if [[ -n "$lat" ]]; then
+      kind=approve
+      rec="$(latitude_record "$lat" "$by")" || exit 1
+    else
+      kind="$(answer_kind "$words" "publish $slug")"
+    fi
     case "$kind" in
       approve|reject) ;;
       revise) die "the words are a revise: not a close. Rework, run prepare on a new slug or answer on the row; the row stays open" ;;
@@ -618,7 +633,11 @@ case "$cmd" in
       [[ -z "$pend" ]] || revise_pending_refusal "$pend"
     fi
     amended="$(row_amended_at "$rowj")"
-    [[ -z "$rec" || -z "$amended" || "$kind" != approve ]] \
+    if [[ -n "$lat" && -n "$amended" ]]; then
+      [[ -n "$(row_answer_url "$rowj" "publish $slug" approve)" ]] \
+        || die "refused: $TWIN#$row was amended at $amended and the decider has not approved it since: a standing latitude never merges what the row's amend changed; the decider answers on the row; nothing merged"
+    fi
+    [[ -n "$lat" || -z "$rec" || -z "$amended" || "$kind" != approve ]] \
       || die "$TWIN#$row was amended at $amended: the approval is the decider's comment on the row after it (row_answer_url), and --record cannot show when words given elsewhere were given; nothing merged"
     if [[ -z "$rec" ]]; then
       rec="$(row_answer_url "$rowj" "publish $slug" "$kind")" || exit 1
@@ -660,7 +679,11 @@ case "$cmd" in
     G update-ref "refs/heads/$TWIN_MAIN" "$rcd" "$old" || die "cannot record the publish in twin $TWIN_MAIN (it moved): run publish.sh pull"
     G branch -q -D "$br"
     echo "twin $TWIN_MAIN records public $db ${pm:0:12} as merged ($(G rev-parse --short "$rcd"), same tree); push it: git push origin $TWIN_MAIN"
-    "$BEAST_SCRIPTS/decision.sh" close "$TWIN#$row" --words "$words" --record "$rec" --by "$by" --next "push twin $TWIN_MAIN; the publish is live on $PUB"
+    if [[ -n "$lat" ]]; then
+      row_close "$TWIN" "$row" "" "$rec" "$by" "push twin $TWIN_MAIN; the publish is live on $PUB" latitude "$(board_repo)"
+    else
+      "$BEAST_SCRIPTS/decision.sh" close "$TWIN#$row" --words "$words" --record "$rec" --by "$by" --next "push twin $TWIN_MAIN; the publish is live on $PUB"
+    fi
     ;;
   pull)
     [[ $# -eq 0 ]] || die "pull takes no arguments"

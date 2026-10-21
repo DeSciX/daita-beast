@@ -1832,6 +1832,13 @@ answer_kind() {
 # SEAT_TAG_JQ is the jq library of those readers (run through tag_jq, which binds $seatre, $askre and $msgre):
 #   tag_ack(l)       a well-formed `BEAST-ACK seat=<token> at=<UTC> state=seen|executed|blocked` line, or null
 #   tag_closer(b)    the "Closed by seat <token> at <UTC>." of a close comment (row_close_comment), or null
+#   close_of(b)      of a comment body: the close comment it is (row_close_comment's shape, CLOSE_LINE_RE), as
+#                    {kind: closed|rejected|latitude, words, record, seat, line}, or null. words: the verbatim words of a
+#                    closed or rejected row (null on a latitude close, which quotes none); record: its record (a latitude
+#                    close's is the link in its close line); seat: the closer; line: the close line
+#   close_text(c)    of a close_of result: the one line a reader shows for it (the quoted words; a latitude close as
+#                    "no words: merged under standing latitude by <seat>, record <link>")
+#   close_last(cs)   of a comment list: the newest close comment's close_of, plus its url, or null
 #   tag_actor(desk)  of a comment: the seat id that wrote it, or null (an untagged comment, a BEAST-ANSWER: the decider's).
 #                    In order: the closer; a BEAST-ACK first line, or last line (a seat's own reply on a row ends with
 #                    it); a BEAST-STATUS or BEAST-NOTES header; a BEAST-ASK header; a BEAST-MSG sender (from=); on a
@@ -1842,6 +1849,17 @@ def tag_first: (split("\n")[0] // "");
 def tag_last: (split("\n") | map(select(test("\\S"))) | last // "");
 def tag_ack(l): (l | capture("^BEAST-ACK seat=(?<seat>" + $seatre + ") at=(?<at>[^ ]+) state=(?<state>seen|executed|blocked)") // null);
 def tag_closer(b): (b | capture("Closed by seat (?<seat>" + $seatre + ") at (?<at>[0-9T:Z-]+)\\.") // null);
+def close_of(b):
+  ((b // "") | gsub("\r"; "")) as $b | ($b | tag_first | sub("\\s+$"; "")) as $f
+  | (first($f | capture($closere)) // null) as $m
+  | if $m == null then null
+    elif ($m.record // "") != "" then {kind: "latitude", words: null, record: $m.record, seat: $m.seat, line: $f}
+    else {kind: (if $m.verdict == "Rejected" then "rejected" else "closed" end),
+          words: (first($b | capture("^(Closed|Rejected) on the word, verbatim: \"(?<w>.*)\"\n\nRecord: "; "p") | .w) // null),
+          record: (first($b | capture("\nRecord: (?<r>.*)\\. Closed by seat ") | .r) // null),
+          seat: (tag_closer($b) | .seat?), line: $f} end;
+def close_text(c): if c.kind == "latitude" then "no words: merged under standing latitude by \(c.seat), record \(c.record)" elif c.words != null then "\"\(c.words)\"" else c.line end;
+def close_last(cs): ([cs[]? | . as $c | close_of($c.body) | select(. != null) | . + {url: $c.html_url}] | last // null);
 def tag_actor(desk):
   . as $c | (($c.body // "") | gsub("\r"; "")) as $b | ($b | tag_first | sub("\\s+$"; "")) as $f
   | ((tag_closer($b) // tag_ack($f) // tag_ack($b | tag_last)
@@ -1856,8 +1874,11 @@ def tag_actor(desk):
 tag_jq() {
   [[ $# -ge 1 ]] || die "tag_jq takes [jq options...] '<program>'"
   local prog="${*: -1}"
-  jq --arg seatre "$SEAT_TOKEN_RE" --arg askre "$ASK_HEADER_RE" --arg msgre "$MSG_HEADER_RE" "${@:1:$#-1}" "$SEAT_TAG_JQ $prog"
+  jq --arg seatre "$SEAT_TOKEN_RE" --arg askre "$ASK_HEADER_RE" --arg msgre "$MSG_HEADER_RE" --arg closere "$CLOSE_LINE_RE" "${@:1:$#-1}" "$SEAT_TAG_JQ $prog"
 }
+
+# close_of_comments <comments-json>: the newest close comment of a row's comments (close_last), JSON, or null.
+close_of_comments() { tag_jq -c 'close_last(.)' <<< "$1"; }
 
 # ack_line <id> seen|executed|blocked "<next>": the one writer of a seat's ack line, stamped now (ack.sh, the close
 # comment's last line, the filer's ack of decision.sh new and pr.sh request).
@@ -2213,8 +2234,8 @@ scrub_patterns() {
     rows="$(jq -r '.[].number' <<< "$list")"
     for n in $rows; do
       phrase="$(approve_phrase "$(jq -r --argjson n "$n" '.[] | select(.number == $n) | .body // ""' <<< "$list")")"
-      body="$(issue_comments "$twin" "$n" | jq -c --arg u "https://github.com/$twin/issues/$n" --arg p "$phrase" '
-        [.[] | (.body // "") | capture("^(Closed|Rejected) on the word, verbatim: \"(?<w>.*)\"\n\nRecord: "; "p")? | select($p == "" or .w != $p) | {url: $u, words: .w}]')" \
+      body="$(issue_comments "$twin" "$n" | tag_jq -c --arg u "https://github.com/$twin/issues/$n" --arg p "$phrase" '
+        [.[] | close_of(.body) | select(. != null and .words != null) | select($p == "" or .words != $p) | {url: $u, words: .words}]')" \
         || die "cannot read the comments of $twin#$n"
       words="$(jq -c -s 'add' <(printf '%s\n' "$words") <(printf '%s\n' "$body"))"
     done
@@ -2503,24 +2524,78 @@ coord_write_guard() {
   die "refused: $r is $why. Coordination stays private: decision rows, desks, tracking issues, status, notes, acks, review requests and the board are written only in a private repo; a public repo receives only publishes. Write it in $home${id:+, the home repo of $id}."
 }
 
-# row_close_comment <repo> <N> "<words>" "<record>" <by-id> "<next>" closed|rejected: posts the close comment,
-# the one writer of its shape for a decision issue and a pull request alike: the words verbatim, the record,
-# the closer, and as its last line the closer's BEAST-ACK (state=seen). The caller closes, merges or labels.
+# ---- the close comment: the one owner of its shape (row_close_comment writes it; close_of, SEAT_TAG_JQ, reads it) ------
+# The one comment that closes a row. Its first line, the close line, is of one of three kinds:
+#   Closed on the word, verbatim: "<words>"                       closed    the decider's words (decision.sh close,
+#   Rejected on the word, verbatim: "<words>"                     rejected  pr.sh close, publish.sh merge --words)
+#   Merged under standing latitude <<record link>> by <seat id>  latitude  publish.sh merge --latitude: quotes no words;
+#                                                                           the record is the decider's standing word, a
+#                                                                           file at a commit in the seat's own private repo
+# then "Record: <record>. Closed by seat <id> at <UTC>." ("Closed by seat <id> at <UTC>." on a latitude close, whose record
+# is in its close line), then the closer's BEAST-ACK (state=seen). A close line is never an answer form (answer_kind): it
+# never stands as the decider's answer. CLOSE_LINE_RE reads the close line (jq, and the page's CLOSE_RE alike:
+# plugin/tests/regex-mirror.test.mjs); "Closed on the decider's word" is the old pointer close, read with no words.
+CLOSE_LINE_RE='^(?:(?<verdict>Closed|Rejected) on the (?:word, verbatim: |decider.s word)|Merged under standing latitude <(?<record>https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/blob/[0-9a-f]{40}/[^ <>]+)> by (?<seat>[A-Za-z0-9-]+/[A-Z0-9_-]+)$)'
+
+# row_close_comment <repo> <N> "<words>" "<record>" <by-id> "<next>" closed|rejected|latitude: posts the close comment,
+# the one writer of its shape for a decision issue and a pull request alike. A latitude close takes no words ("") and its
+# record is the link latitude_record verified; its close line is checked against CLOSE_LINE_RE before it is posted. The
+# caller closes, merges or labels (row_close does it for an issue).
 row_close_comment() {
-  local repo="$1" n="$2" words="$3" rec="$4" by="$5" next="$6" verdict
-  case "$7" in
-    closed) verdict="Closed" ;;
-    rejected) verdict="Rejected" ;;
-    *) die "row_close_comment: verdict must be closed or rejected, not '$7'" ;;
-  esac
+  local repo="$1" n="$2" words="$3" rec="$4" by="$5" next="$6" first tail
   [[ "$by" =~ $SEAT_ID_RE ]] || die "row_close_comment: --by '$by' is not a seat id"
   [[ "$next" != *$'\n'* ]] || die "--next is one line"
+  case "$7" in
+    closed) first="Closed on the word, verbatim: \"$words\""; tail="Record: $rec. Closed by seat $by at $(utc_now)." ;;
+    rejected) first="Rejected on the word, verbatim: \"$words\""; tail="Record: $rec. Closed by seat $by at $(utc_now)." ;;
+    latitude)
+      [[ -z "$words" ]] || die "row_close_comment: a latitude close quotes no words"
+      first="Merged under standing latitude <$rec> by $by"; tail="Closed by seat $by at $(utc_now)."
+      jq -en --arg l "$first" --arg re "$CLOSE_LINE_RE" '$l | test($re)' >/dev/null \
+        || die "row_close_comment: the latitude close line '$first' does not read back as one (CLOSE_LINE_RE): the record is not a blob link at a full sha" ;;
+    *) die "row_close_comment: the kind is closed, rejected or latitude, not '$7'" ;;
+  esac
   local ack; ack="$(ack_line "$by" seen "$next")" || exit 1
-  issue_comment "$repo" "$n" "$verdict on the word, verbatim: \"$words\"
+  issue_comment "$repo" "$n" "$first
 
-Record: $rec. Closed by seat $by at $(utc_now).
+$tail
 
 $ack" >/dev/null
+}
+
+# row_close <repo> <N> "<words>" "<record>" <by-id> "<next>" closed|rejected|latitude <board repo>: closes a decision issue:
+# the close comment (row_close_comment), the issue closed (not_planned and labelled rejected on a reject), then
+# row_after_close. The caller has refused a public repo (coord_write_guard) and a pending revise (row_revise_pending).
+row_close() {
+  [[ $# -eq 8 ]] || die "row_close takes <repo> <N> <words> <record> <by> <next> <kind> <board>, not $*"
+  row_close_comment "$1" "$2" "$3" "$4" "$5" "$6" "$7"
+  if [[ "$7" == rejected ]]; then row_mark_rejected "$1" "$2"; issue_close "$1" "$2" not_planned
+  else issue_close "$1" "$2" completed; fi
+  echo "closed $1#$2"
+  row_after_close "$1" "$2" "$5" "$8"
+}
+
+# latitude_record "<owner/repo> <commit> — <path>" <seat id>: the record of a seat's standing latitude (the decider's word
+# letting the seat close its own rows of a kind), verified through GitHub before anything is written: <owner/repo> is the
+# seat's own repo (seat_repo), private and not public-intended (repo_public_why), <commit> a commit of it and <path> a file
+# at that commit. Prints its link, https://github.com/<owner/repo>/blob/<full sha>/<path>. Which acts fall inside the
+# latitude is the seat's own repo's rule, never the plugin's.
+latitude_record() {
+  [[ $# -eq 2 ]] || die "latitude_record takes \"<owner/repo> <commit> — <path>\" <seat id>, not $*"
+  local re='^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+) ([0-9a-fA-F]{7,40}) — ([^[:space:]<>]+)$' r c p own why sha t
+  [[ "$1" =~ $re ]] || die "--latitude '$1' is not '<owner/repo> <commit> — <path>' (an em dash between the commit and a path with no space)"
+  r="${BASH_REMATCH[1]}"; c="${BASH_REMATCH[2]}"; p="${BASH_REMATCH[3]}"
+  [[ "$p" != /* && "/$p/" != */../* && "/$p/" != */./* ]] || die "--latitude path '$p' is not a plain path relative to the repo's root"
+  own="$(seat_repo "$2")" || exit 1
+  [[ "$(tr 'A-Z' 'a-z' <<< "$r")" == "$(tr 'A-Z' 'a-z' <<< "$own")" ]] \
+    || die "refused: the latitude record is in $r, not in $own, the own repo of $2: a seat's standing latitude is recorded in its own private repo"
+  why="$(repo_public_why "$r")" || exit 1
+  [[ -z "$why" ]] || die "refused: the latitude record's repo $r is $why: the decider's standing word is recorded in a private repo"
+  sha="$(gh_get "repos/$r/commits/$c" | jq -er '.sha')" || die "refused: $r has no commit $c (named above): the latitude record is a file at a commit"
+  t="$(gh_get "repos/$r/contents/$(contents_path "$p")?ref=$sha" | jq -r 'if type == "object" then .type else "dir" end')" \
+    || die "refused: $r has no $p at ${sha:0:12} (named above): the latitude record is a file at that commit"
+  [[ "$t" == file ]] || die "refused: $p at ${sha:0:12} in $r is a $t, not a file: the latitude record is a file"
+  echo "https://github.com/$r/blob/$sha/$p"
 }
 
 # row_mark_rejected <repo> <N>: the label `rejected` (defined in templates/labels.json) on a rejected row.
@@ -2589,10 +2664,10 @@ msg_header() {
 
 # ---- bookkeeping comments: the one list of first lines the relay never reports as news -------------------------
 # A comment whose first line is a seat's or a tool's own bookkeeping (an ack, a status, the notes, an address, the
-# Cowork tick's stamp, the machine watchdog's lines and its notes, a close comment, a publish amend line) is not an UPDATED
+# Cowork tick's stamp, the machine watchdog's lines and its notes, a close line (CLOSE_LINE_RE), a publish amend line) is not an UPDATED
 # event for a seat (watch.sh); edits never bump a comment count, so an edited one fires nothing either. One owner:
 # comment_is_bookkeeping is the test.
-BOOKKEEPING_FIRST_LINE_RE="^(BEAST-ACK|BEAST-STATUS|BEAST-NOTES|BEAST-ADDRESS|BEAST-COWORK|BEAST-WATCHDOG|BEAST-WATCHDOG-NOTES)( |\$)|^(Closed|Rejected) on the (decider.s )?word|$AMEND_LINE_RE"
+BOOKKEEPING_FIRST_LINE_RE="^(BEAST-ACK|BEAST-STATUS|BEAST-NOTES|BEAST-ADDRESS|BEAST-COWORK|BEAST-WATCHDOG|BEAST-WATCHDOG-NOTES)( |\$)|$CLOSE_LINE_RE|$AMEND_LINE_RE"
 
 # comment_is_bookkeeping "<first line>": status 0 when the line is bookkeeping, 1 when it is news.
 comment_is_bookkeeping() { jq -en --arg l "$1" --arg re "$BOOKKEEPING_FIRST_LINE_RE" '$l | test($re)' >/dev/null; }
@@ -2879,7 +2954,7 @@ dep_state() {
     row="$(row_read "$r" "$n")" || exit 1
     info="$(jq -c .issue <<< "$row")"; url="$(jq -r .html_url <<< "$info")"
     if [[ "$(tr 'A-Z' 'a-z' <<< "$r")" == "$(tr 'A-Z' 'a-z' <<< "$reader")" ]]; then
-      words="$(jq -r '[.comments[] | select((.body // "") | test("^(Closed|Rejected) on the word"))] | if length == 0 then "" else (last.body | split("\n")[0] | sub("^(Closed|Rejected) on the word, verbatim: "; "")) end' <<< "$row")" \
+      words="$(tag_jq -r 'close_last(.comments) | if . == null then "" else close_text(.) end' <<< "$row")" \
         || die "$r#$n: cannot read its close words"
     fi
     if [[ "$(jq -r .state <<< "$info")" == closed ]]; then

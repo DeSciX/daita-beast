@@ -82,6 +82,7 @@ h2 { font: 600 1.2rem/1.25 var(--display); margin: 0; text-wrap: balance; overfl
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { font: 600 0.74rem var(--mono); padding: 2px 8px; border-radius: 99px; background: var(--sunk); color: var(--muted); white-space: nowrap; }
 .chip.hands { background: var(--hands-bg); color: var(--hands); }
+.chip.latitude { background: var(--hands-bg); color: var(--hands); }
 .chip.ok { background: var(--sunk); color: var(--ok); }
 .chip.miss { background: var(--hands-bg); color: var(--hands); }
 .chip.warn { background: var(--warn-bg); color: var(--warn); }
@@ -732,6 +733,8 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     bar.appendChild(h("span", { class: "ttl", text: titleOf(it) }));
     var chips = h("div", { class: "chips" });
     if (row.p.kind === "pr") chips.appendChild(h("span", { class: "chip", title: "A pull request; answered by comment, the diff is on GitHub", text: "PR" }));
+    var lat = tab === "decided" ? closeOf(s.comments) : null;
+    if (lat && lat.kind === "latitude") chips.appendChild(h("span", { class: "chip latitude", title: "Merged under " + lat.seat + "'s standing latitude, with no words of yours: audit the record " + lat.record, text: "latitude" }));
     if (labelNames(it).indexOf("hands") >= 0) chips.appendChild(h("span", { class: "chip hands", title: "Only you can perform this act", text: "hands" }));
     d.seats.forEach(function (x) {
       var a = d.known ? ackFor(d.acks, x) : null, cur = d.known && d.current.indexOf(x) >= 0;
@@ -833,22 +836,36 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     return card;
   }
 
-  /* A closed decision: the words it was closed on (the hearing seat's close comment), then the thread. */
-  var WORDS_RE = /^(Closed|Rejected) on the (?:word, verbatim: |decider's word)/;
-  function wordsOf(list) {
-    var best = null;
-    (list || []).forEach(function (c) { if (c && WORDS_RE.test(String(c.body || "")) && (!best || (ms(c.created_at) || 0) >= (ms(best.created_at) || 0))) best = c; });
-    return best ? { words: String(best.body).split(/\r?\n/)[0].replace(WORDS_RE, "").trim(), url: best.html_url } : null;
+  /* A closed decision: the close (the hearing seat's close comment), then the thread. The close line (lib.sh CLOSE_LINE_RE,
+     the owner; plugin/tests/regex-mirror.test.mjs holds the two alike) is the words the row closed on, or a latitude
+     close: merged under the seat's standing latitude, no words, the record linked, shown as kind "latitude" to audit. */
+  var CLOSE_RE = /^(?:(?<verdict>Closed|Rejected) on the (?:word, verbatim: |decider.s word)|Merged under standing latitude <(?<record>https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/blob\/[0-9a-f]{40}\/[^ <>]+)> by (?<seat>[A-Za-z0-9-]+\/[A-Z0-9_-]+)$)/;
+  function closeOf(list) {
+    var best = null, bm = null;
+    (list || []).forEach(function (c) {
+      var m = c && CLOSE_RE.exec(String(c.body || "").split(/\r?\n/)[0].replace(/\s+$/, ""));
+      if (m && (!best || (ms(c.created_at) || 0) >= (ms(best.created_at) || 0))) { best = c; bm = m; }
+    });
+    if (!best) return null;
+    if (bm.groups.record) return { kind: "latitude", record: bm.groups.record, seat: bm.groups.seat, url: best.html_url };
+    return { kind: bm.groups.verdict === "Rejected" ? "rejected" : "closed", words: String(best.body).split(/\r?\n/)[0].replace(/\s+$/, "").slice(bm[0].length).trim(), url: best.html_url };
   }
   function buildClosed(row, seat, expanded) {
     var key = row.key, s = row.s;
     var card = h("article", { class: "card" + (expanded ? " open" : ""), id: cardId(key, seat) });
     card.appendChild(crow(row, seat, expanded, "decided"));
     if (!expanded) return card;
-    var w = wordsOf(s.comments), dd = h("dd");
-    if (w) { dd.appendChild(document.createTextNode(w.words + " ")); dd.appendChild(h("a", { href: w.url, target: "_blank", rel: "noopener noreferrer", text: "the close" })); }
+    var w = closeOf(s.comments), dd = h("dd"), dt = "Words";
+    if (w && w.kind === "latitude") {
+      dt = "Latitude";
+      dd.appendChild(document.createTextNode("No words: merged under the standing latitude of " + seatText(w.seat) + ". "));
+      dd.appendChild(h("a", { href: w.record, target: "_blank", rel: "noopener noreferrer", text: "the record" }));
+      dd.appendChild(document.createTextNode(" · "));
+      dd.appendChild(h("a", { href: w.url, target: "_blank", rel: "noopener noreferrer", text: "the close" }));
+    }
+    else if (w) { dd.appendChild(document.createTextNode(w.words + " ")); dd.appendChild(h("a", { href: w.url, target: "_blank", rel: "noopener noreferrer", text: "the close" })); }
     else dd.appendChild(h("span", { class: "meta", text: !s.comments ? "reading the thread…" : row.p.kind === "pr" ? "(closed or merged on GitHub without the words; open it to see which)" : "(closed without the words)" }));
-    card.appendChild(h("div", { class: "cbody" }, h("dl", null, h("div", { class: "sec" }, h("dt", { text: "Words" }), dd)), h("div", { class: "row" }, row.p.kind === "pr" ? openOnGitHub(row.it) : null, ctxButton(row))));
+    card.appendChild(h("div", { class: "cbody" }, h("dl", null, h("div", { class: "sec" }, h("dt", { text: dt }), dd)), h("div", { class: "row" }, row.p.kind === "pr" ? openOnGitHub(row.it) : null, ctxButton(row))));
     if (s.ctx && s.ctx.open) card.appendChild(ctxView(s));
     return card;
   }

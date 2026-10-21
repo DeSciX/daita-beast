@@ -1,6 +1,6 @@
 ---
 name: join
-description: Take a seat, or retake it after any reload or compaction — the first act of every session, from any directory (the SessionStart hook lists the seats a session there can take, and rejoins a seated session by itself after a compaction, a resume or a restart). Seating sets the root. Finds the seat's home on this machine, prints SEATED <id> at <home>, records its address, regenerates the Beast block in the home's CLAUDE.md, triages the auto-memory folder this session loads (only seat state is flagged), and ends with the seat's handoff, notes and inbox and the home's CLAUDE.md to read. Use for "join as BUILDER", "reseat yourself", "rejoin", "I'm back", "set this seat up", "how do I get into Beast".
+description: Take a seat, or retake it after any reload or compaction — the first act of every session, from any directory (the SessionStart hook lists the seats a session there can take, and rejoins a seated session by itself after a compaction, a resume or a restart). Seating sets the root. Finds the seat's home on this machine, prints SEATED with the seat's id and home, records its address, regenerates the Beast block in the home's CLAUDE.md, triages the auto-memory folder this session loads (only seat state is flagged), and ends with the seat's handoff, notes and inbox and the home's CLAUDE.md to read. Use for "join as BUILDER", "reseat yourself", "rejoin", "I'm back", "set this seat up", "how do I get into Beast".
 ---
 
 # join — the one way in, every session; seating sets the root

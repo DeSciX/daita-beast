@@ -74,7 +74,7 @@ The catalogue of the plugin as built. Paths are relative to `plugin/`. "lib.sh" 
 | `realign/check_branch_base.sh` | read-only branch and worktree hygiene report | none | nothing |
 | `realign/check_memory_drift.sh` | agent-memory bloat and contradiction signals; `--strict` | none | nothing |
 | `realign/pre-commit` | blocks a commit that adds an archive-boundary violation | none | nothing |
-| `pandoc/latex-crossrefs.lua` | the license render filter: title as H1, numbered headings, `\ref` as plain text | none | stdout of the render |
+| `pandoc/latex-crossrefs.lua` | the license render filter: title as H1, headings numbered and every `\ref` printed as the PDF prints them, from the source's class and `\the<counter>` formats | the LaTeX source (`LATEX_CROSSREFS_SOURCE`) | stdout of the render |
 
 ## Skills
 
@@ -153,7 +153,7 @@ There is no PreCompact hook: Claude Code discards its `systemMessage` and `conti
 - `tests/seats-model.test.mjs`: the seat model's pure parsers and identity forms through bash with no network: the `## Seats` table parser (one shape, dies naming the line), the home word, the three identity forms resolving to one row of a fixture roster, the roster row check (`role` and `tracking` refused, `agent` and `workstream` required, no peer rows), `section_replace` and `block_replace`.
 - `tests/board-page.test.mjs`: the decider's turn and the PR rows with no network. `lib.sh`'s `answer_kind` and `row_answer_url` and the page's `answerKind` and `standingOf` run on one table of comments and one set of threads (a comment in no answer form is no answer); the page's `SECTIONS`/`PR_SECTIONS` against `ROW_SECTIONS`/`PR_ROW_SECTIONS`; the page itself run in node against a stubbed connector (`tests/page-harness.mjs`: a minimal DOM, `search_issues` scoped to is:issue, `search_pull_requests` to is:pr); `pr.sh request` and `board.sh` against a stub `gh` serving one JSON state (`tests/gh-stub.mjs`; an unmodelled call exits 2).
 - `tests/watchdog.test.mjs`: the watchdog's contracts in `lib.sh` with no network: its lines and notes are bookkeeping (never an UPDATED), a `BEAST-WATCHDOG` line on a desk is dropped and named, every non-allowlisted script dies under `BEAST_WATCHDOG=1`, and `fault_once` names a fault once per message under a ledger and every time without one.
-- `tests/latex-crossrefs.test.mjs`: the license filter on LaTeX fixtures, including the failure on an undefined or stray label.
+- `tests/latex-crossrefs.test.mjs`: the license filter on LaTeX fixtures: the source's `\the<counter>` formats (Roman, Alph, roman; arabic `3.1`; the report class), the failure on an undefined or stray label, an unsupported format command or a numbering command, and the roster's own license rendered through `license.sh render` (skipped, saying why, where the roster or its source checkout is absent).
 - `.github/workflows/test.yml`: Node 22, `jq`, `pandoc`, `node --test plugin/tests/*.test.mjs` on every push and pull request. Locally: `npm test`.
 
 ## Roster fields (`.beast/roster.json`)

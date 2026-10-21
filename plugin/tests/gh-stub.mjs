@@ -4,7 +4,11 @@
 // one line each, writes prefixed WRITE. An unsupported call exits 2 naming it, so a test never passes on a call the
 // stub did not model.
 //   state: {login, repos: {"o/r": {private}}, issues: {"o/r#N": <issue, REST shape>}, comments: {"o/r#N": [...]},
-//           milestones: {"o/r": [...]}}
+//           milestones: {"o/r": [...]}, files: {"o/r": {"<full sha>": ["<path>", ...]}}, pulls: {"o/r": [<PR, REST shape,
+//           head.ref>]}, git: {"o/r": "<bare repo dir>"}}
+//   files serves commits/<sha or prefix> and contents/<path>?ref=<sha>; pulls serves the PR list (state, head=<owner>:<ref>)
+//   and the squash-merge, made for real in the bare repo git names (a commit with the PR head's tree on main); a
+//   DELETE git/refs/heads/<ref> deletes it there.
 import { writeFileSync, readFileSync, mkdirSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 
@@ -42,6 +46,17 @@ if (method === "GET") {
   if ((m = /^repos\/([^/]+)\/([^/]+)\/issues\/(\d+)$/.exec(route))) { const it = S.issues[key(m[1], m[2], m[3])]; if (!it) out(404, { message: "Not Found" }, head); out(200, it, head); }
   if ((m = /^repos\/([^/]+)\/([^/]+)\/issues\/(\d+)\/comments$/.exec(route))) { const all = S.comments[key(m[1], m[2], m[3])] || [], pg = Number(q.get("page") || 1), pp = Number(q.get("per_page") || 30); out(200, all.slice((pg - 1) * pp, pg * pp), head); }
   if ((m = /^repos\/([^/]+)\/([^/]+)\/milestones$/.exec(route))) out(200, (S.milestones || {})[m[1] + "/" + m[2]] || [], head);
+  if ((m = /^users\/([^/]+)$/.exec(route))) out(200, { login: m[1], type: "User" }, head);
+  if (route === "user/repos") out(200, Number(q.get("page") || 1) > 1 ? [] : Object.entries(S.repos).filter(([k, r]) => k.split("/")[0] === S.login && r.private).map(([k]) => ({ full_name: k, private: true })), head);
+  if ((m = /^repos\/([^/]+)\/([^/]+)\/commits\/([0-9a-fA-F]+)$/.exec(route))) { const shas = Object.keys((S.files || {})[m[1] + "/" + m[2]] || {}).filter((x) => x.startsWith(m[3].toLowerCase()));
+    if (shas.length !== 1) out(shas.length ? 409 : 422, { message: "No commit found for SHA: " + m[3] }, head); out(200, { sha: shas[0] }, head); }
+  if ((m = /^repos\/([^/]+)\/([^/]+)\/contents\/(.+)$/.exec(route))) { const t = ((S.files || {})[m[1] + "/" + m[2]] || {})[q.get("ref")]; const pth = decodeURIComponent(m[3]);
+    if (!t) out(404, { message: "No commit found for the ref " + q.get("ref") }, head);
+    if (t.includes(pth)) out(200, { type: "file", path: pth }, head);
+    if (t.some((f) => f.startsWith(pth + "/"))) out(200, t.filter((f) => f.startsWith(pth + "/")).map((f) => ({ type: "file", path: f })), head);
+    out(404, { message: "Not Found" }, head); }
+  if ((m = /^repos\/([^/]+)\/([^/]+)\/pulls$/.exec(route))) { const hd = q.get("head"), st = q.get("state") || "open";
+    out(200, Number(q.get("page") || 1) > 1 ? [] : ((S.pulls || {})[m[1] + "/" + m[2]] || []).filter((pr) => (st === "all" || pr.state === st) && (!hd || hd === m[1] + ":" + pr.head.ref)), head); }
   if (route === "search/issues") {
     const terms = q.get("q").match(/(?:[^\s"]+|"[^"]*")+/g) || [];
     const items = Object.values(S.issues).filter((it) => terms.every((t) => {
@@ -52,6 +67,7 @@ if (method === "GET") {
       if ((mm = /^assignee:(.+)$/.exec(t))) return it.assignees.some((a) => a.login === mm[1]);
       if ((mm = /^user:(.+)$/.exec(t))) return it.repository_url.split("/repos/")[1].split("/")[0] === mm[1];
       if ((mm = /^closed:>=(.+)$/.exec(t))) return !!it.closed_at && it.closed_at >= mm[1];
+      if ((mm = /^updated:>=(.+)$/.exec(t))) return !!it.updated_at && it.updated_at >= mm[1];
       if (/^sort:/.test(t)) return true;
       fail("search term " + t);
     }));
@@ -62,6 +78,22 @@ if (method === "GET") {
   fail("GET " + p);
 }
 if (route === "graphql") out(200, { data: {} });
+if ((m = /^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/merge$/.exec(route)) && method === "PUT") {
+  const { execFileSync } = require("child_process");
+  const r = m[1] + "/" + m[2], pr = ((S.pulls || {})[r] || []).find((x) => x.number === Number(m[3])), bare = (S.git || {})[r];
+  if (!pr || !bare || pr.state !== "open") out(405, { message: "Pull Request is not mergeable" });
+  const g = (...a) => execFileSync("git", ["-C", bare, ...a], { encoding: "utf8" }).trim();
+  const headSha = g("rev-parse", "refs/heads/" + pr.head.ref);
+  if (fields.sha && fields.sha !== headSha) out(409, { message: "Head branch was modified" });
+  const base = g("rev-parse", "refs/heads/main");
+  const sha = g("commit-tree", headSha + "^{tree}", "-p", base, "-m", (fields.commit_title || "squash") + "\n\n" + (fields.commit_message || ""));
+  g("update-ref", "refs/heads/main", sha, base);
+  pr.state = "closed"; pr.merged = true; save(); out(200, { sha, merged: true });
+}
+if ((m = /^repos\/([^/]+)\/([^/]+)\/git\/refs\/heads\/(.+)$/.exec(route)) && method === "DELETE") {
+  const bare = (S.git || {})[m[1] + "/" + m[2]]; if (!bare) out(404, { message: "Not Found" });
+  require("child_process").execFileSync("git", ["-C", bare, "update-ref", "-d", "refs/heads/" + m[3]]); process.exit(0);
+}
 if ((m = /^repos\/([^/]+)\/([^/]+)\/labels(\/.*)?$/.exec(route))) out(200, { name: fields.name || fields.new_name });
 if ((m = /^repos\/([^/]+)\/([^/]+)\/issues\/(\d+)(\/(labels|assignees|comments))?$/.exec(route))) {
   const k = key(m[1], m[2], m[3]), it = S.issues[k]; if (!it) out(404, { message: "Not Found" });
@@ -70,7 +102,7 @@ if ((m = /^repos\/([^/]+)\/([^/]+)\/issues\/(\d+)(\/(labels|assignees|comments))
   if (m[5] === "assignees" && method === "POST") { for (const l of fields.assignees) if (!it.assignees.some((x) => x.login === l)) it.assignees.push({ login: l }); save(); out(200, it); }
   if (m[5] === "comments" && method === "POST") { const list = S.comments[k] = S.comments[k] || []; const id = 1000 + list.length + Object.keys(S.comments).length * 100;
     const c = { id, body: fields.body, user: { login: S.login }, created_at: now(), html_url: it.html_url + "#issuecomment-" + id }; list.push(c); save(); out(201, c); }
-  if (!m[5] && method === "PATCH") { for (const f of ["body", "state", "title"]) if (f in fields) it[f] = fields[f]; if (fields.milestone) it.milestone = { number: Number(fields.milestone) }; save(); out(200, it); }
+  if (!m[5] && method === "PATCH") { for (const f of ["body", "state", "title", "state_reason"]) if (f in fields) it[f] = fields[f]; if (fields.state === "closed") it.closed_at = now(); if (fields.milestone) it.milestone = { number: Number(fields.milestone) }; save(); out(200, it); }
 }
 fail(method + " " + p);
 `;

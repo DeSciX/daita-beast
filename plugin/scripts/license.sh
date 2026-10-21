@@ -6,8 +6,9 @@
 #   license.sh render [-o <file>]
 #       the expected license file: the source (from source.checkout's HEAD when the roster names a checkout, else
 #       through the GitHub contents API), rendered with source.render (a shell command, source on stdin,
-#       BEAST_SCRIPTS set to this directory so it can name a filter the plugin ships: pandoc/latex-crossrefs.lua; without
-#       it the source as-is), under ONE neutral header line naming no repo:
+#       BEAST_SCRIPTS set to this directory so it can name a filter the plugin ships: pandoc/latex-crossrefs.lua, and
+#       LATEX_CROSSREFS_SOURCE to the source's file, which that filter reads for the numbering; without a render command
+#       the source as-is), under ONE neutral header line naming no repo:
 #         <!-- <name>. Rendered from its canonical source; do not edit by hand. -->
 #       then an empty line. Stdout, or the file.
 #   license.sh check <dir | tree-ish>
@@ -76,7 +77,7 @@ license_render() {
   license_source > "$src" || exit 1
   [[ -s "$src" ]] || die "the license source $S_REPO:$S_PATH is empty"
   if [[ -n "$S_RENDER" ]]; then
-    BEAST_SCRIPTS="$BEAST_SCRIPTS" bash -c "$S_RENDER" < "$src" > "$body" || die "the render command \`$S_RENDER\` (license.source.render) failed on $S_REPO:$S_PATH (named above)"
+    BEAST_SCRIPTS="$BEAST_SCRIPTS" LATEX_CROSSREFS_SOURCE="$src" bash -c "$S_RENDER" < "$src" > "$body" || die "the render command \`$S_RENDER\` (license.source.render) failed on $S_REPO:$S_PATH (named above)"
   else
     cp "$src" "$body"
   fi

@@ -11,7 +11,7 @@ The roster's `license` (`.beast/roster.json`; shape in `docs/protocol.md`, Licen
 ```
 ${CLAUDE_PLUGIN_ROOT}/scripts/license.sh render -o LICENSE.md
 ```
-It reads the source (the local checkout's HEAD when the roster names one, else GitHub), renders it, and puts one neutral header line above it: `<!-- <name>. Rendered from its canonical source; do not edit by hand. -->`. The header names no repo. Commit the file; never edit it by hand.
+It reads the source (the local checkout's HEAD when the roster names one, else GitHub), renders it (a LaTeX source through `pandoc/latex-crossrefs.lua`, which numbers headings and prints every `\ref` as the PDF does, from the source's own class and `\the<counter>` formats, and fails naming any numbering command it does not follow), and puts one neutral header line above it: `<!-- <name>. Rendered from its canonical source; do not edit by hand. -->`. The header names no repo. Commit the file; never edit it by hand.
 
 2. Check a tree: a directory, or a commit or branch of the repo you stand in:
 ```

@@ -88,7 +88,8 @@ while IFS=$'\t' read -r num url_ full; do
 $row |"
 done < <(jq -r '.[] | [.number, .html_url, (.repository_url | sub(".*/repos/"; ""))] | @tsv' <<< "$issues")
 
-# Decided: rows closed in the last 7 days, with the first line of the close comment (the words).
+# Decided: rows closed in the last 7 days, with the close (close_text, lib.sh: the words; a latitude close is kind
+# "latitude", no words, its record linked).
 since="$(date -u -v-7d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)"
 qd="is:closed label:$BOARD_ROW_LABELS assignee:$assignee closed:>=$since"
 for o in "${owners[@]:-}"; do [[ -n "$o" ]] && qd="$qd user:$o"; done
@@ -100,7 +101,9 @@ drows_unacked=""; acked=()
 while IFS=$'\t' read -r num url_ full closed_at kind title labels; do
   [[ -n "$num" ]] || continue
   rd="$(row_read "$full" "$num")"
-  last="$(jq -r '[.comments[] | select((.body // "") | test("^(Closed|Rejected) on the (decider.s )?word"))] | if length == 0 then "(closed without the words: no close comment of the protocol shape)" else (.[-1].body | split("\n")[0] | sub("^(Closed|Rejected) on the word, verbatim: "; "")) end' <<< "$rd")"
+  cl="$(close_of_comments "$(jq -c .comments <<< "$rd")")" || die "$full#$num: cannot read its close comment"
+  last="$(tag_jq -r 'if . == null then "(closed without the words: no close comment of the protocol shape)" else close_text(.) end' <<< "$cl")"
+  [[ "$(jq -r '.kind // empty' <<< "$cl")" != latitude ]] || kind=latitude
   cells="$(seat_cells "$rd" "$labels" "$closed_at")"
   dcount=$((dcount+1))
   drow="| $closed_at | $kind | [$full#$num]($url_) | $(printf '%s' "$title" | sed 's/^Decision: //' | cell) | $(printf '%s' "$last" | cell) | $cells |"

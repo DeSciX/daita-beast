@@ -80,7 +80,7 @@ flowchart TB
     L3["Workstreams: workstream_issue, workstream_master, ws_seats_table_parse, ws_seats_render, ws_seats_write, ws_seats_all"]
     L4["Addresses and tags: address_header, seat_address_read, msg_header, MSG_HEADER_RE, BOOKKEEPING_FIRST_LINE_RE"]
     L5["Blocks: claude_block_render, block_replace, block_write, ws_block_render, ws_block_write_local, ws_block_write_remote"]
-    L6["Queue: answer_kind, row_phrase, row_events, seat_acks, row_close_comment, row_after_close, row_answer_url, ask_inline_check"]
+    L6["Queue: answer_kind, row_phrase, row_events, seat_acks, row_close_comment, row_close, close_of, latitude_record, row_after_close, row_answer_url, ask_inline_check"]
     L7["Privacy: repo_public_why, roster_pair_check, coord_write_guard"]
     L8["Scrub and license: roster_scrub, scrub_patterns, scrub_scan, roster_license, WORDS_*"]
     L9["Desks, deps, milestones: ask_header, desk_parse, waits_on_*, milestone_*, dep_state, deps_declared"]
@@ -210,7 +210,7 @@ One owner per fact. Every other place that shows a fact is a rendered copy of it
 | A pending decision (an act without code) | issue labelled `decision`, six `##` sections, assignee the decider, `seat:<id>` labels (`decision.sh new`) | the generated board; the board page | a chat message or a session's context |
 | A code change awaiting the decider | the PR, labelled `needs-review` and `seat:<id>`, assigned (`pr.sh request`) | the board | a review request (refused while seats post as the PR author's login) |
 | The decider's answer | their comment on the row in one of four forms (`lib.sh::answer_kind`), or words typed to a session quoted in the close comment | the decided table | a paraphrase anywhere |
-| A close | the close comment (`lib.sh::row_close_comment`): the words verbatim, the record, the closer, the closer's ack | the decided table | an edited body |
+| A close | the close comment (`lib.sh::row_close_comment`, read by `close_of` against `CLOSE_LINE_RE`): the words verbatim, the record, the closer, the closer's ack; or, under a seat's standing latitude, no words and the record's link in the close line (kind `latitude`) | the decided table | an edited body |
 | A seat's consumption of a row or desk | its newest `BEAST-ACK seat=<id> …` comment (`ack.sh`, read by `lib.sh::seat_acks`) | the board's per-seat ack state | a local watermark |
 | A seat's inbox | computed: rows whose latest event (`lib.sh::row_events`) is newer than the seat's newest ack, then its desk (`decision.sh inbox`) | none | stored anywhere |
 | A desk ask, answer, withdrawal, message | comments on the seat's desk issue (`desk.sh`, parsed by `lib.sh::desk_parse`) | the desk body (`desk.sh publish`); the page's desk strip | the body as a source |
