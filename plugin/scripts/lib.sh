@@ -162,8 +162,9 @@ hook_log() {
 # The watchdog (watchdog.sh, plugin/agents/watchdog.md) starts its Haiku session with BEAST_WATCHDOG=1. Every plugin
 # script sources this file at its top, so under that variable a script runs only when its name and first argument are
 # listed here, and dies naming the rule otherwise: the watchdog never answers, acks, closes, labels, files a row, posts
-# status or notes, records or forgets an address, or makes a seat or a workstream. The hooks run in its session too.
-WATCHDOG_ALLOWED='watchdog.sh:* seats.sh:touch permit.sh:* seat-hello.sh:* seat-bye.sh:*'
+# status or notes, records, re-stamps or forgets an address (the tick re-stamps, seats.sh touch, outside the session),
+# or makes a seat or a workstream. The hooks run in its session too.
+WATCHDOG_ALLOWED='watchdog.sh:* permit.sh:* seat-hello.sh:* seat-bye.sh:*'
 watchdog_guard() {
   [[ "${BEAST_WATCHDOG:-}" == 1 ]] || return 0
   local name a; name="$(basename "$0")"
@@ -597,14 +598,82 @@ fault_clear() {
 rate_limit_text() { grep -qiE 'quota: resets at|secondary rate limit|rate limit exceeded|HTTP 429' <<< "${1:-}"; }
 
 # ---- a seat's address: the one owner is its BEAST-ADDRESS comment on its workstream tracking issue -------------
-# BEAST-ADDRESS seat=<composite> account=<claude account> address="<name [ref]>" machine=<hostname> at=<UTC>
-# One comment per seat, by the seat's login, edited in place (seats.sh record); ~/.beast/sessions.json is a
-# machine-local cache of it, keyed by the composite, never the owner. address_header writes the line, seat_addresses_of
-# reads every seat's on one issue, seat_address_read one seat's. A SendMessage address is minted per session on one
-# machine, so it reaches a seat only from the same machine and the same Claude account: seats.sh address says which
-# path applies (direct, or the recipient's desk).
+# BEAST-ADDRESS seat=<composite> account=<claude account> address="<name>[ [ref]]" machine=<hostname> at=<UTC>
+# One comment per seat, by the seat's login, edited in place (seats.sh record, seats.sh touch); ~/.beast/sessions.json
+# is a machine-local cache of it, keyed by the composite, never the owner. address_header writes the line,
+# seat_addresses_of reads every seat's on one issue, seat_address_read one seat's. A SendMessage address is minted per
+# session on one machine, so it reaches a seat only from the same machine and the same Claude account: seats.sh address
+# says which path applies (direct, or the recipient's desk).
 ADDRESS_HEADER_RE='^BEAST-ADDRESS seat=(?<seat>[a-z0-9][a-z0-9-]*/[A-Z0-9_-]+/[A-Za-z0-9-]+) account=(?<account>[^ ]+) address="(?<address>[^"]+)" machine=(?<machine>[^ ]+) at=(?<at>[^ ]+)$'
 ADDRESS_FRESH_S=86400   # "fresh" approximates "recorded after the recipient's newest SessionStart" as "within 24h"
+
+# The address itself: the session's ListAgents name, optionally followed by " [<ref>]" (6 hex digits) as ListAgents
+# prints it. The name is the `name` of the session's ~/.claude/sessions file (claude_session_of), which carries no ref;
+# SendMessage takes the bare name when it is unique among the live sessions. A name may hold spaces and slashes, never
+# a bracket, a double quote or a control character, and starts and ends with a non-space. ADDRESS_RE is the one owner
+# of the shape (an Oniguruma regex, read through jq): address_parse, address_header and seat_addresses_at use it.
+ADDRESS_RE='^(?<name>[^\s\[\]"\x00-\x1f](?:[^\[\]"\x00-\x1f]*[^\s\[\]"\x00-\x1f])?)(?: \[(?<ref>[0-9a-f]{6})\])?$'
+
+# address_parse <address>: "<name>\t<ref or empty>"; dies naming the shape.
+address_parse() {
+  local p
+  p="$(jq -rn --arg a "${1:-}" --arg re "$ADDRESS_RE" '$a | capture($re) // empty | "\(.name)\t\(.ref // "")"')" || die "address_parse: jq failed on '${1:-}'"
+  [[ -n "$p" ]] || die "address '${1:-}' is not of the shape 'name' or 'name [ref]' (the session's ListAgents name, optionally with the 6-hex ref ListAgents prints; no bracket, double quote or control character in the name)"
+  printf '%s\n' "$p"
+}
+# address_name <address>: the name part (what SendMessage is sent to, and what a live session's name is compared with).
+address_name() { local p; p="$(address_parse "${1:-}")" || exit 1; printf '%s\n' "${p%%$'\t'*}"; }
+
+# ---- Claude Code's session files: the one reader ------------------------------------------------------------------
+# Claude Code writes one file per running session, ~/.claude/sessions/<pid>.json (measured 2026-10-21):
+#   {"pid":34914,"sessionId":"17efc626-…","cwd":"/Users/…","name":"unkamon-14","nameSource":"derived","status":"idle",…}
+# `name` is the session's ListAgents name. This is an undocumented Claude Code internal, so it is read here only, and
+# every field used is shape-checked on every read: a file that is not JSON, or lacks pid (a positive integer),
+# sessionId, name, cwd (an absolute path) or status (non-empty strings), dies naming the file and the field.
+# A file whose pid is dead is a leftover of a killed session; claude_sessions_live drops it (kill -0).
+claude_sessions_dir() { echo "$HOME/.claude/sessions"; }
+
+# claude_sessions_read: every session file, one JSON object per line {session, name, pid, cwd, status, file, alive}.
+claude_sessions_read() {
+  local d f o bad
+  d="$(claude_sessions_dir)"
+  [[ -d "$d" ]] || die "no $d: Claude Code writes one file per running session there; this Claude Code writes none (its session files are an undocumented internal: the address cannot be read)"
+  for f in "$d"/*.json; do
+    [[ -e "$f" ]] || continue
+    o="$(jq -c --arg f "$f" '
+      if type != "object" then {bad: "not a JSON object"}
+      elif ((.pid | type) != "number") or (.pid < 1) or (.pid != (.pid | floor)) then {bad: "field pid (a positive integer) missing or of another shape"}
+      elif ((.sessionId | type) != "string") or (.sessionId == "") then {bad: "field sessionId (a string) missing or of another shape"}
+      elif ((.name | type) != "string") or (.name == "") then {bad: "field name (a string) missing or of another shape"}
+      elif ((.cwd | type) != "string") or ((.cwd | startswith("/")) | not) then {bad: "field cwd (an absolute path) missing or of another shape"}
+      elif ((.status | type) != "string") or (.status == "") then {bad: "field status (a string) missing or of another shape"}
+      else {session: .sessionId, name, pid, cwd, status, file: $f} end' "$f" 2>/dev/null)" || die "the Claude Code session file $f is not JSON: its shape changed, or it is being written (an undocumented internal; the address cannot be read)"
+    bad="$(jq -r '.bad // empty' <<< "$o")"
+    [[ -z "$bad" ]] || die "the Claude Code session file $f: $bad (an undocumented internal whose shape changed; the address cannot be read)"
+    if kill -0 "$(jq -r .pid <<< "$o")" 2>/dev/null; then jq -c '. + {alive: true}' <<< "$o"; else jq -c '. + {alive: false}' <<< "$o"; fi
+  done
+}
+
+# claude_sessions_live: claude_sessions_read, only the entries whose pid is alive.
+claude_sessions_live() { local all; all="$(claude_sessions_read)" || exit 1; [[ -z "$all" ]] || jq -c 'select(.alive)' <<< "$all"; }
+
+# claude_session_of <session id>: that session's {session, name, pid, cwd, status, file, alive} as one JSON line; dies
+# when no file names it, or when two live files do. A file whose pid is dead is returned (alive false) only when no live
+# one names the session: the caller decides what a dead session means.
+claude_session_of() {
+  local sid="${1:-}" all hits n
+  [[ -n "$sid" ]] || die "claude_session_of: no session id"
+  all="$(claude_sessions_read)" || exit 1
+  hits="$( [[ -z "$all" ]] || jq -c --arg s "$sid" 'select(.session == $s)' <<< "$all")"
+  [[ -n "$hits" ]] || die "no Claude Code session file in $(claude_sessions_dir) names session $sid"
+  n="$(jq -s 'map(select(.alive)) | length' <<< "$hits")"
+  [[ "$n" -le 1 ]] || die "$n live Claude Code session files in $(claude_sessions_dir) name session $sid: $(jq -rs 'map(select(.alive) | .file) | join(" and ")' <<< "$hits")"
+  jq -sc 'sort_by(if .alive then 0 else 1 end) | .[0]' <<< "$hits"
+}
+
+# claude_name_holders <name>: how many live sessions carry the name (1 is a unique, sendable address; more is
+# ambiguous: SendMessage to the bare name cannot tell them apart).
+claude_name_holders() { local l; l="$(claude_sessions_live)" || exit 1; [[ -z "$l" ]] && echo 0 || jq -s --arg n "$1" 'map(select(.name == $n)) | length' <<< "$l"; }
 
 # claude_account: the Claude account this machine's sessions run as: oauthAccount.emailAddress of ~/.claude.json
 # (BEAST_CLAUDE_JSON moves the file); dies naming the file when it or the field is absent.
@@ -619,7 +688,7 @@ claude_account() {
 # address_header <composite> <account> <address> <machine> <at>: the first line of a BEAST-ADDRESS comment.
 address_header() {
   [[ "${1:-}" =~ $SEAT_IDENTITY_RE ]] || die "address_header: '${1:-}' is not <slug>/<LABEL>/<login>"
-  [[ "${3:-}" != *'"'* && "${3:-}" != *$'\n'* ]] || die "address_header: an address carries no double quote or newline"
+  address_parse "${3:-}" >/dev/null || exit 1
   local l="BEAST-ADDRESS seat=$1 account=$2 address=\"$3\" machine=$4 at=$5"
   jq -en --arg l "$l" --arg re "$ADDRESS_HEADER_RE" '$l | test($re)' >/dev/null || die "address_header: '$l' is not the BEAST-ADDRESS shape"
   printf '%s\n' "$l"
@@ -634,9 +703,9 @@ address_age() {
 }
 
 # seat_addresses_of <slug>: every well-formed BEAST-ADDRESS comment on the workstream's tracking issue, one JSON
-# object per line {seat, account, address, machine, at, url, id, by}, in comment order; a comment whose first line
-# starts with BEAST-ADDRESS and is not the shape, or that names a seat whose login is not its author, is named on
-# stderr and dropped.
+# object per line {seat, account, address, name, ref, machine, at, url, id, by} (name and ref from ADDRESS_RE; ref null
+# for a bare name), in comment order; a comment whose first line starts with BEAST-ADDRESS and is not the shape (its
+# address included), or that names a seat whose login is not its author, is named on stderr and dropped.
 seat_addresses_of() {
   local ref
   ref="$(workstream_issue "$1")" || exit 1
@@ -649,11 +718,12 @@ seat_addresses_at() {
   [[ "$ref" =~ ^[^/#]+/[^/#]+#[0-9]+$ ]] || die "seat_addresses_at: '$ref' is not owner/repo#N"
   r="${ref%%#*}"; n="${ref#*#}"
   local cs; cs="$(issue_comments "$r" "$n")" || die "cannot read the comments of $ref (named above)"
-  jq -c --arg re "$ADDRESS_HEADER_RE" '
+  jq -c --arg re "$ADDRESS_HEADER_RE" --arg are "$ADDRESS_RE" '
     .[] | . as $c | ((.body // "") | split("\n")[0] | sub("\\s+$"; "")) as $f
     | select($f | startswith("BEAST-ADDRESS"))
-    | ($f | capture($re) // null) as $a
-    | if $a == null then {bad: "malformed BEAST-ADDRESS line: \($c.html_url)"}
+    | ($f | capture($re) // null) as $h
+    | (if $h == null then null else ($h.address | capture($are) // null) as $n | if $n == null then null else $h + {name: $n.name, ref: $n.ref} end end) as $a
+    | if $a == null then {bad: "malformed BEAST-ADDRESS line (the header, or an address that is not name or name [ref]): \($c.html_url)"}
       elif ($a.seat | split("/")[2]) != $c.user.login then {bad: "BEAST-ADDRESS for \($a.seat) by \($c.user.login), not the seat'"'"'s login: \($c.html_url)"}
       else $a + {url: $c.html_url, id: $c.id, by: $c.user.login} end' <<< "$cs" \
     | while IFS= read -r o; do

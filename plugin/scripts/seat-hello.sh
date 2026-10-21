@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # seat-hello.sh — SessionStart hook. In a seat's home (a $PWD/.beast/seat.json naming a roster seat whose derived
 # home, seat_home_path, is $PWD, and whose row is not retired) it adds context naming the seat, its role, its first act and its tracking issue (the
-# roster and the workstream issue, the owners), its recorded address and its age with the refresh line (ListAgents,
-# then seats.sh record), and when other seats are listable too it names it as this folder's seat, not as certainly
+# roster and the workstream issue, the owners), its recorded address and its age, and when other seats are listable
+# too it names it as this folder's seat, not as certainly
 # this session's. Anywhere else it lists the gh login's seats a session here can take (seat_homes_on_machine:
 # those of the folders of every VS Code workspace file that lists $PWD, found walking up from it (vscode_workspace_folders),
 # when there is one, else every rostered seat of the
@@ -13,7 +13,10 @@
 # After a compaction (input "source": "compact") it leads with the handoff, because PreCompact cannot add
 # context (the hooks reference: "Claude Code discards a PreCompact hook's `systemMessage` and `continue` fields").
 # Rejoin (rejoin, below): when this session (input "session_id") was seated on this machine and no session has claimed
-# the seat since, the hook runs join.sh for it and the context carries the join output. The record is the session claim
+# the seat since, the hook runs join.sh for it and the context carries the join output. join.sh records the session's
+# address itself (seats.sh record with no address: the name in this session's Claude Code session file,
+# claude_session_of, lib.sh), so a rejoined session's address is current with no step of its own; when that file
+# cannot be read, the context leads with join's one "address: not recorded — <failure>" line. The record is the session claim
 # in ~/.beast/sessions.json (sessions_claim, lib.sh; written by join.sh and seats.sh record):
 #   held      this session's id is the seat's current claim (a resume or a compaction keeps the id): rejoin.
 #   taken     this session's id is in the seat's previous claims: another session on this machine claimed it since;
@@ -106,8 +109,9 @@ rejoin() {
     printf 'declined %s\nThe automatic rejoin of the Beast seat %s failed (join.sh exit %s): %s Fix what it names, then run %s/join.sh %s.\n' "$short" "$id" "$rc" "$(tail -3 <<< "$out" | tr '\n' ' ')" "$scripts" "$id"
     return 0
   fi
-  printf 'joined\n%s. %sThis session is the Beast seat %s again: %s held it and no session has claimed it since, so the SessionStart hook ran %s/join.sh %s. Its output follows; work from it (the home, the handoff, the inbox, and the CLAUDE.md it says to read). The hook cannot know this session'"'"'s ListAgents address: refresh it now with ListAgents, then %s/seats.sh record %s "<ListAgents name [ref]>".\n%s\n' \
-    "$(scripts_line)" "$handoff" "$id" "$how" "$scripts" "$id" "$scripts" "$id" "$out"
+  local addrline; addrline="$(grep -m1 '^address: not recorded' <<< "$out" || true)"
+  printf 'joined\n%s. %s%sThis session is the Beast seat %s again: %s held it and no session has claimed it since, so the SessionStart hook ran %s/join.sh %s, which recorded this session'"'"'s address. Its output follows; work from it (the home, the handoff, the inbox, and the CLAUDE.md it says to read).\n%s\n' \
+    "$(scripts_line)" "${addrline:+$addrline }" "$handoff" "$id" "$how" "$scripts" "$id" "$out"
 }
 
 # hello: the context line, or nothing. Runs in a subshell that sources lib.sh, whose die exits that subshell.
@@ -133,7 +137,7 @@ hello() {
         age="$(address_age "$(jq -r .at <<< "$a")")"
         addr="recorded address: $(jq -r .address <<< "$a") on $(jq -r .machine <<< "$a") as $(jq -r .account <<< "$a"), $(jq -r .at <<< "$a") (${age%%$'\t'*}, ${age#*$'\t'})."
       else addr="no address recorded (no BEAST-ADDRESS comment on $tracking)."; fi
-      homeact="Role: $agent. First act: run $scripts/join.sh $label --address \"<your ListAgents name [ref]>\", then work the inbox it prints. Refresh your address: ListAgents, then \`seats.sh record $label \"<name [ref]>\"\` ($addr) Before any compaction or shutdown: $scripts/status.sh $tracking --seat $label --state handoff."
+      homeact="Role: $agent. First act: run $scripts/join.sh $label (it records this session's address), then work the inbox it prints. ($addr) Before any compaction or shutdown: $scripts/status.sh $tracking --seat $label --state handoff."
       [[ "$src" != compact ]] || compacted="This session was just compacted. If it is $identity, post the handoff on $tracking now, from the summary: $scripts/status.sh $tracking --seat $label --state handoff --next \"<next act>\" --text \"<state, waiting on, branches, gotchas>\". "
       homectx="${compacted}This session is the Beast seat $identity. $homeact"
     fi

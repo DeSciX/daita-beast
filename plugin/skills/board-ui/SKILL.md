@@ -64,7 +64,8 @@ To update an existing board (a republish):
 Tell the decider:
 
 - The first time the page calls GitHub, claude.ai asks them to allow the connector for this page. Posting an answer is a write and asks for approval unless they set it to always allow.
-- `#<owner>.<repo>.<number>` after the artifact link opens on that card.
+- The top list is everything waiting on them: the decisions and PRs whose turn is theirs and every open desk ask, counted together in the headline and sorted longest waiting first, each with how long it has waited. A desk ask is answered in that list, as in the seat's desk. Rows already answered fold into "With the seats" below the desks strip.
+- `#<owner>.<repo>.<number>` after the artifact link opens on that card; `#desk.<login>.<LABEL>` opens that seat's desk.
 
 An agent cannot operate the page: browser automation does not reach the artifact's frame (measured 2026-10-11, clicks, scroll and keys all dropped). Answering from the page is the decider's own click. The agent's check is reading GitHub afterwards.
 

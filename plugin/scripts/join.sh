@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # join.sh — take a seat, or retake it after a reload or compaction, from ANY directory. Seating sets the root.
-#   join.sh <LABEL | login/LABEL | slug/LABEL/login> [--address "<ListAgents name [ref]>"] [--agent <name>] [--workstream <slug>]
+#   join.sh <LABEL | login/LABEL | slug/LABEL/login> [--address "<name>"] [--agent <name>] [--workstream <slug>]
 # The seat is found on this machine (seat_locate, lib.sh: the launch folder's checkout, the folders of its VS Code
 # workspace, the machine index ~/.beast/checkouts.json) and every step runs against the seat's home (seat_home_path):
 # 1 roster: the seat's row in the roster of the checkout of its own repo; --agent changes its role (the agent file
@@ -8,7 +8,9 @@
 #   found by the workstream's labels (workstream_issue). Refused only when the home does not exist here, naming the
 #   clone and seat.sh new steps. The first line printed is "SEATED <id> at <home>"; then "role: <agent> at <path>";
 #   then the session claim (sessions_claim, lib.sh: this session holds the seat, read by the SessionStart hook to rejoin).
-# 2 address: recorded when --address is given (seats.sh record: the BEAST-ADDRESS comment on the tracking issue).
+# 2 address: recorded by seats.sh record (the BEAST-ADDRESS comment on the tracking issue): this session's name, read
+#   from its Claude Code session file (claude_session_of $CLAUDE_CODE_SESSION_ID, lib.sh), or --address when given.
+#   When the name cannot be read, one line "address: not recorded — <the failure>" and the manual record line.
 # 3 CLAUDE.md: the block between <!-- beast:begin --> and <!-- beast:end --> in the home's CLAUDE.md is regenerated
 #   from templates/claude-block.md for this seat (its identity, its role, its workstream's seat map).
 # 4 memory: the auto-memory folder this session loads (session_memory_dir, lib.sh), triaged by memory_triage: the
@@ -19,7 +21,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 need gh jq git
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 seat="${1:-}"; shift || true
-[[ -n "$seat" && "$seat" != -* ]] || die "usage: join.sh <LABEL | login/LABEL | slug/LABEL/login> [--address \"name [ref]\"] [--agent <name>] [--workstream <slug>]"
+[[ -n "$seat" && "$seat" != -* ]] || die "usage: join.sh <LABEL | login/LABEL | slug/LABEL/login> [--address \"<name>\"] [--agent <name>] [--workstream <slug>]"
 address=""; ws=""; agent=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -95,7 +97,9 @@ if [[ "$agent" == daita-beast:* || "$apath" == /* ]]; then echo "  a terminal se
 sessions_claim "$identity" "$launch_p" "$tracking"
 
 echo "== 2. address"
-if [[ -n "$address" ]]; then "$here/seats.sh" record "$seat" "$address"; else echo "(no --address: run cd $home && $here/seats.sh record $seat \"<your ListAgents name [ref]>\" or pass --address)"; fi
+if ! rec="$("$here/seats.sh" record "$seat" ${address:+"$address"} 2>&1)"; then
+  echo "address: not recorded — $(tail -1 <<< "$rec" | sed 's/^daita-beast: //'). Record it by hand: cd $home && $here/seats.sh record $seat \"<this session's ListAgents name>\""
+else printf '%s\n' "$rec"; fi
 
 echo "== 3. CLAUDE.md block (the home's CLAUDE.md)"
 md="$home/CLAUDE.md"

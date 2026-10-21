@@ -228,7 +228,7 @@ case "$cmd" in
     [[ "$kind" != wrapper ]] || claude_block_write "$home/CLAUDE.md" "$id"
     echo
     echo "== take the seat: start a session anywhere in the workspace and run"
-    echo "  $here/join.sh $label --address \"<ListAgents name [ref]>\"     (it prints SEATED $id at $home; the home is the seat's root from then on)"
+    echo "  $here/join.sh $label     (it prints SEATED $id at $home; the home is the seat's root from then on)"
     [[ "$kind" != wrapper ]] || echo "  optional, for terminal users: $home/claude.sh starts a session in the wrapper with the repo's agents and skills (claude --add-dir)"
     case "$kind" in
       wrapper) echo "  commit $roster" ;;

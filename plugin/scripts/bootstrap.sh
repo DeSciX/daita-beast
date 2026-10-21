@@ -95,7 +95,7 @@ cat <<EOF
 1. commit $path/.beast and $path/.github (git add .beast .github && git commit)
 2. first workstream (its tracking issue is the seat's): $here/workstream.sh new --slug <slug> --owner <org> --title "WS: <name>" --repo $repo --northstar-file <f> --milestone "<title>|<YYYY-MM-DD>|<what it delivers>"
 3. the seat and its home, from $path: $here/seat.sh new $seat --repo-path $path --agent <name | daita-beast:seat> --workstream <slug>
-4. start a session anywhere in the workspace and run: $here/join.sh $seat --address "<ListAgents name [ref]>"   (SEATED at the home; the CLAUDE.md block, address, resume; every session)
+4. start a session anywhere in the workspace and run: $here/join.sh $seat   (SEATED at the home; the CLAUDE.md block, address, resume; every session)
 5. DeSciX: /descix-setup (connector + account), then $(descix_cmd whoami) from $path
 6. relay: $here/install-relay.sh --status (one per machine; it already covers every roster seat)
 EOF

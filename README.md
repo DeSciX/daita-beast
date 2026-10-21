@@ -44,7 +44,7 @@ Make a repository a coordinating repo, open its workstream, then seat yourself:
 plugin/scripts/bootstrap.sh --repo <owner/repo> --path <checkout> --seat <LABEL> [--token <SYMBOL> --community <owner/repo>]
 plugin/scripts/workstream.sh new --slug <slug> --owner <owner> --title "WS: <name>" --repo <owner/repo> --northstar-file <f> --milestone "<title>|<YYYY-MM-DD>|<delivers>"
 plugin/scripts/seat.sh new <LABEL> --repo-path <checkout> --agent <name | daita-beast:seat> --workstream <slug>   # after the scoping step of /daita-beast:seat
-plugin/scripts/join.sh <LABEL> --address "<ListAgents name [ref]>"                                                # every session, from any directory
+plugin/scripts/join.sh <LABEL>                                                                                    # every session, from any directory
 ```
 The seat's identity is `<slug>/<LABEL>/<your gh login>`; inside its workstream `<login>/<LABEL>` abbreviates it, and every script accepts either form or the bare label.
 Every script parses by shape and exits non-zero naming what it could not read.
