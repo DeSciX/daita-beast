@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # watch.sh — one GitHub search, then one diff per seat: emit one line per change to a row that waits on
-# a seat (its seat:<login>/<LABEL> label; seat_label_terms owns which labels count). A row is a decision
+# a seat (its seat:<login>/<LABEL> label; seat_label_terms owns which labels count; a row with no seat: label at all
+# waits on its filer, the seat of its first BEAST-ACK comment: row_seats, lib.sh). A row is a decision
 # issue, a PR labelled needs-review, or the seat's desk (RELAY_ROW_LABELS in lib.sh): a new ask answer or
 # message on a desk is an UPDATED for its seat.
 #   watch.sh --roster [--once] [--interval 120]           every seat of every open workstream among this repo's roster owners (ws_seats_all)
@@ -135,11 +136,22 @@ poll() {
   fi
   # REST fields mapped once here, so the snapshot files keep their shape and the diff below is unchanged.
   all="$(jq -s 'add | unique_by(.html_url) | map({url: .html_url, title, state, updatedAt: .updated_at, comments, labels})' <(echo "$open_") <(echo "$closed_"))"
+  # A row with no seat: label is its filer's (row_seats, lib.sh: the seat of its first BEAST-ACK comment): its comments
+  # are read here, once per poll per such row, into {url: [seat ids]}. A row whose comments cannot be read is named and
+  # reaches no seat this poll (the snapshot keeps its last entry; the next poll's overlap returns it).
+  local filers='{}' u rr rn cs0 fs
+  while IFS=$'\t' read -r u; do
+    [[ -n "$u" ]] || continue
+    read -r rr rn < <(parse_issue_ref "$u")
+    if ! cs0="$(issue_comments "$rr" "$rn")"; then echo "BEAST-WATCH cannot read the comments of $u, a row with no seat: label, at $(utc_now): no seat hears of it this poll" >&2; continue; fi
+    fs="$(row_seats '[]' "$cs0" | jq -R . | jq -sc .)"
+    filers="$(jq -c --arg u "$u" --argjson f "$fs" '. + {($u): $f}' <<< "$filers")"
+  done < <(jq -r '.[] | select(.labels | any(.name | startswith("seat:")) | not) | .url' <<< "$all")
   local cur prev i
   for i in "${!seats[@]}"; do
     seat="${seats[$i]}"
     snap="$HOME/.beast/watch/$seat.json"; markf="$HOME/.beast/watch/$seat.mark"; mkdir -p "$(dirname "$snap")"
-    cur="$(jq --argjson l "${names[$i]}" '[.[] | select(.labels | any(.name as $n | $l | index($n)))] | map({key:.url, value:{title,state,updatedAt,comments,desk:(.labels | any(.name == "desk"))}}) | from_entries' <<< "$all")"
+    cur="$(jq --argjson l "${names[$i]}" --argjson f "$filers" --arg s "$seat" '[.[] | select((.labels | any(.name as $n | $l | index($n))) or (($f[.url] // []) | index($s)))] | map({key:.url, value:{title,state,updatedAt,comments,desk:(.labels | any(.name == "desk"))}}) | from_entries' <<< "$all")"
     if [[ ! -f "$snap" ]]; then
       write_atomic "$snap" "$cur"
       write_atomic "$markf" "$query_id $started"

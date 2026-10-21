@@ -1317,6 +1317,29 @@ row_seat_ids() {
     | while IFS= read -r t; do [[ -n "$t" ]] && { seat_resolve "$t" || true; }; done | awk '!seen[$0]++'
 }
 
+# row_seats <labels-json> <comments-json>: the seats a row waits on, one id per line: its seat: labels (row_seat_ids);
+# a row with no seat: label at all (filed before decision.sh new labelled its filer) is its filer's, the seat of its
+# first BEAST-ACK comment (row_filer in SEAT_TAG_JQ: the filer's ack decision.sh new and pr.sh request post); nothing
+# when it has neither. The one owner of a row's seats for board.sh, watch.sh and row_after_close; the page's rowSeats is
+# its twin (plugin/tests/board-page.test.mjs runs both on one table).
+row_seats() {
+  [[ $# -eq 2 ]] || die "row_seats takes <labels-json> <comments-json>, not $*"
+  local f
+  if jq -e 'any(.[]; (.name // .) | startswith("seat:"))' <<< "$1" >/dev/null; then row_seat_ids "$1"; return 0; fi
+  f="$(tag_jq -r 'row_filer(.) // empty' <<< "$2")" || die "row_seats: cannot read the row's comments"
+  [[ -z "$f" ]] || seat_resolve "$f" || true
+}
+
+# seat_labels_require <repo> <N> <id>...: dies unless <repo>#<N> carries seat:<id> for every id, read back from GitHub
+# after the write (a row whose seat label did not land is invisible to its seat's inbox and relay).
+seat_labels_require() {
+  local repo="$1" n="$2" have id; shift 2
+  have="$(issue_get "$repo" "$n" | jq -r '.labels[] | (.name // .)')" || exit 1
+  for id in "$@"; do
+    grep -qxF "seat:$id" <<< "$have" || die "$repo#$n does not carry the label seat:$id after the write (it has: $(paste -sd, - <<< "$have")): add it (relabel or rerun) before anything else"
+  done
+}
+
 # Resolve "owner/repo#123" or a full issue or pull request URL to "owner/repo" and the number (the issues
 # endpoints serve both). Prints two words: repo number.
 parse_issue_ref() {
@@ -1400,6 +1423,17 @@ award_policy() {
   [[ "$com" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "$f: 'Community: $com' is not owner/repo"
   echo "$tok $com"
 }
+
+# An award or bounty amount: a plain decimal in token units, no sign, no thousands separator, no leading zero, no
+# trailing zero after the point (500, 12.5, 0.25). The one owner of the shape: award.sh and bounty.sh refuse any other,
+# ledger.sh drops a BEAST-AWARD comment whose amount is not this, and ledger.sh --sheet emits it as new_amount verbatim.
+AWARD_AMOUNT_RE='^(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$'
+AWARD_AMOUNT_HINT='a plain decimal number of tokens such as 500 or 12.5 (no separator, no sign, no leading or trailing zero)'
+
+# An award's ref: an https URL with no whitespace. The one owner of the shape: award.sh refuses a --ref of any other, and
+# ledger.sh refuses (exit 1, nothing written) a BEAST-AWARD comment whose ref= is present but empty or not this. An award
+# with no ref= gets the awarded item's URL as its ledger ref, so no ledger row has an empty ref.
+AWARD_REF_RE='^https://[^[:space:]"<>]+$'
 
 # The token's authority: the community repo of a token (an award policy's `Community:` line) commits `.beast/awarders.json`,
 # the one owner of which repos may award its token: {"token": "<SYMBOL>", "awarders": ["<owner/repo>", ...]}. Read from the
@@ -1909,6 +1943,8 @@ answer_kind() {
 #   close_text(c)    of a close_of result: the one line a reader shows for it (the quoted words; a latitude close as
 #                    "no words: merged under standing latitude by <seat>, record <link>")
 #   close_last(cs)   of a comment list: the newest close comment's close_of, plus its url, or null
+#   row_filer(cs)    of a row's comment list: the seat that filed it, the writer of its first BEAST-ACK comment (the
+#                    filer's ack, decision.sh new and pr.sh request), or null
 #   tag_actor(desk)  of a comment: the seat id that wrote it, or null (an untagged comment, a BEAST-ANSWER: the decider's).
 #                    In order: the closer; a BEAST-ACK first line, or last line (a seat's own reply on a row ends with
 #                    it); a BEAST-STATUS or BEAST-NOTES header; a BEAST-ASK header; a BEAST-MSG sender (from=); on a
@@ -1938,6 +1974,7 @@ def tag_actor(desk):
       // ($f | capture($msgre) | {seat: (.from | split("/") | "\(.[2])/\(.[1])")})
       // (if desk != "" and ($f | test("^BEAST-WITHDRAW n=[0-9]+$")) then {seat: desk} else null end)) | .seat?) as $s
   | if $s == null then null elif ($s | contains("/")) then $s else "\($c.user.login // "")/\($s)" end;
+def row_filer(cs): ((first(cs[]? | select((.body // "") | startswith("BEAST-ACK "))) // null) as $c | if $c == null then null else ($c | tag_actor("")) end);
 '
 
 # tag_jq [jq options...] '<program>': jq with SEAT_TAG_JQ prepended to the program and its regexes bound.
@@ -2000,7 +2037,7 @@ event_actors() {
     def news: .[] | select((((.body // "") | gsub("\r"; "") | tag_first) | test($bk)) | not) | (tag_actor($desk) // "-");
     def newer: if $d > 0 then .[-$d:] else [] end;
     if $kind == "NEW" then
-      ((first(.[] | select((.body // "") | startswith("BEAST-ACK "))) // null) as $c | if $c != null then ($c | tag_actor($desk) // "-") else "-" end), news
+      (row_filer(.) // "-"), news
     elif $kind == "DECIDED" then
       ((.[-1] // null) as $c | if $c != null and tag_closer($c.body // "") != null then ($c | tag_actor($desk) // "-") else "-" end), (newer | news)
     else newer | news end' <<< "$3"
@@ -2672,16 +2709,17 @@ latitude_record() {
 row_mark_rejected() { label_ensure_template "$1" rejected; issue_add_labels "$1" "$2" rejected; }
 
 # row_after_close <repo> <N> <by-id> <board-repo>: what every close does next: republish the decider's board
-# and print the row's seats, each acked by this close or unacked with its live address.
+# and print the row's seats (row_seats), each acked by this close or unacked with its live address.
 row_after_close() {
-  local repo="$1" n="$2" by="$3" board="$4" info assignee waiting s addr
-  info="$(issue_get "$repo" "$n")"
+  local repo="$1" n="$2" by="$3" board="$4" rd info assignee waiting s addr
+  rd="$(row_read "$repo" "$n")" || exit 1
+  info="$(jq '.issue' <<< "$rd")"
   assignee="$(jq -r '.assignees[0].login // empty' <<< "$info")"
   [[ -n "$assignee" ]] || die "$repo#$n has no assignee: no decider's board to republish"
   if "$BEAST_SCRIPTS/board.sh" --assignee "$assignee" --publish --repo "$board" >/dev/null; then echo "board republished in $board"
   else echo "daita-beast: the row is closed but the board in $board was NOT republished (board.sh failed, named above); fix that and run board.sh --publish --repo $board" >&2; fi
-  waiting="$(row_seat_ids "$(jq -c .labels <<< "$info")")"
-  if [[ -z "$waiting" ]]; then echo "no seat:* label on this row; nobody to tell beyond the board"; return 0; fi
+  waiting="$(row_seats "$(jq -c .labels <<< "$info")" "$(jq -c .comments <<< "$rd")")"
+  if [[ -z "$waiting" ]]; then echo "no seat on this row (no seat: label, no filer ack); nobody to tell beyond the board"; return 0; fi
   echo "seats on this row (each acks for itself with ack.sh; the words verbatim + $(jq -r .html_url <<< "$info")):"
   while read -r s; do
     [[ -n "$s" ]] || continue

@@ -17,9 +17,9 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh new --assignee <decider login> --by <Y
   --recommendation "<answer and why>" --approve-with "<exact phrase>" \
   --record "<repo> <commit id> — <record path>" [--hands] [--project <owner>/<number>]
 ```
-Long text: write the six sections to a file and pass `--body-file <md>` instead of the section flags. `--by` is you, the filing seat: the row's first comment is your seen ack, so the filing never comes back to you as an event and never sits in your inbox; `--seat` labels every seat that waits on the word.
+Long text: write the six sections to a file and pass `--body-file <md>` instead of the section flags. `--by` is you, the filing seat: the row always carries your label `seat:<login>/<LABEL>`, and its first comment is your seen ack, so the filing never comes back to you as an event and never sits in your inbox, while the decider's answer and close do.
 
-Add `--seat <LABEL>` for every seat that waits on it (label `seat:<login>/<LABEL>`, visible in the GitHub UI and filterable).
+Add `--seat <LABEL>` for every other seat that waits on it (label `seat:<login>/<LABEL>`, visible in the GitHub UI and filterable). Every label is read back after the write; one that did not land fails the filing, naming it, before your ack is posted.
 
 Every row belongs to a milestone: `--milestone "<title>"` files it under that open milestone of the repo, and `new` refuses a row without one when the repo has any open milestone, listing them (`/daita-beast:milestone`). Declare what you wait on as data with `--waits-on <seat | owner/repo#N>` (repeatable): each becomes a `Waits on: <ref>` line at the end of the `## Waits` section, read by `/daita-beast:deps` and the participant report.
 
@@ -37,7 +37,7 @@ It refuses unless the decider's standing answer is a revise, rewrites only the n
 
 `record` is ONLY for a significant decision the decider already gave in a session before a row existed (scope, engine, ship-or-cut, release; anything needing explanatory content): it is filed AND closed in one act. Never use it for something you are about to ask: that is `new`, filed before you ask, open until the word; a minor word (wording, copy, a link) goes only into the repo's dated record, never onto the board. Filing it closed puts it in the board's decided table; the dated record is committed first and cited:
 ```
-${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh record --assignee <login> [--decides <owner/repo>] --seat <YOUR SEAT> --title "…" <the six sections or --body-file> --words "<verbatim>" --record "<repo commit — path>" --by <YOUR SEAT> [--rejected]
+${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh record --assignee <login> [--decides <owner/repo>] [--seat <SEAT>]... --title "…" <the six sections or --body-file> --words "<verbatim>" --record "<repo commit — path>" --by <YOUR SEAT> [--rejected]
 ```
 A significant word acted on without a row is a protocol defect.
 

@@ -64,12 +64,12 @@ To update an existing board (a republish):
 Tell the decider:
 
 - The first time the page calls GitHub, claude.ai asks them to allow the connector for this page. Posting an answer is a write and asks for approval unless they set it to always allow.
-- The top list is everything waiting on them: the decisions and PRs whose turn is theirs and every open desk ask, counted together in the headline and sorted longest waiting first, each with how long it has waited. A desk ask is answered in that list, as in the seat's desk. Rows already answered fold into "With the seats" below the desks strip.
+- The top list is everything waiting on them: the decisions and PRs whose turn is theirs and every open desk ask, counted together in the headline and sorted longest waiting first, each with how long it has waited. A desk ask is answered in that list, as in the seat's desk. Rows already answered fold into "With the seats" below the desks strip, grouped by seat (a row with no `seat:` label under its filer, "—" when it has none); a row's labels never take it out of the top list or its count.
 - `#<owner>.<repo>.<number>` after the artifact link opens on that card; `#desk.<login>.<LABEL>` opens that seat's desk.
 
 An agent cannot operate the page: browser automation does not reach the artifact's frame (measured 2026-10-11, clicks, scroll and keys all dropped). Answering from the page is the decider's own click. The agent's check is reading GitHub afterwards.
 
-Write-path test, once per install, as `docs/board-ui.md` describes: a seat files a throwaway decision (`decision.sh new … --by <SEAT> --seat <SEAT> --title "FIXTURE board write <UTC>" --record fixture`), the decider approves it on the page, the agent confirms the comment with `issue_read` (`get_comments`), and the hearing seat closes it on the relay's `UPDATED`. A board session does not file or close decisions; those are seat acts.
+Write-path test, once per install, as `docs/board-ui.md` describes: a seat files a throwaway decision (`decision.sh new … --by <SEAT> --title "FIXTURE board write <UTC>" --record fixture`), the decider approves it on the page, the agent confirms the comment with `issue_read` (`get_comments`), and the hearing seat closes it on the relay's `UPDATED`. A board session does not file or close decisions; those are seat acts.
 
 ## What the page does not do
 

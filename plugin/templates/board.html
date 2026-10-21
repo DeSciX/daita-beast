@@ -329,6 +329,17 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
      The group key is the id; a bare label groups as its own key. */
   var SEAT_LABEL_RE = /^seat:(?:([A-Za-z0-9-]+)\/)?([A-Z0-9_-]+)$/;
   function seatsOf(it) { return labelNames(it).filter(function (l) { return SEAT_LABEL_RE.test(l); }).map(function (l) { return l.slice(5); }); }
+  /* The seats a row waits on: its seat: labels; a row with none (filed before its filer was always labelled) is its
+     filer's, the seat of its first BEAST-ACK comment, once the thread is read; neither: none, shown as "—". The twin of
+     lib.sh row_seats, the owner; plugin/tests/board-page.test.mjs runs both on one table. */
+  function rowSeats(it, comments) {
+    var seats = seatsOf(it), c = null;
+    if (seats.length || !comments) return seats;
+    for (var i = 0; i < comments.length && !c; i++) if (comments[i] && String(comments[i].body || "").indexOf("BEAST-ACK ") === 0) c = comments[i];
+    var a = c ? ackLine(c.body, null, c.created_at) : null;
+    if (!a || a === "malformed") return [];
+    return [a.seat.indexOf("/") < 0 ? String((c.user && c.user.login) || "") + "/" + a.seat : a.seat];
+  }
   function seatParts(x) { var i = String(x).indexOf("/"); return i < 0 ? { login: "", label: String(x) } : { login: String(x).slice(0, i), label: String(x).slice(i + 1) }; }
   /* LABEL when the seat is the viewer's own, else login/LABEL; a bare label reads as itself. */
   function seatText(x) { var p = seatParts(x); return !p.login || p.login.toLowerCase() === login.toLowerCase() ? p.label : p.login + "/" + p.label; }
@@ -431,7 +442,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     return /^BEAST-ACK/.test(first) || /^BEAST-ACK/.test(last) ? "malformed" : null;
   }
   function deriveRow(it, s, phrase) {
-    var seats = seatsOf(it), out = { seats: seats, known: false, current: [], unacked: [] };
+    var seats = rowSeats(it, s.comments), out = { seats: seats, known: false, current: [], unacked: [] };
     s.malformedAcks = 0;
     if (!s.comments) { s.acks = null; s.event = null; return out; }
     var acks = {}, bad = 0, ev = null;
@@ -909,7 +920,9 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     if (!c || c.sig !== sig) { c = { el: tab === "decided" ? buildClosed(row, seat, expanded) : buildCard(row, seat, expanded), sig: sig }; map.set(ck, c); }
     return c.el;
   }
-  /* Renders rows into one <details> per seat (plus "no seat"), or the flat list by updated_at; returns the group names. */
+  /* Renders rows into one <details> per seat (a row with no seat in the group "—"), or the flat list by updated_at;
+     returns the group names. Only "With the seats" and Decided are grouped: a row whose turn is the viewer's is listed
+     in "Waiting on you" and counted in its headline by turnOf alone, whatever its seats. */
   function renderRows(listEl, rows, map, tab, emptyText) {
     listEl.textContent = "";
     var seen = new Set(), names = [];
@@ -934,7 +947,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
         g.forEach(function (row) { if (!x) return; if (!row.d.known) unknown = true; else if (miss(row)) m++; });
         g.sort(function (a, b) { return (miss(a) ? 0 : 1) - (miss(b) ? 0 : 1) || byUpdated(a, b); });
         var det = h("details", { class: "group", open: ui.open[gk] ? "" : null, ontoggle: function (ev) { if (ev.target !== det) return; if (det.open) ui.open[gk] = 1; else delete ui.open[gk]; saveUi(); } });
-        det.appendChild(h("summary", null, h("span", { text: x ? seatText(x) : "no seat" }, seatLegacy(x) ? h("small", { class: "legacy", text: " legacy" }) : null),
+        det.appendChild(h("summary", null, h("span", { text: x ? seatText(x) : "—" }, seatLegacy(x) ? h("small", { class: "legacy", text: " legacy" }) : null),
           h("span", { class: "meta", text: g.length + (tab === "decided" ? " closed" : " open") + (x ? " · " + (unknown ? "…" : m) + " unacked" : "") + (tab === "decisions" && x && deskAsks(x) ? " · " + deskAsks(x) + " asks" : "") })));
         var body = h("div", { class: "glist" }); det.appendChild(body);
         g.forEach(function (row) { put(row, x, body); });
@@ -1053,7 +1066,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
         var r = repoOf(it), key = keyOf(it, r);
         if (anchorOf(key) !== want) return;
         if (pair[0] === "decisions" && turnOf(rowOf(it)).mine) { state(key).open.turn = true; hit = { tab: pair[0], id: cardId(key, "turn") }; return; }
-        var seat = ui.flat ? "" : (seatsOf(it).sort(function (a, b) { return a.localeCompare(b); })[0] || "");
+        var seat = ui.flat ? "" : (rowOf(it).d.seats.slice().sort(function (a, b) { return a.localeCompare(b); })[0] || "");
         if (!ui.flat) { ui.open[pair[0] + ":" + seat] = 1; saveUi(); }
         state(key).open[seat] = true;
         hit = { tab: pair[0], id: cardId(key, seat), theirs: pair[0] === "decisions" };

@@ -398,7 +398,7 @@ case "$cmd" in
     blob="https://github.com/$repo/blob/$commit/$path"
     digest="$(beast_sha "$plan")"
     counts="$(jq -r '"\(.delete.issues | length) issue(s), \(.delete.comments | length) comment(s), \(.delete.files | length) record file(s)"' <<< "$plan")"
-    url="$("$here/decision.sh" new --repo "$repo" --title "$(wrapup_row_title "$title")" --assignee "$decider" --by "$seat" --seat "$seat" --milestone "$rms" \
+    url="$("$here/decision.sh" new --repo "$repo" --title "$(wrapup_row_title "$title")" --assignee "$decider" --by "$seat" --milestone "$rms" \
       --decision "Wrap up milestone \"$title\" of $repo: publish its release notes, fold its $(jq '.fold_in.rows | length' <<< "$plan") closed row(s) into the docs, then delete $counts and the plan's own directory, listed in the plan. Deleting an issue cannot be undone.
 $(plan_ref_lines "$blob" "$digest")" \
       --unblocks "the wrap-up run: release notes, the deletes, the milestone's close$(jq -r 'if .carry then " (open items carried to \"\(.carry)\")" else "" end' <<< "$plan")" \

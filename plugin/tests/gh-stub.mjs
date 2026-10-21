@@ -5,8 +5,11 @@
 // stub did not model.
 //   state: {login, repos: {"o/r": {private}}, issues: {"o/r#N": <issue, REST shape>}, comments: {"o/r#N": [...]},
 //           milestones: {"o/r": [...]}, files: {"o/r": {"<full sha>": ["<path>", ...]}}, pulls: {"o/r": [<PR, REST shape,
-//           head.ref>]}, git: {"o/r": "<bare repo dir>"}}
-//   rate_limit answers a full quota; issues/comments/<id> takes PATCH (body) and DELETE.
+//           head.ref>]}, git: {"o/r": "<bare repo dir>"}, roles: {"o/r": {"<login>": "admin|maintain|write|read"}}}
+//   the issues list honours state (open, closed, all) and labels (every one named); collaborators/<login>/permission
+//   answers roles (a login it does not list is "none")
+//   rate_limit answers a full quota; issues/comments/<id> takes PATCH (body) and DELETE; POST issues creates one (its
+//   labels minus any named in state.drop_labels, to model a label that does not land).
 //   files serves commits/<sha or prefix> and contents/<path>?ref=<sha>; pulls serves the PR list (state, head=<owner>:<ref>)
 //   and the squash-merge, made for real in the bare repo git names (a commit with the PR head's tree on main); a
 //   DELETE git/refs/heads/<ref> deletes it there.
@@ -76,7 +79,11 @@ if (method === "GET") {
     if (Number(q.get("page") || 1) > 1) out(200, { total_count: items.length, items: [] }, head);
     out(200, { total_count: items.length, items }, head);
   }
-  if ((m = /^repos\/([^/]+)\/([^/]+)\/issues$/.exec(route))) { const r = m[1] + "/" + m[2]; out(200, Number(q.get("page") || 1) > 1 ? [] : Object.entries(S.issues).filter(([k, it]) => k.startsWith(r + "#") && (!q.get("state") || it.state === q.get("state"))).map(([, it]) => it), head); }
+  if ((m = /^repos\/([^/]+)\/([^/]+)\/issues$/.exec(route))) { const r = m[1] + "/" + m[2], st = q.get("state"), lb = q.get("labels");
+    out(200, Number(q.get("page") || 1) > 1 ? [] : Object.entries(S.issues).filter(([k, it]) => k.startsWith(r + "#") && (!st || st === "all" || it.state === st)
+      && (!lb || lb.split(",").every((l) => it.labels.some((x) => x.name === l)))).map(([, it]) => it), head); }
+  if ((m = /^repos\/([^/]+)\/([^/]+)\/collaborators\/([^/]+)\/permission$/.exec(route))) { const p = ((S.roles || {})[m[1] + "/" + m[2]] || {})[m[3]];
+    out(200, { permission: p || "none" }, head); }
   fail("GET " + p);
 }
 if (route === "graphql") out(200, { data: {} });
@@ -97,6 +104,14 @@ if ((m = /^repos\/([^/]+)\/([^/]+)\/git\/refs\/heads\/(.+)$/.exec(route)) && met
   require("child_process").execFileSync("git", ["-C", bare, "update-ref", "-d", "refs/heads/" + m[3]]); process.exit(0);
 }
 if ((m = /^repos\/([^/]+)\/([^/]+)\/labels(\/.*)?$/.exec(route))) out(200, { name: fields.name || fields.new_name });
+if ((m = /^repos\/([^/]+)\/([^/]+)\/issues$/.exec(route)) && method === "POST") {
+  const r = m[1] + "/" + m[2], n = 1 + Math.max(0, ...Object.keys(S.issues).filter((k) => k.startsWith(r + "#")).map((k) => Number(k.split("#")[1])));
+  const it = { number: n, title: fields.title, body: fields.body, state: "open", html_url: "https://github.com/" + r + "/issues/" + n, labels: (fields.labels || []).map((name) => ({ name })),
+    assignees: (fields.assignees || []).map((login) => ({ login })), user: { login: S.login }, comments: 0, created_at: now(), updated_at: now(), closed_at: null,
+    repository_url: "https://api.github.com/repos/" + r, milestone: fields.milestone ? { number: Number(fields.milestone) } : null };
+  if (S.drop_labels) it.labels = it.labels.filter((l) => !S.drop_labels.includes(l.name));
+  S.issues[r + "#" + n] = it; save(); out(201, it);
+}
 if ((m = /^repos\/([^/]+)\/([^/]+)\/issues\/comments\/(\d+)$/.exec(route)) && (method === "PATCH" || method === "DELETE")) {
   const r = m[1] + "/" + m[2], id = Number(m[3]);
   for (const k of Object.keys(S.comments).filter((x) => x.startsWith(r + "#"))) {
