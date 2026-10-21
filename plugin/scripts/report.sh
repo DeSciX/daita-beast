@@ -163,7 +163,7 @@ for repo in ${repos//,/ }; do
     cm="$(issue_comments "$repo" "$n")" || die "cannot read the comments of $repo#$n"
     c="$(jq --argjson n "$n" --argjson cm "$cm" 'map(if .number == $n then . + {comments: $cm} else . end)' <<< "$c")"
   done
-  closed="$(jq -s 'add' <(echo "$closed") <(jq --arg r "$repo" '[.[] | {repo:$r, number, url: .html_url, title, closedAt: .closed_at, labels: [.labels[].name], closer_comment: ([.comments[] | select(.body | startswith("Closed on the word"))] | last | .body // "")}]' <<< "$c"))"
+  closed="$(jq -s 'add' <(echo "$closed") <(tag_jq --arg r "$repo" '[.[] | {repo:$r, number, url: .html_url, title, closedAt: .closed_at, labels: [.labels[].name], closer_comment: ([.comments[] | select(close_of(.body) | . != null and .kind != "rejected")] | last | .body // "")}]' <<< "$c"))"
   s="$(jq --arg r "$repo" '[.[] | .comments[] | select(.body | test("^BEAST-STATUS seat=|Closed by seat ")) | {repo:$r, at: .created_at, body: (.body | split("\n") | .[0])}]' <<< "$c")"
   seats="$(jq -s 'add' <(echo "$seats") <(echo "$s"))"
   b="$(issues_list "$repo" -f labels=bounty -f state=open | jq --arg r "$repo" '[.[] | select(.pull_request == null) | {repo:$r, number, url: .html_url, title}]')" || die "cannot list the open bounties of $repo"

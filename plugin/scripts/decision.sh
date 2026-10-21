@@ -196,16 +196,7 @@ $body"
       pend="$(row_revise_pending "$(row_read "$repo" "$number")")" || exit 1
       [[ -z "$pend" ]] || revise_pending_refusal "$pend"
     fi
-    if [[ $rejected -eq 1 ]]; then
-      row_close_comment "$repo" "$number" "$words" "$rec" "$by" "$next" rejected
-      row_mark_rejected "$repo" "$number"
-      issue_close "$repo" "$number" not_planned
-    else
-      row_close_comment "$repo" "$number" "$words" "$rec" "$by" "$next" closed
-      issue_close "$repo" "$number" completed
-    fi
-    echo "closed $repo#$number"
-    row_after_close "$repo" "$number" "$by" "$board"
+    row_close "$repo" "$number" "$words" "$rec" "$by" "$next" "$([[ $rejected -eq 1 ]] && echo rejected || echo closed)" "$board"
     ;;
   revise)
     ref="${1:-}"; shift || true

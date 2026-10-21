@@ -1,4 +1,4 @@
-// The page (plugin/templates/board.html) parses desk asks and the amend line with JS twins of the shapes lib.sh owns. This test extracts
+// The page (plugin/templates/board.html) parses desk asks, the amend line and the close line with JS twins of the shapes lib.sh owns. This test extracts
 // both sides from the source files as they stand and runs them on one fixture list of lines: lib.sh's through jq (the
 // engine desk_parse uses), the page's through node. Any line the two read differently fails the test, naming it.
 //   node --test plugin/tests/
@@ -102,6 +102,25 @@ const AMEND_LINES = [
   "Amended on 2026-10-20T10:00:00Z: x",
 ];
 
+const SHA = "0123456789abcdef0123456789abcdef01234567";
+const CLOSE_LINES = [
+  'Closed on the word, verbatim: "publish dv1"',
+  'Rejected on the word, verbatim: "reject: not yet"',
+  'Closed on the word, verbatim: "go',
+  "Closed on the decider's word: the record is private",
+  `Merged under standing latitude <https://github.com/acme/twin/blob/${SHA}/docs/standing/l.md> by acme/GODSWORLD`,
+  `Merged under standing latitude <https://github.com/acme/twin/blob/${SHA}/docs/standing/l.md> by acme/GODSWORLD  `,
+  `Merged under standing latitude <https://github.com/acme/twin/blob/${SHA}/docs/standing/l.md> by GODSWORLD`,
+  `Merged under standing latitude <https://github.com/acme/twin/blob/${SHA}/docs/standing/l.md> by acme/GODSWORLD now`,
+  `Merged under standing latitude <https://github.com/acme/twin/blob/0123abc/docs/standing/l.md> by acme/GODSWORLD`,
+  `Merged under standing latitude https://github.com/acme/twin/blob/${SHA}/docs/standing/l.md by acme/GODSWORLD`,
+  `Merged under standing latitude <https://example.com/acme/twin/blob/${SHA}/l.md> by acme/GODSWORLD`,
+  `merged under standing latitude <https://github.com/acme/twin/blob/${SHA}/l.md> by acme/GODSWORLD`,
+  "Closed on the words",
+  "approve",
+  "publish dv1",
+];
+
 // compare <lib regex name> <page regex name> <lines> <group names in the page's capture order>
 function compare(libName, pageName, lines, groups) {
   const libCap = jqCaptures(libRe(libName), lines);
@@ -135,8 +154,12 @@ test("the amend line: lib.sh AMEND_LINE_RE and the page's AMEND_RE read every fi
   compare("AMEND_LINE_RE", "AMEND_RE", AMEND_LINES, []);
 });
 
+test("the close line: lib.sh CLOSE_LINE_RE and the page's CLOSE_RE read every fixture line alike", () => {
+  compare("CLOSE_LINE_RE", "CLOSE_RE", CLOSE_LINES, ["verdict", "record", "seat"]);
+});
+
 test("the fixtures exercise both outcomes on both shapes", () => {
-  for (const [name, lines] of [["ASK_HEADER_RE", ASK_LINES], ["WAITS_ON_RE", WAITS_LINES], ["MSG_HEADER_RE", MSG_LINES], ["AMEND_LINE_RE", AMEND_LINES]]) {
+  for (const [name, lines] of [["ASK_HEADER_RE", ASK_LINES], ["WAITS_ON_RE", WAITS_LINES], ["MSG_HEADER_RE", MSG_LINES], ["AMEND_LINE_RE", AMEND_LINES], ["CLOSE_LINE_RE", CLOSE_LINES]]) {
     const caps = jqCaptures(libRe(name), lines);
     assert.ok(caps.some((c) => c) && caps.some((c) => !c), `${name}: the fixtures must hold lines that match and lines that do not`);
   }

@@ -1,6 +1,6 @@
 ---
 name: ledger
-description: Regenerate a community's monthly award ledger from GitHub (every BEAST-AWARD comment by a repo admin or maintainer on an `awarded` issue or PR) as awards/<YYYY-MM>.jsonl and .md in the community repo. Use for "build the October ledger", "how much has @login been awarded", "publish the awards".
+description: Regenerate a community's monthly award ledger from GitHub (every BEAST-AWARD comment by a repo admin or maintainer on an `awarded` issue or PR) as awards/YYYY-MM.jsonl and .md in the community repo. Use for "build the October ledger", "how much has @login been awarded", "publish the awards".
 ---
 
 # ledger — the generated roll-up, never hand-edited

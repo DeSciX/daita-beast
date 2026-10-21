@@ -2,9 +2,9 @@
 
 # DeSciX Community License and Membership Agreement
 
-Version 1, revised 2026-10-19: Section 3.3 (Pre-existing Material Under Separate Licenses) added; no other wording changed.
+Version 1, revised 2026-10-19: Section C (Pre-existing Material Under Separate Licenses) added; no other wording changed.
 
-## 1 Preamble – The DeSciX Virtual University & App Store: Internal Collaboration, External Value Return
+## I Preamble – The DeSciX Virtual University & App Store: Internal Collaboration, External Value Return
 
 Welcome to the DeSciX Community, a dynamic ecosystem designed as a **virtual university and collaborative app store** for decentralized science (DeSci). This agreement outlines the contractual relationship between its members for the creation, sharing, and utilization of creative works, often referred to as "Intellectual Property" (IP) under relevant laws. Within this framework, certain IP is made available to the members who agree to these terms—the "Community."
 
@@ -40,7 +40,7 @@ Holding a Token without affirmatively accepting this Agreement constitutes statu
 
 The licenses granted under this Agreement are expressly conditioned upon Your compliance with the requirement that all economic activity involving Community IP, DeSciX Community Software, DPaaS Service Offerings, or Apps—including access, usage, monetization, licensing, sublicensing, resale, bundling, advertising monetization, subscription monetization, or derivative commercialization—**be routed through the DeSciX token economy** using the relevant DeSciX and/or COMMUNITY tokens, unless expressly approved in writing by the DeSciX DAO or required by law.
 
-### 1.1 About the DeSciX Community
+### A About the DeSciX Community
 
 Think of the DeSciX Community as a collaborative **virtual university**. Its guiding principles reflect this academic and innovative spirit:
 
@@ -56,9 +56,9 @@ Think of the DeSciX Community as a collaborative **virtual university**. Its gui
 
 Membership in the DeSciX Community grants Members access to the “university’s” resources, including:
 
-1.  The cloud-based DeSciX Platform as a Service (DPaaS) – the core **university infrastructure** – under the terms of the DeSciX Platform as a Service License Agreement (DPLA) (Section 3.4).
+1.  The cloud-based DeSciX Platform as a Service (DPaaS) – the core **university infrastructure** – under the terms of the DeSciX Platform as a Service License Agreement (DPLA) (Section D).
 
-2.  Access for qualifying Members (typically Private COMMUNITIES) to the DeSciX Source Code – foundational **research tools and code libraries** – under the terms of the DeSciX Community Source Code License (Section 3.1), primarily while their COMMUNITY ("College/Department") is in the developmental (Private) stage.
+2.  Access for qualifying Members (typically Private COMMUNITIES) to the DeSciX Source Code – foundational **research tools and code libraries** – under the terms of the DeSciX Community Source Code License (Section A), primarily while their COMMUNITY ("College/Department") is in the developmental (Private) stage.
 
 3.  A standardized framework for token creation, distribution, and administration – the **university’s internal economic system** for resource exchange.
 
@@ -98,9 +98,9 @@ The major purposes of this agreement are to:
 
 - **Reinforce the “Open Inside, Value-Return Outside” Principle:** Clearly state the community’s intent that while internal collaboration is maximized, any commercialization or use of community-derived IP *outside* the DeSciX Community should ideally contribute value back to the relevant token economies. Specific mechanisms or requirements for this value return may be detailed in DAO policies or the DPoS White Paper.
 
-- **Explicitly disclaim liability** for the inherent uncertainties in scientific research and AI development conducted on the platform (further detailed in Sections 11, 12, and 5). Science involves experimentation and potential errors; the platform provides tools “AS IS,” and users assume the risks associated with their use.
+- **Explicitly disclaim liability** for the inherent uncertainties in scientific research and AI development conducted on the platform (further detailed in Sections 11, 12, and V). Science involves experimentation and potential errors; the platform provides tools “AS IS,” and users assume the risks associated with their use.
 
-### 1.2 Examples
+### B Examples
 
 - **End User Accessing an App:** An end user Member ("student" or "researcher") uses an AI analysis App ("specialized software tool") developed by a Public COMMUNITY ("Established Department"). The user pays for the service in tokens, which are distributed according to the COMMUNITY’s rules and the DeSciX DPoS White Paper (potentially involving the COMMUNITY, the DeSciX DAO for platform fees, App developers, etc.). The user must use the App responsibly and in good faith, adhering to terms of service. Misuse could lead to suspension or loss of staked tokens.
 
@@ -130,7 +130,7 @@ The major purposes of this agreement are to:
 
   - **Generic Simulation Engine:** A basic, configurable simulation framework (e.g., for particle systems) that other COMMUNITIES can build upon for more specific applications.
 
-## 2 Membership Agreement Details
+## II Membership Agreement Details
 
 Membership in the DeSciX DAO ("Enrollment in the DeSciX University") is offered at the sole discretion of the DeSciX DAO, according to its governance processes. By registering and affirmatively accepting this DeSciX Community License and Membership Agreement (DCMA), You become a Member of the DeSciX Community.
 
@@ -142,7 +142,7 @@ As a Member, you are encouraged to contribute actively to the DeSciX ecosystem (
 
 A primary objective of the DeSciX DAO is to serve as an enabling platform – an **App Store** built upon a **virtual university** framework – for COMMUNITIES and their associated Apps (DApps). The Community Source IP, licensed to the DeSciX DAO, represents the foundational technology ("core curriculum" and "research infrastructure") provided for the benefit of creating these COMMUNITIES ("Colleges/Departments") and Apps ("Courses/Projects").
 
-### 2.1 Structure of Community Membership: Root and Branches
+### A Structure of Community Membership: Root and Branches
 
 The DeSciX ecosystem operates on a recursive (fractal) membership model.
 
@@ -158,9 +158,9 @@ As the DAO Creator of a COMMUNITY, you are initially the Community Managing Dele
 
 1.  While the COMMUNITY is designated as Private ("in early development/research phase"), its native token will not be publicly tradable.
 
-2.  The COMMUNITY’s tokens will only become eligible for public trading after its core Intellectual Property (IP) has been deemed perfected to established standards (e.g., comparable to US constitutional standards for patents, copyright), as assessed through the DAO’s defined processes (see Section 2.2 - IP Perfection), and the COMMUNITY demonstrates a viable operational model.
+2.  The COMMUNITY’s tokens will only become eligible for public trading after its core Intellectual Property (IP) has been deemed perfected to established standards (e.g., comparable to US constitutional standards for patents, copyright), as assessed through the DAO’s defined processes (see Section B - IP Perfection), and the COMMUNITY demonstrates a viable operational model.
 
-### 2.2 Definitions
+### B Definitions
 
 “DeSciX” shall refer to the decentralized autonomous organization (DAO) and the associated licensing framework that governs the DeSciX Community, conceptualized as a **virtual university and app store**.
 
@@ -202,7 +202,7 @@ As the DAO Creator of a COMMUNITY, you are initially the Community Managing Dele
 
 "Token-Based Transactions" shall refer to the exchange of tokens for services or value within the DeSciX ecosystem, governed by the DeSciX DPoS White Paper.
 
-“DeSciX Community Source and Services Licenses” or “DCSSL” shall collectively refer to the licenses governing participation and IP within the DeSciX Community, primarily the DeSciX Community Source Code License (DCSL - Section 3.1) and the DeSciX Platform as a Service License Agreement (DPLA - Section 3.4). The DCSSL is a term of convenience for referencing these sections of the DCMA and is not intended to supersede or limit the DCMA in any way.
+“DeSciX Community Source and Services Licenses” or “DCSSL” shall collectively refer to the licenses governing participation and IP within the DeSciX Community, primarily the DeSciX Community Source Code License (DCSL - Section A) and the DeSciX Platform as a Service License Agreement (DPLA - Section D). The DCSSL is a term of convenience for referencing these sections of the DCMA and is not intended to supersede or limit the DCMA in any way.
 
 “DeSciX Platform as a Service (DPaaS)” shall refer to the cloud-based infrastructure provided by the DeSciX DAO, serving as the **core technological backbone of the University**.
 
@@ -224,7 +224,7 @@ As the DAO Creator of a COMMUNITY, you are initially the Community Managing Dele
 
 **Interpretation of Obligations.** Any obligation phrased as a covenant (e.g., "You shall," "You agree to") regarding the use of IP, Services, or participation in the DeSciX ecosystem shall be interpreted as a condition of the license granted herein. Breach of such obligation results in automatic revocation of the applicable license.
 
-### 2.3 Notice
+### C Notice
 
 (a) **To DeSciX Community Members**. The Managing Delegate (the "MD"), acting on behalf of the DeSciX DAO where appropriate, may provide any notice to Members under this Agreement by: (i) posting a notice on the designated DeSciX platform website (e.g., DeSciX.net or its successor); or (ii) sending a message to the email address associated with the Member’s account. Notices posted on the website are effective upon posting. Notices sent by email are effective when the email is sent. It is the Member’s responsibility to maintain a current email address associated with their account. Members are deemed to have received any email sent to their registered email address upon dispatch, regardless of actual receipt.
 
@@ -232,11 +232,11 @@ As the DAO Creator of a COMMUNITY, you are initially the Community Managing Dele
 
 (c) **Language**. All communications and notices pursuant to this Agreement must be in English.
 
-## 3 Community Licenses: From DeSciX DAO’s to Members
+## III Community Licenses: From DeSciX DAO’s to Members
 
-### 3.1 DeSciX Community Source Code License (DCSL)
+### A DeSciX Community Source Code License (DCSL)
 
-This DeSciX Community Source Code License (DCSL) is a term of convenience for referencing this section of the DCMA and is not intended to supersede or limit the DCMA in any way. The DCSL governs Your use of the **core DeSciX Community Source Code** provided by the DeSciX DAO – the foundational software (“university infrastructure code,” “shared lab software”) made available to Members for building within the ecosystem. This license applies *only* to You as a **DAO Member** of the DeSciX DAO granted access to this specific Source Code. Provisions related to “Covered Works” (defined below) derived from this Source Code survive termination of Your membership for the duration of the copyright term, as specified herein. **This license primarily governs the core platform code; it does NOT automatically govern the entirety of code within distinct Applications (Apps) built by Members, although Apps may utilize components licensed under the DCSL.** The terms for modifying, distributing, or forking specific Apps are often set by the App’s Creator (see Section 1.2 and Clause 4 below).
+This DeSciX Community Source Code License (DCSL) is a term of convenience for referencing this section of the DCMA and is not intended to supersede or limit the DCMA in any way. The DCSL governs Your use of the **core DeSciX Community Source Code** provided by the DeSciX DAO – the foundational software (“university infrastructure code,” “shared lab software”) made available to Members for building within the ecosystem. This license applies *only* to You as a **DAO Member** of the DeSciX DAO granted access to this specific Source Code. Provisions related to “Covered Works” (defined below) derived from this Source Code survive termination of Your membership for the duration of the copyright term, as specified herein. **This license primarily governs the core platform code; it does NOT automatically govern the entirety of code within distinct Applications (Apps) built by Members, although Apps may utilize components licensed under the DCSL.** The terms for modifying, distributing, or forking specific Apps are often set by the App’s Creator (see Section B and Clause 4 below).
 
 #### Definitions within the DCSL
 
@@ -260,7 +260,7 @@ This DeSciX Community Source Code License (DCSL) is a term of convenience for re
 
 - “Appropriate Legal Notices” in an interface includes a visible copyright notice and a statement that the work is provided without warranty (unless specified otherwise), that it may be conveyed under This License, and how to view This License.
 
-- **“App” or “Application”:** As defined in Section 2.2, a distinct piece of software created by a Member/COMMUNITY, potentially utilizing The Program or DPaaS services. The App’s unique code, separate from The Program’s source, is not automatically governed by all terms of This License (specifically contribution requirements under Clause 3), unless explicitly stated otherwise by the App’s Creator or if the App itself is released under the DCSL.
+- **“App” or “Application”:** As defined in Section B, a distinct piece of software created by a Member/COMMUNITY, potentially utilizing The Program or DPaaS services. The App’s unique code, separate from The Program’s source, is not automatically governed by all terms of This License (specifically contribution requirements under Clause 3), unless explicitly stated otherwise by the App’s Creator or if the App itself is released under the DCSL.
 
 - **“App Creator”:** The Member or entity primarily responsible for developing a specific App. App Creators generally retain rights to determine licensing and forking terms for their own App’s unique code, subject to the terms of This License for any incorporated Program components.
 
@@ -320,13 +320,13 @@ This DeSciX Community Source Code License (DCSL) is a term of convenience for re
 
 11. **No Surrender of Others’ Freedom**. If external conditions (court orders, agreements) contradict This License, they don’t excuse You from its terms. If You cannot satisfy both This License and other obligations simultaneously, You may not convey the Covered Work at all.
 
-12. **Notice Integration**. The notice provisions for This License are governed by Section 2.3 of the main DeSciX Community License and Membership Agreement (DCMA).
+12. **Notice Integration**. The notice provisions for This License are governed by Section C of the main DeSciX Community License and Membership Agreement (DCMA).
 
 13. **Revised License Versions**. The DeSciX DAO may publish revised versions of the DCSL. You may follow the version specified for The Program or any later version published by the DAO. Later versions may offer different permissions but won’t impose additional obligations retroactively.
 
-14. **Disclaimer of Warranty**. TO THE EXTENT PERMITTED BY LAW, THE PROGRAM (DeSciX COMMUNITY SOURCE CODE) AND ANY COVERED WORKS ARE PROVIDED “AS IS.” THE DeSciX DAO, CONTRIBUTORS, AND OTHER PARTIES PROVIDE THE PROGRAM WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. THIS DISCLAIMER EXTENDS TO ANY DATA PROCESSED OR GENERATED BY, AND ANY AI FUNCTIONALITY WITHIN OR ACCESSED THROUGH, THE PROGRAM OR APPS BUILT UPON IT. THE ENTIRE RISK AS TO THE QUALITY, PERFORMANCE, ACCURACY, AND RESULTS (ESPECIALLY IN SCIENTIFIC OR AI CONTEXTS) OF THE PROGRAM AND ANY APPS USING IT LIES WITH YOU. SHOULD THE PROGRAM PROVE DEFECTIVE, YOU ASSUME THE COST OF ALL NECESSARY SERVICING, REPAIR, OR CORRECTION. (See also Sections 11, 12, and 2.2).
+14. **Disclaimer of Warranty**. TO THE EXTENT PERMITTED BY LAW, THE PROGRAM (DeSciX COMMUNITY SOURCE CODE) AND ANY COVERED WORKS ARE PROVIDED “AS IS.” THE DeSciX DAO, CONTRIBUTORS, AND OTHER PARTIES PROVIDE THE PROGRAM WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. THIS DISCLAIMER EXTENDS TO ANY DATA PROCESSED OR GENERATED BY, AND ANY AI FUNCTIONALITY WITHIN OR ACCESSED THROUGH, THE PROGRAM OR APPS BUILT UPON IT. THE ENTIRE RISK AS TO THE QUALITY, PERFORMANCE, ACCURACY, AND RESULTS (ESPECIALLY IN SCIENTIFIC OR AI CONTEXTS) OF THE PROGRAM AND ANY APPS USING IT LIES WITH YOU. SHOULD THE PROGRAM PROVE DEFECTIVE, YOU ASSUME THE COST OF ALL NECESSARY SERVICING, REPAIR, OR CORRECTION. (See also Sections 11, 12, and B).
 
-15. **Limitation of Liability**. IN NO EVENT UNLESS REQUIRED BY LAW OR AGREED IN WRITING WILL ANY COPYRIGHT HOLDER, CONTRIBUTOR, THE DeSciX DAO, THE MD, OR ANY PARTY WHO MODIFIES/CONVEYS THE PROGRAM BE LIABLE TO YOU FOR DAMAGES, INCLUDING ANY GENERAL, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING FROM THE USE OR INABILITY TO USE THE PROGRAM OR COVERED WORKS (INCLUDING BUT NOT LIMITED TO LOSS OF DATA, DATA INACCURACY, BUSINESS INTERRUPTION, FAILED SCIENTIFIC EXPERIMENTS, INCORRECT AI OUTPUTS, LOSSES SUSTAINED BY YOU OR THIRD PARTIES, OR FAILURE TO OPERATE WITH OTHER PROGRAMS), EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES. THE EXPERIMENTAL AND EVOLVING NATURE OF DeSciX, DECENTRALIZED SCIENCE, AND AI MEANS ERRORS AND UNEXPECTED OUTCOMES ARE POSSIBLE; YOU USE THE PLATFORM AND ITS COMPONENTS AT YOUR OWN RISK. (See also Sections 11, 12, and 2.2).
+15. **Limitation of Liability**. IN NO EVENT UNLESS REQUIRED BY LAW OR AGREED IN WRITING WILL ANY COPYRIGHT HOLDER, CONTRIBUTOR, THE DeSciX DAO, THE MD, OR ANY PARTY WHO MODIFIES/CONVEYS THE PROGRAM BE LIABLE TO YOU FOR DAMAGES, INCLUDING ANY GENERAL, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING FROM THE USE OR INABILITY TO USE THE PROGRAM OR COVERED WORKS (INCLUDING BUT NOT LIMITED TO LOSS OF DATA, DATA INACCURACY, BUSINESS INTERRUPTION, FAILED SCIENTIFIC EXPERIMENTS, INCORRECT AI OUTPUTS, LOSSES SUSTAINED BY YOU OR THIRD PARTIES, OR FAILURE TO OPERATE WITH OTHER PROGRAMS), EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES. THE EXPERIMENTAL AND EVOLVING NATURE OF DeSciX, DECENTRALIZED SCIENCE, AND AI MEANS ERRORS AND UNEXPECTED OUTCOMES ARE POSSIBLE; YOU USE THE PLATFORM AND ITS COMPONENTS AT YOUR OWN RISK. (See also Sections 11, 12, and B).
 
 16. **Interpretation of Disclaimers**. If the disclaimers and limitations above cannot be given full local legal effect, courts shall apply local law that most closely approximates an absolute waiver of all civil liability regarding The Program, unless a warranty or liability assumption is provided in writing for a fee.
 
@@ -361,7 +361,7 @@ For GUIs, use an "About box" with similar information.
 
 **END OF DCSL TERMS AND CONDITIONS**
 
-### 3.2 Unauthorized Use; Non-Member License Forfeiture; Aggregation Penalties
+### B Unauthorized Use; Non-Member License Forfeiture; Aggregation Penalties
 
 **No Non-Member License.** Non-Members receive no license rights or permissions of any kind under this Agreement.
 
@@ -383,25 +383,25 @@ For GUIs, use an "About box" with similar information.
 
 **Apps; Forking; No Preemption.** App-level terms may not in any way restrict or change the DCMA with respect to DAO Members no extend DAO Membership to non-members except through the DCMA provisions itself (i.e. as a non-limiting example, if you promote your App to non-members a condition of use is becoming a Member). As an App Creator, with respect to your own Content within your App and to the App itself you may offer less restrictive terms to other DAO Members so long as those terms are digitally represented in entitlements system of the DeSciX platform (i.e. you can sell your App to Members but not allow forking and you don’t need to disclose the App’s source code except that the specific COMMUNITY Source you employed). App terms may not bypass Mandatory Tokenized Economics (i.e. as a non-limiting example, you may not "open-source your App" and disclose COMMUNITY Source to Non-Members or give away your App off-platform "for free" while employing COMMUNITY Source).
 
-### 3.3 Pre-existing Material Under Separate Licenses; No Override Either Way
+### C Pre-existing Material Under Separate Licenses; No Override Either Way
 
 **Scope.** Where this Agreement is adopted in a repository, package or other collection that also contains Pre-existing Material, this Agreement applies to that Pre-existing Material only to the extent its Original License allows, and otherwise does not apply to it at all. Placement of this Agreement at the root of such a collection, or beside Pre-existing Material, is not a claim of rights over the Pre-existing Material and does not relicense it. The Covered Works and Community IP in the same collection remain governed by this Agreement in full.
 
 **The Original License is not displaced.** Nothing in this Agreement relieves You of any obligation the Original License imposes on Pre-existing Material. By way of example, if Pre-existing Material is licensed under the Mozilla Public License, its file-level copyleft, notice and source-availability obligations continue to bind You for that material; this Agreement neither absolves You of them nor extends them to Covered Works.
 
-**This Agreement is not displaced.** No Original License shall be read to invalidate, override, relicense or extend its terms to any Covered Work or Community IP. If You combine, link or otherwise mix a Covered Work with Pre-existing Material whose Original License would, by its terms, purport to govern the combination or require the Covered Work to be licensed under that Original License (by way of example, the GNU General Public License), You are in breach of this Agreement from the moment of the combination: Your license under this Agreement terminates as to that combination under Clause 7, You lose the protections this Agreement affords Members with respect to it, and the Original License shall not be read to apply to the Covered Work or Community IP, whose terms remain those of this Agreement.
+**This Agreement is not displaced.** No Original License shall be read to invalidate, override, relicense or extend its terms to any Covered Work or Community IP. If You combine, link or otherwise mix a Covered Work with Pre-existing Material whose Original License would, by its terms, purport to govern the combination or require the Covered Work to be licensed under that Original License (by way of example, the GNU General Public License), You are in breach of this Agreement from the moment of the combination: Your license under this Agreement terminates as to that combination under Clause 7 of the DCSL (Section A), You lose the protections this Agreement affords Members with respect to it, and the Original License shall not be read to apply to the Covered Work or Community IP, whose terms remain those of this Agreement.
 
 **Marking.** An adopter that places this Agreement in a collection containing Pre-existing Material shall place it within, or clearly identify, the directories or files it covers, so that no Pre-existing Material is represented as licensed under this Agreement.
 
-### 3.4 DeSciX Platform as a Service License Agreement (DPLA)
+### D DeSciX Platform as a Service License Agreement (DPLA)
 
 This DeSciX Platform as a Service License Agreement (DPLA) is a term of convenience for referencing this section of the DCMA and is not intended to supersede or limit the DCMA in any way. The DPLA contains the terms and conditions that govern your access to and use of the Service Offerings (as defined below) and is an agreement between the Licensor(s) and you or the entity you represent. You, or the entity you represent, are a Member of the DeSciX DAO and any relevant COMMUNITY DAO. This agreement is separate and apart from the license associated with the Community Source. This agreement concerns the platform on which the COMMUNITIES provide their respective DApps and services.
 
-Please see Section Definitions for definitions of certain capitalized terms used in this Agreement.
+Please see Section D for definitions of certain capitalized terms used in this Agreement.
 
 1.  **Use of the Service Offerings**.
 
-    1.  **Generally**. You may access and use the Service Offerings in accordance with this Agreement. Service Level Agreements may apply to certain Service Offerings. You will adhere to all laws, rules, and regulations applicable to your use of the Service Offerings, including the Service Terms, the Acceptable Use Policy and the other Policies as defined in Section Definitions.
+    1.  **Generally**. You may access and use the Service Offerings in accordance with this Agreement. Service Level Agreements may apply to certain Service Offerings. You will adhere to all laws, rules, and regulations applicable to your use of the Service Offerings, including the Service Terms, the Acceptable Use Policy and the other Policies as defined in Section D.
 
     2.  **Your Account**. To access the Services, You must create a DPaaS account associated with a valid email address. Unless explicitly permitted by the Service Terms, you may only create one account per email address. You are responsible for all activities that occur under your account, regardless of whether the activities are undertaken by You, your employees or a third party (including your contractors or agents) and, except to the extent caused by our breach of this Agreement, the DeSciX DAO and its affiliates are not responsible for unauthorized access to your account. You will contact the MD immediately if you believe an unauthorized third party may be using your account or if your account information is lost or stolen. You may terminate your account and this Agreement at any time in accordance with Section 7.
 
@@ -425,7 +425,7 @@ Please see Section Definitions for definitions of certain capitalized terms used
 
 4.  **Your Responsibilities**
 
-    1.  **Your Content**. The license granted in Section 9.4 is conditioned on your continued compliance with the responsibilities in this Section. You are solely responsible for the development, content, operation, maintenance, and use of Your Content. For example, You are solely responsible for:
+    1.  **Your Content**. The license granted in Section 9d is conditioned on your continued compliance with the responsibilities in this Section. You are solely responsible for the development, content, operation, maintenance, and use of Your Content. For example, You are solely responsible for:
 
         1.  the technical operation of Your Content, including ensuring that calls you make to any Service are compatible with then-current APIs for that Service;
 
@@ -499,7 +499,7 @@ Please see Section Definitions for definitions of certain capitalized terms used
 
         3.  You will immediately return or, if instructed by the MD, destroy all DeSciX Content in your possession; and
 
-        4.  Sections 4.1, 5.2, 8, 9 (except the license granted to You in Section 9.4), 10, 11, 12, 13, 14 and Definitions will continue to apply in accordance with their terms.
+        4.  Sections 4a, 5.2, 8, 9 (except the license granted to You in Section 9d), 10, 11, 12, 13, 14 and D will continue to apply in accordance with their terms.
 
     2.  **Post-Termination Assistance**. Unless the MD terminates your use of the Service Offerings pursuant to Section 7.2(b), during the 30 days following termination:
 
@@ -519,7 +519,7 @@ Please see Section Definitions for definitions of certain capitalized terms used
 
     3.  **Adequate Rights**. You represent and warrant to the MD that: (a) You or your licensors own all right, title, and interest in and to Your Content and Your Submissions; (b) You have all rights in Your Content and Your Submissions necessary to grant the rights contemplated by this Agreement; and (c) none of Your Content, Your Submissions or End Users’ use of Your Content, Your Submissions or the Services Offerings will violate the Acceptable Use Policy.
 
-    4.  **Service Offerings License**. As between You and the DeSciX DAO, the DeSciX DAO or its affiliates or licensors own and reserve all right, title, and interest in and to the Service Offerings exclusive of any Service Offerings that You provide to the DeSciX Community in your capacity as a Member. The MD grants You a limited, revocable, non-exclusive, non-sublicensable, non-transferrable license to do the following during the Term: (i) access and use the Services solely in accordance with this Agreement; and (ii) copy and use the DeSciX Content solely in connection with your permitted use of the Services. Except as provided in this Section 9.4, You obtain no rights under this Agreement from the DeSciX DAO or its licensors to the Service Offerings, including any related intellectual property rights. Some DeSciX Content may be provided to You under a separate license, such as the DeSciX Community Source Code License or other open source license. In the event of a conflict between this Agreement and any separate license, the separate license will prevail with respect to that DeSciX Content.
+    4.  **Service Offerings License**. As between You and the DeSciX DAO, the DeSciX DAO or its affiliates or licensors own and reserve all right, title, and interest in and to the Service Offerings exclusive of any Service Offerings that You provide to the DeSciX Community in your capacity as a Member. The MD grants You a limited, revocable, non-exclusive, non-sublicensable, non-transferrable license to do the following during the Term: (i) access and use the Services solely in accordance with this Agreement; and (ii) copy and use the DeSciX Content solely in connection with your permitted use of the Services. Except as provided in this Section 9d, You obtain no rights under this Agreement from the DeSciX DAO or its licensors to the Service Offerings, including any related intellectual property rights. Some DeSciX Content may be provided to You under a separate license, such as the DeSciX Community Source Code License or other open source license. In the event of a conflict between this Agreement and any separate license, the separate license will prevail with respect to that DeSciX Content.
 
     5.  **License Restrictions**. Neither You nor any End User may use the Service Offerings in any manner or for any purpose other than as expressly permitted by this Agreement. Neither You nor any End User may, or may attempt to, (a) modify, alter, tamper with, repair, or otherwise create derivative works of any software included in the Service Offerings (except to the extent software included in the Service Offerings are provided to You under a separate license that expressly permits the creation of derivative works), (b) reverse engineer, disassemble, or decompile the Service Offerings or apply any other process or procedure to derive the source code of any software included in the Service Offerings, (c) access or use the Service Offerings in a way intended to avoid incurring fees or exceeding usage limits or quotas, or (d) resell or sublicense the Service Offerings. All licenses granted to You in this Agreement are conditional on your continued compliance this Agreement, and will immediately and automatically terminate if You do not comply with any term or condition of this Agreement. During and after the Term, You will not assert, nor will You authorize, assist, or encourage any third party to assert, against the DeSciX DAO or any of its affiliates, customers, vendors, business partners, or licensors, any patent infringement or other intellectual property infringement claim regarding any Service Offerings You have used. You may only use the DeSciX Marks in accordance with the Trademark Use Guidelines.
 
@@ -543,7 +543,7 @@ Please see Section Definitions for definitions of certain capitalized terms used
 
 13. **Modifications to the Agreement**.
 
-    The MD may modify this Agreement (including any Policies) at any time by posting a revised version on the DPaaS Site or by otherwise notifying You in accordance with Section 2.3. The modified terms will become effective upon posting or, if we notify You by email, as stated in the email message. By continuing to use the Service Offerings after the effective date of any modifications to this Agreement, You agree to be bound by the modified terms. It is Your responsibility to check the DPaaS Site regularly for modifications to this Agreement. We last modified this Agreement on the date listed at the beginning of this Agreement.
+    The MD may modify this Agreement (including any Policies) at any time by posting a revised version on the DPaaS Site or by otherwise notifying You in accordance with Section C. The modified terms will become effective upon posting or, if we notify You by email, as stated in the email message. By continuing to use the Service Offerings after the effective date of any modifications to this Agreement, You agree to be bound by the modified terms. It is Your responsibility to check the DPaaS Site regularly for modifications to this Agreement. We last modified this Agreement on the date listed at the beginning of this Agreement.
 
 14. **Miscellaneous**.
 
@@ -567,7 +567,7 @@ Please see Section Definitions for definitions of certain capitalized terms used
 
     8.  **Language**. All communications and notices to be made or given pursuant to this Agreement must be in the English language.
 
-    9.  **Assignment**. You will not assign this Agreement, or delegate or sublicense any of Your rights under this Agreement, without our prior written consent. Any assignment or transfer in violation of this Section 14.9 will be void. Subject to the foregoing, this Agreement will be binding upon, and inure to the benefit of the parties and their respective successors and assigns.
+    9.  **Assignment**. You will not assign this Agreement, or delegate or sublicense any of Your rights under this Agreement, without our prior written consent. Any assignment or transfer in violation of this Section 14i will be void. Subject to the foregoing, this Agreement will be binding upon, and inure to the benefit of the parties and their respective successors and assigns.
 
     10. **No Waivers**. The failure by the DeSciX DAO to enforce any provision of this Agreement will not constitute a present or future waiver of such provision nor limit our right to enforce such provision at a later time. All waivers by the DeSciX DAO must be in writing to be effective.
 
@@ -627,13 +627,13 @@ Please see Section Definitions for definitions of certain capitalized terms used
 
 “Your Submissions” means Content that You post or otherwise submit to developer forums, sample code repositories, public data repositories, or similar community-focused areas of the DPaaS Site or the Services under the terms of the DCSL or other applicable license.
 
-## 4 Enforcement of IP Rights
+## IV Enforcement of IP Rights
 
-### 4.1 Licensor Retains Enforcement Rights
+### A Licensor Retains Enforcement Rights
 
 The Licensor (The Creator and any Tenants in Common) retains the exclusive right to enforce the intellectual property rights in the DeSciX Community Software, DeSciX Source Code, and any other Community IP owned by The Licensor. This includes the right to initiate legal action, seek injunctive relief, and recover damages for unauthorized use, infringement, or violation of this Agreement.
 
-### 4.2 Managing Delegate as Authorized Agent
+### B Managing Delegate as Authorized Agent
 
 The Licensor hereby designates the Managing Delegate (MD) as its authorized agent to exercise these enforcement rights on behalf of The Licensor. The MD is empowered to:
 
@@ -647,7 +647,7 @@ The Licensor hereby designates the Managing Delegate (MD) as its authorized agen
 
 DAO Members acknowledge the MD’s authority to act as the Licensor’s agent in these matters.
 
-## 5 Living Community Agreement, AI Enabled Smart Contract
+## V Living Community Agreement, AI Enabled Smart Contract
 
 The DeSciX Community is envisioned as a dynamic and evolving ecosystem. To foster this dynamism and ensure the continued alignment of the community with its core principles, the Managing Delegate shall maintain a trained AI agent (the "DeSciX AI"). This AI will be trained on this Agreement, the DeSciX DPoS White Paper, the DeSciX Community Source Code License, and other relevant documents related to the structure, spirit, implementation, and operation of the DeSciX ecosystem.
 

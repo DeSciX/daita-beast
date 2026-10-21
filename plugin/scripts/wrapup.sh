@@ -78,15 +78,15 @@ plan_build() {
     elif [[ "$kind" == PR ]] && jq -e 'any(.labels[]; .name == "needs-review")' <<< "$it" >/dev/null; then row=PR; fi
     if [[ -z "$row" ]]; then jq -nc --arg u "$url" --arg w "closed $kind \"$ttl\", not a board row" '{url: $u, why: $w}' >> "$tmp/keep"; continue; fi
     rd="$(row_read "$repo" "$n")" || exit 1
-    # the words and the record: the newest close comment's (row_close_comment's shape), else the body's ## Record
-    jq -c --arg row "$row" '
-      ([.comments[] | select((.body // "") | test("^(Closed|Rejected) on the word, verbatim: "))] | last) as $c
-      | ($c.body // "") as $b
+    # the words and the record: the newest close comment's (close_last, lib.sh; a latitude close has no words, its record
+    # the link in its close line), else the body's ## Record
+    tag_jq -c --arg row "$row" '
+      close_last(.comments) as $c
       | {url: .issue.html_url, number: .issue.number, title: .issue.title, kind: $row,
          state: (if $row == "PR" then (if .issue.pull_request.merged_at then "merged" else "closed unmerged" end)
                  else (if (.issue.state_reason == "not_planned" or any(.issue.labels[]; .name == "rejected")) then "rejected" else "closed" end) end),
-         words: (($b | capture("^(Closed|Rejected) on the word, verbatim: \"(?<w>.*)\"\n\nRecord: "; "s") | .w) // null),
-         record: (($b | capture("\nRecord: (?<r>.*)\\. Closed by seat ") | .r) // null),
+         words: ($c.words // null),
+         record: ($c.record // null),
          node_id: .issue.node_id}' <<< "$rd" > "$tmp/row"
     if [[ "$(jq -r .record "$tmp/row")" == null ]]; then
       jq -c --arg r "$(jq -r '.issue.body // ""' <<< "$rd" | section Record | sed '/^[[:space:]]*$/d')" '.record = (if $r == "" then null else $r end)' "$tmp/row" > "$tmp/row2" && mv "$tmp/row2" "$tmp/row"
@@ -95,7 +95,7 @@ plan_build() {
     if [[ "$row" == decision ]]; then
       jq -c '{number, url, node_id, title, why: "closed decision row (\(.state))"}' "$tmp/row" >> "$tmp/issues"
     else
-      jq -c --arg u "$url" '.comments[] | select((.body // "") | test("^(BEAST-[A-Z]+ |(Closed|Rejected) on the word)")) | {id, url: .html_url, on: $u, why: "PR row: \((.body // "") | split("\n")[0] | .[:60])"}' <<< "$rd" >> "$tmp/comments"
+      tag_jq -c --arg u "$url" '.comments[] | select(((.body // "") | test("^BEAST-[A-Z]+ ")) or close_of(.body) != null) | {id, url: .html_url, on: $u, why: "PR row: \((.body // "") | split("\n")[0] | .[:60])"}' <<< "$rd" >> "$tmp/comments"
       local phrase asg cid curl clogin cfirst
       phrase="$(row_phrase "$repo#$n" "$(jq -c .issue <<< "$rd")" 2>/dev/null)" || true
       asg="$(jq -r '[.issue.assignees[].login] | join(" ")' <<< "$rd")"

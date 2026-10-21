@@ -166,7 +166,7 @@ Anything else is `bad_payload` naming the issue, never an empty list. Connector 
 
 ## 12. License
 
-**Rule.** One canonical source, rendered by a filter (`pandoc/latex-crossrefs.lua`: title as H1, numbered headings, every `\ref` as plain text), under one neutral header naming no repo (`license.sh::license_header`). `license.sh check` holds the body byte-equal to the render.
+**Rule.** One canonical source, rendered by a filter (`pandoc/latex-crossrefs.lua`: title as H1, headings and every `\ref` numbered as the PDF prints them, from the source's own `\the<counter>` formats), under one neutral header naming no repo (`license.sh::license_header`). `license.sh check` holds the body byte-equal to the render.
 **Why.** Hand copies drift; a reference rendered raw is unreadable.
 
 **Rule.** Every tracked `package.json` and `.claude-plugin/plugin.json` is a manifest, except under `node_modules` and the roster's top-level `vendored` directories (`license.sh::is_wanted`, `license.sh::is_vendored`); `exempt` repos keep their upstream license and a stale exemption fails the audit.

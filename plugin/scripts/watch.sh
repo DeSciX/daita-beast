@@ -7,7 +7,10 @@
 #   watch.sh <LABEL | login/LABEL>... [--once] [--interval 120]   named seats only
 # Event lines (stdout):
 #   BEAST-EVENT kind=NEW seat=<id> state=<open|closed> <title> <url>            a decision concerning the seat appeared
-#   BEAST-EVENT kind=DECIDED seat=<id> <title> <url> :: <first line of the close comment>   the word came
+#   BEAST-EVENT kind=DECIDED seat=<id> close=<closed|rejected|latitude|none> <title> <url> :: <first line of the close comment>
+#                                                                                the word came (close: the close comment's kind,
+#                                                                                close_of, lib.sh; latitude: merged under a
+#                                                                                standing latitude, its record linked in the line)
 #   BEAST-EVENT kind=UPDATED seat=<id> <title> <url>                             a new comment that is not bookkeeping (lib.sh BOOKKEEPING_FIRST_LINE_RE: acks, status, notes, addresses, the Cowork stamp, close and amend lines; label, body and comment edits are silent)
 #   BEAST-WATCH <message>   (stderr)                                            the watcher itself (API failure, retried)
 # A seat never hears its own act: an event whose every actor is the seat itself (event_actors, lib.sh: the filer's ack,
@@ -163,9 +166,13 @@ poll() {
       fi
       case "$kind" in
         DECIDED)
+          ck=none
           if [[ -z "$cs" ]]; then word="(close comment unreadable)"
-          else word="$(jq -r 'if length == 0 then "(no comment on the row)" else (.[-1].body // "" | split("\n")[0]) end' <<< "$cs")" || word="(close comment unreadable)"; fi
-          echo "BEAST-EVENT kind=DECIDED seat=$seat $title $url :: $word" ;;
+          else
+            word="$(jq -r 'if length == 0 then "(no comment on the row)" else (.[-1].body // "" | split("\n")[0]) end' <<< "$cs")" || word="(close comment unreadable)"
+            ck="$(close_of_comments "$cs" | jq -r '.kind // "none"')" || ck=none
+          fi
+          echo "BEAST-EVENT kind=DECIDED seat=$seat close=$ck $title $url :: $word" ;;
         NEW) echo "BEAST-EVENT kind=NEW seat=$seat state=$state $title $url" ;;
         UPDATED) echo "BEAST-EVENT kind=UPDATED seat=$seat $title $url" ;;
       esac

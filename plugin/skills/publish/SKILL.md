@@ -53,6 +53,14 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/publish.sh merge <slug> --words "<verbatim>" --by 
 ```
 The words `publish <slug>` (or a bare `approve`) re-scrub, squash-merge the PR, delete the public branch and record the merge in the twin's main. The recording commit has the same tree, so the next pull brings only outside changes. Then it closes the row; push the twin's main afterwards. With `reject: …` it closes the PR unmerged and the row rejected. `revise: …` is not a close. The record defaults to the decider's answer comment on the row. For words typed to a session, record them first and pass `--record`. If the public main carries outside work the twin lacks, merge refuses and tells you to pull first.
 
+Under your seat's standing latitude (the decider's recorded word letting you merge your own publishes), merge with no words of theirs:
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/publish.sh merge <slug> --latitude '<owner/repo> <commit> — <path>' --by <YOUR SEAT>
+```
+
+The record is a file at that commit in your seat's own repo, which must be private and not public-intended. GitHub is checked for the repo, the commit and the file before anything is written. `--latitude` excludes `--words` and `--record`. It is refused while the decider's `revise:` on the row has no amend after it, and on an amended row the decider has not approved since the amend. The merge itself is the same. The row closes as `Merged under standing latitude <link> by <your seat id>` and quotes no words. The board, the relay and the decider's digest show it as kind `latitude` with the record linked, for the decider to audit. Whether a publish falls inside your latitude is your own repo's rule, never the plugin's: check it before you run this.
+
 6. Pull back outside contributions merged on the public repo. Run it where the twin's main branch is checked out with a clean tree:
 ```
 ${CLAUDE_PLUGIN_ROOT}/scripts/publish.sh pull
