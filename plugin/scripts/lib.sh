@@ -1401,6 +1401,24 @@ section_required() {
   printf '%s\n' "$out"
 }
 
+# row_shape_missing <row>: (a row_read result) the required sections that are empty or missing in the body of an open
+# row that waits on a decider (assigned: a `decision` issue, ROW_SECTIONS; a pull request labelled `needs-review`,
+# PR_ROW_SECTIONS), one per line, each judged by section_required; nothing for a well-formed row or any other issue.
+row_shape_missing() {
+  local info body h list=()
+  info="$(jq -c '.issue' <<< "$1")" || die "row_shape_missing: the row is not a row_read result"
+  jq -e '.state == "open" and ((.assignees // []) | length > 0)' <<< "$info" >/dev/null || return 0
+  if jq -e '.pull_request != null' <<< "$info" >/dev/null; then
+    jq -e 'any(.labels[]?; (.name // .) == "needs-review")' <<< "$info" >/dev/null || return 0
+    list=("${PR_ROW_SECTIONS[@]}")
+  else
+    jq -e 'any(.labels[]?; (.name // .) == "decision")' <<< "$info" >/dev/null || return 0
+    list=("${ROW_SECTIONS[@]}")
+  fi
+  body="$(jq -r '.body // ""' <<< "$info")"
+  for h in "${list[@]}"; do (section_required "$h" "$body" row >/dev/null 2>&1) || echo "$h"; done
+}
+
 # One-line cell for a markdown table: join lines, escape pipes, trim.
 cell() { tr '\n' ' ' | sed -e 's/|/\\|/g' -e 's/  */ /g' -e 's/^ //' -e 's/ $//'; }
 
@@ -2122,6 +2140,54 @@ row_revise_pending() {
 
 # revise_pending_refusal <url>: the one wording of the refusal while row_revise_pending holds.
 revise_pending_refusal() { die "the decider asked for a revision at $1 and the row was not revised: the seat runs decision.sh revise first"; }
+
+# The body line: the last line of the comment every script posts right after it writes a row's body, recording the
+# digest of the body it wrote (decision.sh new's filer ack, decision.sh revise's and restore's amend comment, pr.sh
+# request's requester ack; publish.sh request files through decision.sh new). One owner of its shape: body_line writes
+# it, body_record_last reads it, decision.sh restore matches it against the body's edit history (issue_body_versions).
+#   BEAST-BODY digest=<beast_sha of the body, CR removed and trailing newlines trimmed (body_digest)>
+BODY_LINE_RE='^BEAST-BODY digest=[0-9a-f]{40}$'
+
+# body_digest "<body>": the digest a body line records (beast_sha; CR removed, trailing newlines trimmed).
+body_digest() { local b; b="$(printf '%s' "$1" | tr -d '\r')"; beast_sha "$b"; }
+
+# body_line "<body>": the line for a body a script just wrote.
+body_line() { printf 'BEAST-BODY digest=%s' "$(body_digest "$1")"; }
+
+# body_record_last <comments-json>: "<digest>\t<comment url>" of the newest comment whose last non-empty line is a body
+# line: the body a Beast script last wrote on the row. Nothing when no comment carries one.
+body_record_last() {
+  jq -r --arg re "$BODY_LINE_RE" '[.[] | {u: .html_url, at: .created_at,
+      l: ((.body // "") | gsub("\r"; "") | split("\n") | map(select(test("\\S"))) | last // "")}
+    | select(.l | test($re))] | sort_by(.at) | last // empty | "\(.l | sub("^BEAST-BODY digest="; ""))\t\(.u)"' <<< "$1"
+}
+
+# issue_body_versions <repo> <N>: every version of an issue's (or pull request's) body GitHub keeps in its edit history
+# (GraphQL userContentEdits, all pages; each node's diff is the whole body of that version, the oldest the body as
+# filed; GitHub serves them newest first, measured 2026-10-21), oldest first (reversed, then a stable sort by editedAt),
+# as a JSON array of {at, body}; a version deleted from the history is left out; an issue never edited has none. Dies
+# naming the cause when the history cannot be read.
+issue_body_versions() {
+  [[ $# -eq 2 && "$1" == */* && "$2" =~ ^[0-9]+$ ]] || die "issue_body_versions takes <owner/repo> <N>, not $*"
+  local q page err acc after="" e
+  q='query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){issueOrPullRequest(number:$n){
+    ... on Issue{userContentEdits(first:100,after:$c){pageInfo{hasNextPage endCursor} nodes{editedAt deletedAt diff}}}
+    ... on PullRequest{userContentEdits(first:100,after:$c){pageInfo{hasNextPage endCursor} nodes{editedAt deletedAt diff}}}}}}'
+  acc="$(mktemp)"; err="$(mktemp)"
+  while :; do
+    if ! page="$(gh api -X POST graphql -f query="$q" -f o="${1%%/*}" -f r="${1#*/}" -F n="$2" ${after:+-f c="$after"} 2>"$err")"; then
+      e="$(tr '\n' ' ' < "$err")"; rm -f "$acc" "$err"; die "$1#$2: cannot read the body's edit history (GraphQL userContentEdits): ${e:-gh failed}"
+    fi
+    jq -e '.data.repository.issueOrPullRequest.userContentEdits.nodes | type == "array"' >/dev/null 2>&1 <<< "$page" \
+      || { rm -f "$acc" "$err"; die "$1#$2: cannot read the body's edit history: GitHub's answer carries no userContentEdits ($(head -c 200 <<< "$page" | tr '\n' ' '))"; }
+    jq '.data.repository.issueOrPullRequest.userContentEdits.nodes' <<< "$page" >> "$acc"
+    jq -e '.data.repository.issueOrPullRequest.userContentEdits.pageInfo.hasNextPage == true' >/dev/null <<< "$page" || break
+    after="$(jq -r '.data.repository.issueOrPullRequest.userContentEdits.pageInfo.endCursor // empty' <<< "$page")"
+    [[ -n "$after" ]] || { rm -f "$acc" "$err"; die "$1#$2: the edit history says it has a next page but names no cursor"; }
+  done
+  jq -s 'add // [] | reverse | map(select(.deletedAt == null and .diff != null)) | sort_by(.editedAt) | map({at: .editedAt, body: .diff})' "$acc"
+  rm -f "$acc" "$err"
+}
 
 # RECORD_PATH_RE: the dated records' directory (an ERE and a Python regex alike). The publish scrub refuses it in what
 # leaves the twin; wrapup.sh plan deletes the record files a closed row names under it. One owner of the shape.

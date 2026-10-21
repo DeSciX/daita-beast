@@ -6,6 +6,9 @@
 //   state: {login, repos: {"o/r": {private}}, issues: {"o/r#N": <issue, REST shape>}, comments: {"o/r#N": [...]},
 //           milestones: {"o/r": [...]}, files: {"o/r": {"<full sha>": ["<path>", ...]}}, pulls: {"o/r": [<PR, REST shape,
 //           head.ref>]}, git: {"o/r": "<bare repo dir>"}, roles: {"o/r": {"<login>": "admin|maintain|write|read"}}}
+//   edits: {"o/r#N": [{editedAt, deletedAt, diff}, ...]}, oldest first: the body's edit history, served newest first to
+//   the GraphQL userContentEdits query (as GitHub does) and appended by every PATCH that changes an issue's body (the first
+//   one also records the body as created); edits_fail makes that query fail with its text
 //   the issues list honours state (open, closed, all) and labels (every one named); collaborators/<login>/permission
 //   answers roles (a login it does not list is "none")
 //   rate_limit answers a full quota; issues/comments/<id> takes PATCH (body) and DELETE; POST issues creates one (its
@@ -86,6 +89,13 @@ if (method === "GET") {
     out(200, { permission: p || "none" }, head); }
   fail("GET " + p);
 }
+if (route === "graphql" && /userContentEdits/.test(fields.query || "")) {
+  if (S.edits_fail) { process.stderr.write("gh: " + S.edits_fail + "\n"); process.exit(1); }
+  const it = S.issues[key(fields.o, fields.r, fields.n)];
+  if (!it) out(200, { data: { repository: { issueOrPullRequest: null } } });
+  out(200, { data: { repository: { issueOrPullRequest: { userContentEdits: { pageInfo: { hasNextPage: false, endCursor: null },
+    nodes: ((S.edits || {})[key(fields.o, fields.r, fields.n)] || []).slice().reverse() } } } } });
+}
 if (route === "graphql") out(200, { data: {} });
 if ((m = /^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/merge$/.exec(route)) && method === "PUT") {
   const { execFileSync } = require("child_process");
@@ -128,6 +138,8 @@ if ((m = /^repos\/([^/]+)\/([^/]+)\/issues\/(\d+)(\/(labels|assignees|comments))
   if (m[5] === "assignees" && method === "POST") { for (const l of fields.assignees) if (!it.assignees.some((x) => x.login === l)) it.assignees.push({ login: l }); save(); out(200, it); }
   if (m[5] === "comments" && method === "POST") { const list = S.comments[k] = S.comments[k] || []; const id = 1000 + list.length + Object.keys(S.comments).length * 100;
     const c = { id, body: fields.body, user: { login: S.login }, created_at: now(), html_url: it.html_url + "#issuecomment-" + id }; list.push(c); save(); out(201, c); }
+  if (!m[5] && method === "PATCH" && "body" in fields && fields.body !== it.body) { const h = (S.edits = S.edits || {})[k] = S.edits[k] || [];
+    if (!h.length) h.push({ editedAt: it.created_at, deletedAt: null, diff: it.body }); h.push({ editedAt: now(), deletedAt: null, diff: fields.body }); }
   if (!m[5] && method === "PATCH") { for (const f of ["body", "state", "title", "state_reason"]) if (f in fields) it[f] = fields[f]; if (fields.state === "closed") it.closed_at = now(); if (fields.milestone) it.milestone = { number: Number(fields.milestone) }; save(); out(200, it); }
 }
 fail(method + " " + p);

@@ -17,6 +17,7 @@ These documents describe the design as built. `docs/protocol.md` is the specific
 4. [messaging-paths.html](messaging-paths.html): every call the board, the relay and the seats make, which connector carries it, and whose identity, quota and billing it spends; the rate-limit behaviour.
 4. [learnings.md](learnings.md): the rules the iterations produced, each with why and the measured evidence.
 5. [adopting.md](adopting.md): moving an existing agent-coordination system onto Beast.
+6. [claude-surfaces.md](claude-surfaces.md): what Beast relies on in Claude Code, the desktop app and claude.ai (session files, names and refs, the plugin cache, the claude.ai sync limits, hooks), each with how it was measured.
 
 ## Index
 
@@ -28,6 +29,7 @@ These documents describe the design as built. `docs/protocol.md` is the specific
 | `messaging-paths.html` | the interaction paths (GitHub connector, `gh`, relay, SendMessage; no DeSciX connector); identity and billing per path; GitHub quotas and the secondary limit; the page's read budget and backoff |
 | `learnings.md` | rule / why / evidence, grouped: state, relay cost, silent caps, GitHub timing, privacy of the decider's words, the queue, seating, the live checkout, the board page, connector shapes, scrub tuning, license, gates, one owner per fact across repos |
 | `adopting.md` | mechanism mapping; roles to agent files, workstream slugs and surfaces; migration order with the gate per step; what to delete and when; relay-versus-polling token arithmetic; what differs from a local system; an outside organization (another owner's workstream through `workstream_owners`, who publishes, who awards a token, and the guides in `docs/guides/`) |
+| `claude-surfaces.md` | the session files and what Beast reads from them; names, refs, resume and SendMessage; the plugin cache and version binding; manifest validation and the claude.ai sync limits; a Bash call's and a sub-agent's environment; the hook events; the desktop app's plugin payloads; what was not measured and what would measure it |
 
 ## Conventions used here
 

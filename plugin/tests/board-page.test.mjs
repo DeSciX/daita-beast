@@ -158,11 +158,19 @@ test("page: a PR row shows its Unblocks and Recommendation; a PR without them is
   assert.ok(ok && bad, `both PRs are listed: ${JSON.stringify(p.turnRows())}`);
   assert.match(ok.text, /Unblocksthe DEVX docs release 1\.5\.10/);
   assert.match(ok.text, /Recommendationmerge: every citation re-read at ff32208/);
-  assert.match(bad.text, /malformed: Unblocks, Recommendation/);
+  assert.match(bad.text, /malformed: empty or missing ## Unblocks, ## Recommendation/);
   assert.doesNotMatch(bad.text, /Approve|Revise|Reject/, "a malformed PR offers no answer");
   assert.match(ok.text, /Approve.*Revise.*Reject/, "a well-formed PR offers the three answers");
   const tools = new Set(p.calls.map((c) => c.tool));
   assert.ok(tools.has("search_pull_requests") && tools.has("search_issues"), [...tools].join(","));
+});
+
+test("page: a decision row with an empty section is malformed, naming it, with no answer buttons", async () => {
+  const p = await loadPage(PAGE, { rows: [item(68, false, DBODY.replace("## Recommendation\nr\n", "## Recommendation\n\n"), ["decision"])], comments: { 68: thread() } });
+  const bad = statusOf(p.turnRows(), 68);
+  assert.ok(bad, JSON.stringify(p.turnRows()));
+  assert.match(bad.text, /malformed: empty or missing ## Recommendation/);
+  assert.doesNotMatch(bad.text, /Approve|Revise|Reject/);
 });
 
 test("page: when the pull-request search is refused the list fails naming the tool, never showing the issues alone", async () => {
@@ -360,5 +368,5 @@ test("board.sh fails loud on a needs-review PR whose body lacks the sections, na
   const b = run("board.sh", ["--assignee", "alice"]);
   assert.equal(b.status, 1, b.stdout);
   assert.match(b.stderr, /acme\/twin#65 .*'## Unblocks'/);
-  assert.match(b.stdout, /\(missing: Unblocks\) \| — \| \(missing: Recommendation\)/);
+  assert.match(b.stdout, /\(empty or missing ## Unblocks\) \| — \| \(empty or missing ## Recommendation\)/);
 });

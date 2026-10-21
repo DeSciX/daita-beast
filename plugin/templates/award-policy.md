@@ -1,6 +1,6 @@
 # Award policy — <owner/repo>
 
-Token: <TOKEN> (conceptual units until the DeSciX DIP import exists).
+Token: <TOKEN> (awarded amounts reach holders as offers: ledger.sh --sheet, then the platform's offers import).
 Community: <COMMUNITY> (the repo that holds the <TOKEN> community: its `.beast/awarders.json` lists the repos that may award <TOKEN>; a repo it does not list awards nothing).
 
 Awards are the owner's word, recorded as a `BEAST-AWARD` comment by a repo admin or maintainer on the pull request or issue, and rolled up monthly into the community repo's `awards/<YYYY-MM>.jsonl`.
