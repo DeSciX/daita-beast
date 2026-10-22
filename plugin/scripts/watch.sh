@@ -8,10 +8,12 @@
 #   watch.sh <LABEL | login/LABEL>... [--once] [--interval 120]   named seats only
 # Event lines (stdout):
 #   BEAST-EVENT kind=NEW seat=<id> state=<open|closed> <title> <url>            a decision concerning the seat appeared
-#   BEAST-EVENT kind=DECIDED seat=<id> close=<closed|rejected|latitude|none> <title> <url> :: <first line of the close comment>
+#   BEAST-EVENT kind=DECIDED seat=<id> close=<closed|rejected|latitude|covered|none> <title> <url> :: <first line of the close comment>
 #                                                                                the word came (close: the close comment's kind,
 #                                                                                close_of, lib.sh; latitude: merged under a
-#                                                                                standing latitude, its record linked in the line)
+#                                                                                standing latitude, its record linked in the line;
+#                                                                                covered: a follow-on closed under its program,
+#                                                                                the program's approval linked in the line)
 #   BEAST-EVENT kind=UPDATED seat=<id> <title> <url>                             a new comment that is not bookkeeping (lib.sh BOOKKEEPING_FIRST_LINE_RE: acks, status, notes, addresses, the Cowork stamp, close and amend lines; label, body and comment edits are silent)
 #   BEAST-WATCH <message>   (stderr)                                            the watcher itself (API failure, retried)
 # A seat never hears its own act: an event whose every actor is the seat itself (event_actors, lib.sh: the filer's ack,
@@ -28,7 +30,7 @@
 # run --once from a scheduler (relay.sh); the loop form exists for a terminal.
 # A rate limit (the search quota, the secondary burst limit: lib.sh rate_limit_text) is named once, loud, with the
 # backoff it starts (~/.beast/watch/backoff: "<until epoch> <seconds> <UTC named>"; WATCH_BACKOFF_S doubling to
-# WATCH_BACKOFF_MAX_S); until then every poll asks GitHub nothing and exits 75 (relay.sh logs it as a skipped poll),
+# WATCH_BACKOFF_MAX_S, lib.sh backoff_next); until then every poll asks GitHub nothing and exits 75 (relay.sh logs it as a skipped poll),
 # and the next good search clears it. A workstream whose `## Seats` table does not parse is skipped and named once per
 # distinct message (lib.sh fault_once, ledger ~/.beast/watch/faults.json); every other workstream is still polled.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -49,9 +51,9 @@ backoff_active() {
 }
 # backoff_start <stderr file>: a rate limit was hit: name it once, loud, and back off (doubling while it repeats).
 backoff_start() {
-  local secs=$WATCH_BACKOFF_S prev until
-  if [[ -f "$backoff_file" ]]; then read -r _ prev _ < "$backoff_file" || true; [[ ! "$prev" =~ ^[0-9]+$ ]] || secs=$(( prev * 2 )); fi
-  (( secs <= WATCH_BACKOFF_MAX_S )) || secs=$WATCH_BACKOFF_MAX_S
+  local secs prev="" until
+  if [[ -f "$backoff_file" ]]; then read -r _ prev _ < "$backoff_file" || true; [[ "$prev" =~ ^[0-9]+$ ]] || prev=""; fi
+  secs="$(backoff_next "$prev" "$WATCH_BACKOFF_S" "$WATCH_BACKOFF_MAX_S")" || exit 1
   until=$(( $(date -u +%s) + secs ))
   printf '%s %s %s\n' "$until" "$secs" "$(utc_now)" > "$backoff_file"
   echo "BEAST-WATCH GitHub rate limit at $(utc_now): $(grep -m1 -iE 'rate limit|quota|HTTP 429' "$1" | sed 's/^daita-beast: //'); backing off ${secs} s, until $(jq -rn --argjson t "$until" '$t | todate'); no search runs until then" >&2

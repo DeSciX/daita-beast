@@ -1,4 +1,5 @@
-// The page (plugin/templates/board.html) parses desk asks, the amend line and the close line with JS twins of the shapes lib.sh owns. This test extracts
+// The page (plugin/templates/board.html) parses desk asks (and their Replaces: line), the amend line, the close line, a
+// program's sub-act lines and a follow-on's Follows: line with JS twins of the shapes lib.sh owns. This test extracts
 // both sides from the source files as they stand and runs them on one fixture list of lines: lib.sh's through jq (the
 // engine desk_parse uses), the page's through node. Any line the two read differently fails the test, naming it.
 //   node --test plugin/tests/
@@ -119,7 +120,41 @@ const CLOSE_LINES = [
   "Closed on the words",
   "approve",
   "publish dv1",
+  "Closed as covered by <https://github.com/acme/twin/issues/74#issuecomment-501> by acme/DEVPLANE",
+  "Closed as covered by <https://github.com/acme/twin/pull/74#issuecomment-501> by acme/DEVPLANE  ",
+  "Closed as covered by <https://github.com/acme/twin/issues/74> by acme/DEVPLANE",
+  "Closed as covered by <https://github.com/acme/twin/issues/74#issuecomment-501> by DEVPLANE",
+  "Closed as covered by https://github.com/acme/twin/issues/74#issuecomment-501 by acme/DEVPLANE",
+  "Closed as covered by <https://github.com/acme/twin/issues/74#issuecomment-501> by acme/DEVPLANE now",
+  "closed as covered by <https://github.com/acme/twin/issues/74#issuecomment-501> by acme/DEVPLANE",
 ];
+
+const SUBACT_LINES = [
+  "- deploy-ms: deploy the Powch microservice to PROD",
+  "- a1: x",
+  "- deploy-site: deploy the site   ",
+  "- Deploy: x",
+  "- deploy_ms: x",
+  "-deploy-ms: x",
+  "- deploy-ms:x",
+  "- deploy-ms:  ",
+  "- -ms: x",
+  "* deploy-ms: x",
+  "- deploy-ms x",
+];
+
+const FOLLOWS_LINES = [
+  "Follows: acme/twin#74 sub-act deploy-ms",
+  "Follows: some.org/repo_x.y#9 sub-act a1  ",
+  "Follows: acme/twin#74 sub-act Deploy",
+  "Follows: acme/twin#74 deploy-ms",
+  "Follows: acme/twin sub-act deploy-ms",
+  "Follows: https://github.com/acme/twin/issues/74 sub-act deploy-ms",
+  "follows: acme/twin#74 sub-act deploy-ms",
+  "Follows: acme/twin#74 sub-act deploy-ms extra",
+];
+
+const REPLACES_LINES = ["Replaces: n=25", "Replaces: n=3  ", "Replaces: n=x", "Replaces: 25", "replaces: n=25", "Replaces: n=25 and 26", "Replaces: n="];
 
 // compare <lib regex name> <page regex name> <lines> <group names in the page's capture order>
 function compare(libName, pageName, lines, groups) {
@@ -155,11 +190,27 @@ test("the amend line: lib.sh AMEND_LINE_RE and the page's AMEND_RE read every fi
 });
 
 test("the close line: lib.sh CLOSE_LINE_RE and the page's CLOSE_RE read every fixture line alike", () => {
-  compare("CLOSE_LINE_RE", "CLOSE_RE", CLOSE_LINES, ["verdict", "record", "seat"]);
+  compare("CLOSE_LINE_RE", "CLOSE_RE", CLOSE_LINES, ["verdict", "record", "seat", "answer", "cseat"]);
+  // The fourth kind is read, not only refused alike: a covered close names the program's approving answer and its closer.
+  const covered = CLOSE_LINES.find((l) => l.startsWith("Closed as covered by"));
+  assert.deepEqual(jqCaptures(libRe("CLOSE_LINE_RE"), [covered]).map((c) => c && [c.answer, c.cseat])[0], ["https://github.com/acme/twin/issues/74#issuecomment-501", "acme/DEVPLANE"]);
+});
+
+test("a program's sub-act line: lib.sh SUB_ACT_RE and the page's SUBACT_RE read every fixture line alike", () => {
+  compare("SUB_ACT_RE", "SUBACT_RE", SUBACT_LINES, ["slug", "act"]);
+});
+
+test("a follow-on's line: lib.sh FOLLOWS_RE and the page's FOLLOWS_RE read every fixture line alike", () => {
+  compare("FOLLOWS_RE", "FOLLOWS_RE", FOLLOWS_LINES, ["ref", "slug"]);
+});
+
+test("an ask's replaces line: lib.sh ASK_REPLACES_RE and the page's REPLACES_RE read every fixture line alike", () => {
+  compare("ASK_REPLACES_RE", "REPLACES_RE", REPLACES_LINES, ["n"]);
 });
 
 test("the fixtures exercise both outcomes on both shapes", () => {
-  for (const [name, lines] of [["ASK_HEADER_RE", ASK_LINES], ["WAITS_ON_RE", WAITS_LINES], ["MSG_HEADER_RE", MSG_LINES], ["AMEND_LINE_RE", AMEND_LINES], ["CLOSE_LINE_RE", CLOSE_LINES]]) {
+  for (const [name, lines] of [["ASK_HEADER_RE", ASK_LINES], ["WAITS_ON_RE", WAITS_LINES], ["MSG_HEADER_RE", MSG_LINES], ["AMEND_LINE_RE", AMEND_LINES], ["CLOSE_LINE_RE", CLOSE_LINES],
+    ["SUB_ACT_RE", SUBACT_LINES], ["FOLLOWS_RE", FOLLOWS_LINES], ["ASK_REPLACES_RE", REPLACES_LINES]]) {
     const caps = jqCaptures(libRe(name), lines);
     assert.ok(caps.some((c) => c) && caps.some((c) => !c), `${name}: the fixtures must hold lines that match and lines that do not`);
   }

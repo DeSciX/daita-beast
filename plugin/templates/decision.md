@@ -8,6 +8,7 @@ assignees: ''
 
 ## Decision
 <the question in plain language, one or two sentences>
+<!-- A program row adds the section "## Sub-acts" right here, one "- <slug>: <one-line act>" line per act the one approval covers (decision.sh new --sub). A follow-on of an approved program ends this section with "Follows: <owner/repo#N> sub-act <slug>" (decision.sh new --follows --sub-act). -->
 
 ## Unblocks
 <what starts or ships once this is decided>

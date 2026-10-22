@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 # desk.sh — a seat's desk: the tier below the board, for questions across the desk and messages.
 #   desk.sh open <SEAT>                                           create the desk once (idempotent)
-#   desk.sh ask <SEAT> --text "<question>" [--options "a | b | c"] [--default a] [--milestone "<title>"] [--waits-on <seat | owner/repo#N>]...
+#   desk.sh --help                                                this header and the rule a question is written to
+#   desk.sh ask <SEAT> --text "<question>" [--options "a | b | c"] [--default a] [--milestone "<title>"] [--waits-on <seat | owner/repo#N>]... [--supersedes <n>]
+#       --supersedes <n>: the new ask carries `Replaces: n=<n>` and ask n (open, else refused) is withdrawn after it
 #       --milestone is required when the desk's repo has an open milestone (milestone_require, lib.sh)
-#   desk.sh answer <SEAT> <n> "<text>"     the decider's words typed to the seat's session, posted verbatim
+#       the question and its options carry their substance (ask_inline_check, lib.sh ASK_INLINE_RULE): the content inline,
+#       or a URL to a file or diff at a commit; never a local path or "see session". It is refused before anything is
+#       written, so compose it that way.
+#   desk.sh answer <SEAT> <n> "<text>" --by <SEAT>   the decider's words typed to a seat's session, posted verbatim by
+#       that seat (--by, the recorder: a seat of this roster); the comment ends with the recorder's seen ack, so it is the
+#       recorder's own act (the relay sends it no event, event_actors) and its ack (the watchdog does not remind it)
 #   desk.sh withdraw <SEAT> <n>            the seat withdraws its own open ask
 #   desk.sh msg <TO-SEAT> --from <SEAT> --text "<body>" [--re <owner/repo#N | url>]   a durable message on the recipient's desk
 #   desk.sh publish <SEAT>                 regenerate the desk body (every write above publishes)
@@ -15,9 +22,12 @@
 # identity through the workstream tables too (seat_id), and writes on that seat's desk in that seat's repo.
 # Its comments are the facts:
 #   BEAST-ASK n=<seq> seat=<id> at=<UTC>[ milestone="<title>"]   then the question lines, `options: a | b`,
-#                                             `default: a`, `Waits on: <ref>` lines (ask_header, desk_parse in lib.sh)
+#                                             `default: a`, `Waits on: <ref>` lines, `Replaces: n=<k>` (ask_header,
+#                                             ASK_REPLACES_RE, desk_parse in lib.sh)
 #   BEAST-ANSWER n=<seq> <text>               by an assignee of the desk, or posted by `answer` (it carries
-#                                             the line "(words typed to <id>'s session, verbatim)")
+#                                             the line "(words typed to <id>'s session, verbatim)" and ends with
+#                                             the recorder's line `BEAST-ACK seat=<by> … state=seen`, which is not
+#                                             part of the answer's text: desk_parse)
 #   BEAST-WITHDRAW n=<seq>                    the seat withdraws an open ask
 #   BEAST-MSG from=<composite> to=<composite> re=<ref|none> blocking=no   the seat-to-seat tag (msg_header, lib.sh: the
 #                                             same first line a seat sends by SendMessage), then the body; a plain
@@ -62,7 +72,7 @@ publish() {
       "",
       (if ($open | length) == 0 then "(none)" else
         ("| n | Question | Options | Default | Milestone | Waits on | Asked |", "|---|---|---|---|---|---|---|",
-         ($open[] | "| \(.n) | \(q1 | c) | \(.options // "—" | c) | \(.default // "—" | c) | \(.milestone // "—" | c) | \(if (.waits_on | length) > 0 then (.waits_on | join(", ") | c) else "—" end) | [\(.at)](\(.url)) |")) end),
+         ($open[] | "| \(.n) | \(if .replaces != null then "(replaces n=\(.replaces)) " else "" end)\(q1 | c) | \(.options // "—" | c) | \(.default // "—" | c) | \(.milestone // "—" | c) | \(if (.waits_on | length) > 0 then (.waits_on | join(", ") | c) else "—" end) | [\(.at)](\(.url)) |")) end),
       "",
       "## Answered (last 20)",
       "",
@@ -86,6 +96,11 @@ open_asks_n() { jq -r '.asks[] | select(.state == "open") | .n' <<< "$1"; }
 
 cmd="${1:-}"; shift || true
 case "$cmd" in
+  -h|--help|help)
+    sed -n '2,/^source /p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
+    echo
+    echo "A question (ask --text, --options) and a decision row (decision.sh new) carry: $ASK_INLINE_RULE."
+    exit 0 ;;
   open)
     [[ $# -eq 1 ]] || die "usage: desk.sh open <SEAT>"
     id="$(seat_rostered "$1")" || exit 1
@@ -109,11 +124,12 @@ case "$cmd" in
     publish "$id" >/dev/null
     ;;
   ask)
-    [[ $# -ge 1 ]] || die "usage: desk.sh ask <SEAT> --text \"<question>\" [--options \"a | b\"] [--default a]"
+    [[ $# -ge 1 ]] || die "usage: desk.sh ask <SEAT> --text \"<question>\" [--options \"a | b\"] [--default a] [--milestone \"<title>\"] [--waits-on <ref>]... [--supersedes <n>] — the question carries $ASK_INLINE_RULE"
     id="$(seat_rostered "$1")" || exit 1; shift
-    text=""; options=""; default=""; ms=""; waits=()
+    text=""; options=""; default=""; ms=""; waits=(); sup=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
+        --supersedes) sup="$2"; shift 2 ;;
         --text) text="$2"; shift 2 ;;
         --options) options="$2"; shift 2 ;;
         --default) default="$2"; shift 2 ;;
@@ -123,7 +139,8 @@ case "$cmd" in
       esac
     done
     [[ -n "${text//[[:space:]]/}" ]] || die "ask needs --text \"<question>\""
-    ! printf '%s\n' "$text" | grep -qE '^(options|default):|^BEAST-|^Waits on:' || die "a question line may not start with options:, default:, Waits on: or BEAST- (pass --options / --default / --waits-on)"
+    ! printf '%s\n' "$text" | grep -qE '^(options|default):|^BEAST-|^Waits on:|^Replaces:' || die "a question line may not start with options:, default:, Waits on:, Replaces: or BEAST- (pass --options / --default / --waits-on / --supersedes)"
+    [[ -z "$sup" || "$sup" =~ ^[0-9]+$ ]] || die "--supersedes '$sup' is not an ask number"
     [[ "$options$default" != *$'\n'* ]] || die "--options and --default are one line each"
     ask_inline_check "desk ask of $id" "$text
 $options"
@@ -134,27 +151,61 @@ $options"
     [[ -z "$ms" ]] || milestone_title_check "$ms"
     milestone_require "$repo" "$ms" >/dev/null || exit 1
     cs="$(issue_comments "$repo" "$n")" || die "cannot read the comments of the desk $repo#$n"
+    if [[ -n "$sup" ]]; then
+      # --supersedes <k>: the new ask replaces the open ask k (its options bind, so a changed artifact is re-asked, never
+      # edited). Refused, before anything is written, unless k is open on this desk.
+      rd="$(row_read "$repo" "$n")" || exit 1
+      st="$(desk_parse "$id" "$rd" 2>/dev/null | jq -r --argjson k "$sup" '.asks[] | select(.n == $k) | .state')" \
+        || die "cannot read the asks of the desk $repo#$n"
+      [[ "$st" == open ]] || die "n=$sup is ${st:-not an ask} on the desk of $id, not an open ask: --supersedes replaces an open ask only"
+    fi
     seq="$(ask_next_n "$cs")" || exit 1
     body="$(ask_header "$seq" "$id" "$(utc_now)" "$ms")
 $text"
     for w in "${waits[@]:-}"; do [[ -z "$w" ]] || body="$body
 $(waits_on_line "$w")"; done
+    [[ -z "$sup" ]] || body="$body
+Replaces: n=$sup"
     [[ -z "$options" ]] || body="$body
 options: $options"
     [[ -z "$default" ]] || body="$body
 default: $default"
     issue_comment "$repo" "$n" "$body"
+    # The new ask first, then the withdrawal of k: a failure between them leaves both open, never neither.
+    [[ -z "$sup" ]] || issue_comment "$repo" "$n" "BEAST-WITHDRAW n=$sup" >/dev/null \
+      || die "ask n=$seq is posted (replaces n=$sup) but n=$sup was NOT withdrawn (named above): desk.sh withdraw $id $sup"
     publish "$id"
     ;;
   answer)
-    [[ $# -eq 3 ]] || die "usage: desk.sh answer <SEAT> <n> \"<the decider's words, verbatim>\""
-    id="$(seat_id "$1")" || exit 1; k="$2"; text="$3"   # the decider answers ANY seat's ask: the seat may be of another repo
+    usage="usage: desk.sh answer <SEAT> <n> \"<the decider's words, verbatim>\" --by <SEAT> (--by: the seat whose session the words were typed to, which records them)"
+    [[ $# -ge 3 ]] || die "$usage"
+    id="$(seat_id "$1")" || exit 1; k="$2"; text="$3"; shift 3   # the decider answers ANY seat's ask: the seat may be of another repo
+    by=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --by) by="$2"; shift 2 ;;
+        *) die "unknown argument $1; $usage" ;;
+      esac
+    done
+    [[ -n "$by" ]] || die "answer needs --by <SEAT>, the recording seat: its ack ends the comment, so the relay and the watchdog read the answer as that seat's own act. $usage"
+    by="$(seat_rostered "$by")" || exit 1   # the recorder is the seat running this session: a seat of this roster
     [[ "$k" =~ ^[0-9]+$ ]] || die "ask number '$k' is not a number"
     [[ -n "${text//[[:space:]]/}" ]] || die "an answer carries the words"
+    ! printf '%s\n' "$text" | grep -q '^BEAST-' || die "an answer line may not start with BEAST- (it would be read as a protocol line)"
     f="$(desk_of "$id")" || exit 1; read -r repo n <<< "$f"
-    open_asks_n "$(desk_parse "$id" "$(row_read "$repo" "$n")" 2>/dev/null)" | grep -qx -- "$k" || die "n=$k is not an open ask on the desk of $id (desk.sh publish $id lists them)"
+    rd="$(row_read "$repo" "$n")" || exit 1
+    parsed="$(desk_parse "$id" "$rd" 2>/dev/null)" || exit 1
+    open_asks_n "$parsed" | grep -qx -- "$k" || die "n=$k is not an open ask on the desk of $id (desk.sh publish $id lists them)"
+    # The recorder's ack covers what is on its own desk up to now: name what it covers that the seat has not acked.
+    if [[ "$by" == "$id" ]]; then
+      news="$(desk_news "$id" "$parsed" "$(seat_acks "$rd" | awk -F'\t' -v s="$id" '$1==s {print $2}')" | cut -f2)"
+      [[ -z "$news" ]] || { echo "daita-beast: the answer's ack also acks these, newer than your last ack on the desk; read them now:" >&2; printf '%s\n' "$news" >&2; }
+    fi
+    ackl="$(ack_line "$by" seen "recorded the decider's answer to n=$k")" || exit 1
     issue_comment "$repo" "$n" "BEAST-ANSWER n=$k $text
-(words typed to $id's session, verbatim)"
+(words typed to $id's session, verbatim)
+
+$ackl"
     publish "$id"
     ;;
   withdraw)
@@ -204,9 +255,7 @@ $text"
     rd="$(row_read "$repo" "$n")"
     parsed="$(desk_parse "$id" "$rd")" || exit 1
     acked="$(seat_acks "$rd" | awk -F'\t' -v s="$id" '$1==s {print $2}')"
-    out="$(jq -r --arg ack "$acked" '
-      ([.asks[] | select(.state == "answered" and .answer.at > $ack)] | map("  answered n=\(.n): \(.question[0] // "") -> \(.answer.text | split("\n")[0])  \(.answer.url)")) +
-      ([.messages[] | select(.at > $ack)] | map("  message from \(.from) at \(.at): \(.text | split("\n")[0])  \(.url)")) | .[]' <<< "$parsed")"
+    out="$(desk_news "$id" "$parsed" "$acked" | cut -f2)"
     open_n="$(jq '[.asks[] | select(.state == "open")] | length' <<< "$parsed")"
     if [[ -z "$out" ]]; then
       echo "desk: nothing new for $id since its last ack ${acked:-(none)}; $open_n open ask(s) — https://github.com/$repo/issues/$n"

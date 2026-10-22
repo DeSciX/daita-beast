@@ -130,7 +130,7 @@ $(body_line "$body")" >/dev/null || die "$repo#$number is requested but the requ
         echo "recorded the words on $repo#$number (merged at $merged_at)"
         ;;
     esac
-    row_after_close "$repo" "$number" "$by" "$board"
+    row_after_close "$repo" "$number" "$by" "$board" "$(jq -r '.assignees[0].login // empty' <<< "$info")"
     ;;
   *) die "usage: pr.sh request|close (see the header of $0)" ;;
 esac

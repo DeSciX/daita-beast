@@ -16,4 +16,10 @@ A decision issue carries its exact approving phrase in `## Approve with`. Only t
 
 Any other wording, and any comment by someone who is not the assignee, is a question back, not an answer: the seat replies on the issue and leaves it open.
 
+**A program row** lists `## Sub-acts`. One approving answer on it pre-authorizes every listed sub-act: the seat files each as a follow-on (`decision.sh new … --follows <program> --sub-act <slug>`), which the board lists under the program and never as the decider's turn, and closes it with `decision.sh close <follow-on> --covered --by <SEAT>`, quoting no new words; the close line cites the program's approval. A `revise:` of the program, or any amend of it, re-opens all of its sub-acts until the decider approves the program again; a reject covers nothing. The decider answers the program, never a follow-on.
+
+**Before any answer**, a seat may amend its own row when the facts under it changed (`decision.sh revise <ref> --by <SEAT> …`, posting `Amended at …: amended by <seat> before any answer`); an approval older than that line no longer counts, so the decider approves the amended row. Once the decider has approved or rejected, the seat no longer amends it.
+
+**Queued.** A row whose `Waits on:` names a row that is still open shows as "queued behind <ref>" and is not the decider's turn until that row closes; the decider may still answer it.
+
 A seat learns of the answer from its inbox (`decision.sh inbox <SEAT>`, computed from acks on GitHub: every answer is a new event for every seat the row names) or, sooner, from the relay where one runs (`BEAST-EVENT kind=UPDATED` when the decider commented, `kind=DECIDED` when a session closed it). On an answer, act as above, then ack (`/daita-beast:ack`): `seen` when read, `executed` with the evidence when done, `blocked` with what it waits on. The board republishes itself on every close.

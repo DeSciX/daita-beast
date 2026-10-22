@@ -7,9 +7,15 @@
 # Record); a body missing a section fails this script, naming the issue. A PR row is its title, the
 # PR_ROW_SECTIONS of its body (## Unblocks / Recommendation, written by pr.sh request; missing fails the same way)
 # and its phrase (row_phrase). Desks (label `desk`) carry neither label and are never rows.
+# A row is the decider's turn unless it is queued or covered, and the Kind cell says which: a row whose `Waits on:` lines
+# name a row that is still open is "queued behind <owner/repo#N>" (row_queued_behind, lib.sh); a follow-on row (its
+# Follows: line, follows_parse) is listed right under its program, "↳", as "covered by <program> (<sub-act>)" while the
+# program covers it (program_cover) or "under <program> (<sub-act>): not covered" with why; a program row's Kind names its
+# sub-acts (sub_acts_parse). The header counts the queued and the follow-on rows apart.
 # Between the open table and the decided table: the roster's home repos' milestones due within 3 days or overdue.
 # --publish rewrites the body of the issue titled "Pending decisions (generated)" in --repo (created
-# and pinned when absent). --web prints the saved-search URL that IS the board.
+# and pinned when absent); a successful publish deletes this board's stale marker (board_stale_clear, lib.sh: left by a
+# close whose republish failed, ~/.beast/board/stale/). --web prints the saved-search URL that IS the board.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 need gh jq
 
@@ -36,7 +42,8 @@ issues="$(search_issues "$q")" || die "GitHub search failed for: $q"
 
 # The search index lags a close by seconds; the live issue is the owner of its state, so every
 # candidate is re-read and a closed one is dropped here. The count is of rendered rows.
-errors=0; count=0
+errors=0; count=0; nqueued=0; nfollow=0
+rkeys=(); rlines=(); rparent=()
 # seat_cells <row> <labels-json> <event_at>: "SEAT ✓state · SEAT —" per seat of the row (a row_read; row_seats: its
 # seat: labels, else its filer), from its newest ack vs the latest event; a seat shows as LABEL when it is the viewer's
 # own, else as its id. A row with no seat at all is the one cell "—".
@@ -63,6 +70,22 @@ while IFS=$'\t' read -r num url_ full; do
   body="$(jq -r '.body // ""' <<< "$live")"
   count=$((count+1))
   who="$full#$num"
+  # The Kind cell: the row's kind, then what takes it out of the decider's turn (a follow-on, a queue) or what it covers.
+  kind="decision"; parent=""; mark=""
+  if q="$(row_queued_behind "$who" "$body" 2>/tmp/board.err)"; then
+    [[ -z "$q" ]] || { kind="$kind · queued behind $q"; nqueued=$((nqueued+1)); }
+  else cat /tmp/board.err >&2; errors=$((errors+1)); fi
+  if jq -e '.pull_request == null' <<< "$live" >/dev/null; then
+    if fol="$(follows_parse "$who" "$body" 2>/tmp/board.err)" && subs="$(sub_acts_parse "$who" "$body" 2>>/tmp/board.err)"; then
+      if [[ -n "$fol" ]]; then
+        IFS=$'\t' read -r fref fslug <<< "$fol"
+        parent="$(tr 'A-Z' 'a-z' <<< "$fref")"; mark="↳ "; nfollow=$((nfollow+1))
+        if ( program_cover "$fref" "$fslug" ) >/dev/null 2>/tmp/board.why; then kind="covered by $fref ($fslug)"
+        else kind="under $fref ($fslug): not covered: $(sed 's/^daita-beast: //' /tmp/board.why | head -1)"; fi
+      fi
+      [[ -z "$subs" ]] || kind="$kind · program: $(cut -f1 <<< "$subs" | paste -sd, - | sed 's/,/, /g')"
+    else cat /tmp/board.err >&2; errors=$((errors+1)); fi
+  fi
   if jq -e '.pull_request != null' <<< "$live" >/dev/null; then
     # A PR row: its title, the PR_ROW_SECTIONS of its body (pr.sh request writes them; one missing fails like a
     # decision row's) in the Unblocks and Recommendation columns, its phrase; it has no Waits and no Record.
@@ -74,9 +97,9 @@ while IFS=$'\t' read -r num url_ full; do
       fi
       case "$h" in Unblocks) pu="$text" ;; Recommendation) pr_="$text" ;; *) die "board.sh has no column for the PR section '$h'" ;; esac
     done
-    row="| PR | [$who]($url_) | $(jq -r .title <<< "$live" | cell) | $pu | — | $pr_ | $(row_phrase "$who" "$live" | cell) | —"
+    row="| ${kind/decision/PR} | [$who]($url_) | $(jq -r .title <<< "$live" | cell) | $pu | — | $pr_ | $(row_phrase "$who" "$live" | cell) | —"
   else
-    row="| decision | [$who]($url_)"
+    row="| $(printf '%s' "$kind" | cell) | $mark[$who]($url_)"
     for h in "${ROW_SECTIONS[@]}"; do
       if text="$(section_required "$h" "$body" "$who" 2>/tmp/board.err)"; then
         row="$row | $(printf '%s' "$text" | cell)"
@@ -87,12 +110,22 @@ while IFS=$'\t' read -r num url_ full; do
   fi
   IFS=$'\t' read -r ev_at ev_kind < <(row_events "$rd")
   row="$row | $(seat_cells "$rd" "$(jq -c .labels <<< "$live")" "$ev_at")"
-  table="$table
-$row |"
+  rkeys+=("$(tr 'A-Z' 'a-z' <<< "$who")"); rlines+=("$row |"); rparent+=("$parent")
 done < <(jq -r '.[] | [.number, .html_url, (.repository_url | sub(".*/repos/"; ""))] | @tsv' <<< "$issues")
+# Each follow-on right under its program when the program is on the board; elsewhere where it fell.
+for ((i = 0; i < ${#rkeys[@]}; i++)); do
+  p="${rparent[$i]}"
+  if [[ -n "$p" ]] && printf '%s\n' "${rkeys[@]}" | grep -qxF -- "$p"; then continue; fi
+  table="$table
+${rlines[$i]}"
+  for ((j = 0; j < ${#rkeys[@]}; j++)); do
+    if [[ "${rparent[$j]}" == "${rkeys[$i]}" ]]; then table="$table
+${rlines[$j]}"; fi
+  done
+done
 
-# Decided: rows closed in the last 7 days, with the close (close_text, lib.sh: the words; a latitude close is kind
-# "latitude", no words, its record linked).
+# Decided: rows closed in the last 7 days, with the close (close_text, lib.sh: the words; a latitude or covered close is
+# kind "latitude" or "covered", no words, its record linked).
 since="$(date -u -v-7d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)"
 qd="is:closed label:$BOARD_ROW_LABELS assignee:$assignee closed:>=$since"
 for o in "${owners[@]:-}"; do [[ -n "$o" ]] && qd="$qd user:$o"; done
@@ -106,7 +139,8 @@ while IFS=$'\t' read -r num url_ full closed_at kind title labels; do
   rd="$(row_read "$full" "$num")"
   cl="$(close_of_comments "$(jq -c .comments <<< "$rd")")" || die "$full#$num: cannot read its close comment"
   last="$(tag_jq -r 'if . == null then "(closed without the words: no close comment of the protocol shape)" else close_text(.) end' <<< "$cl")"
-  [[ "$(jq -r '.kind // empty' <<< "$cl")" != latitude ]] || kind=latitude
+  ck="$(jq -r '.kind // empty' <<< "$cl")"
+  [[ "$ck" != latitude && "$ck" != covered ]] || kind="$ck"
   cells="$(seat_cells "$rd" "$labels" "$closed_at")"
   dcount=$((dcount+1))
   drow="| $closed_at | $kind | [$full#$num]($url_) | $(printf '%s' "$title" | sed 's/^Decision: //' | cell) | $(printf '%s' "$last" | cell) | $cells |"
@@ -132,8 +166,8 @@ else
   mdue="(milestone due flags are read through a roster; none at $(pwd))"
 fi
 stamp="$(utc_now)"
-header="Pending decisions for @$assignee — $count open (decision issues and PRs for review), $dcount decided in the last 7 days ($dunacked not yet acked by every seat) — generated $stamp by daita-beast board.sh. Live list: $url
-Do not edit this issue: file a decision issue (an act without code) or request review on a PR (pr.sh request) to add a row, close it (quoting the word and its record id; a PR merged or rejected by pr.sh close) to remove one. Questions across the desk live on each seat's desk issue, never here. A decision given in a session before a row existed is filed and closed in one act (decision.sh record), so it appears below. Seats: ✓ and the ack state when the seat's newest BEAST-ACK is newer than the row's latest event, — when it is not; a lone — is a row with no seat (no seat: label, no filer ack)."
+header="Pending decisions for @$assignee — $count open (decision issues and PRs for review; $nqueued queued behind an open row and $nfollow follow-on(s) under a program, not your turn), $dcount decided in the last 7 days ($dunacked not yet acked by every seat) — generated $stamp by daita-beast board.sh. Live list: $url
+Do not edit this issue: file a decision issue (an act without code) or request review on a PR (pr.sh request) to add a row, close it (quoting the word and its record id; a PR merged or rejected by pr.sh close) to remove one. Questions across the desk live on each seat's desk issue, never here. A decision given in a session before a row existed is filed and closed in one act (decision.sh record), so it appears below. A program's one approving answer pre-authorizes every sub-act it lists; its follow-ons (↳) close on it with no word of yours. A row queued behind an open row is your turn once that row closes. Seats: ✓ and the ack state when the seat's newest BEAST-ACK is newer than the row's latest event, — when it is not; a lone — is a row with no seat (no seat: label, no filer ack)."
 # GitHub refuses an issue body over 65536 characters. The published body keeps every open row and every
 # decided row some seat has not acked; acked decided rows (newest first) fill the rest of BOARD_BUDGET, and
 # a line says how many older acked rows are left out. Nothing open or unacked is ever dropped: if those
@@ -175,4 +209,5 @@ if [[ $publish -eq 1 ]]; then
   rm -f "$tmp"
   echo
   echo "published: https://github.com/$repo/issues/$existing"
+  board_stale_clear "$repo" "$assignee"
 fi

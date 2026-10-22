@@ -1,11 +1,23 @@
 #!/usr/bin/env bash
 # decision.sh — file, close, or sweep pending decisions.
+#   decision.sh --help   this header, and the rule every row's text is written to (ask_inline_check, lib.sh ASK_INLINE_RULE):
+#       the content inline, or a URL to a file or diff at a commit; never a local path or "see session". new, record and
+#       revise refuse it before anything is written, so compose the row that way.
 #   decision.sh new [--repo <owner/repo>] [--decides <owner/repo>] --title "<plain question>" --assignee <login> --by <LABEL | login/LABEL>
 #       --decision "<text>" --unblocks "<text>" --waits "<text>" --recommendation "<text>"
 #       --approve-with "<exact phrase>" --record "<repo commit — path>"
 #       [--seat <LABEL | login/LABEL>]... [--hands] [--project <owner>/<number>]...
 #       [--milestone "<title>"] [--waits-on <seat | owner/repo#N>]...
+#       [--sub "<slug>: <one-line act>"]... | [--follows <program owner/repo#N | url> --sub-act <slug>]
 #     or: decision.sh new [--repo ...] [--decides ...] --title ... --assignee ... --by ... --body-file <md> [--seat ...] [--hands] [--project ...]
+#   --sub (repeatable) files a PROGRAM row: its body gets the section `## Sub-acts` right after `## Decision`, one line per
+#   sub-act (sub_acts_render, lib.sh), and the decider's one approving answer on it pre-authorizes every listed sub-act.
+#   --follows with --sub-act files a FOLLOW-ON row for one listed sub-act of an approved program: the line "Follows:
+#   <owner/repo#N> sub-act <slug>" (follows_line) is appended to its `## Decision`; it is refused, before anything is
+#   written, unless the program covers that sub-act now (program_cover: the sub-act listed, the program approved, not
+#   revise-pending, not rejected) and --assignee is an assignee of the program. A follow-on is covered: the board renders
+#   it under its program, never as the decider's turn, and its seat closes it with close --covered. A row is a program
+#   or a follow-on, never both; anything not listed is a normal row.
 #   --by names the filing seat: its seen ack (ack_line, lib.sh) is the row's first comment, so the filer is current on
 #   the row it filed and the relay never sends the filing back to it (event_actors, lib.sh).
 #   The row is filed in --repo, by default the roster's "repo" (the home of the seats working from this checkout).
@@ -17,13 +29,22 @@
 #   Every write (new, record, close) refuses a public or public-intended repo (coord_write_guard, lib.sh).
 #   decision.sh close <owner/repo#N | url> --words "<verbatim ruling>" --record "<repo commit | comment url>" --by <LABEL | login/LABEL> [--board <owner/repo>] [--next "<act>"]
 #       the close comment's last line is the closing seat's BEAST-ACK (state=seen); the other seats ack separately
+#   decision.sh close <owner/repo#N | url> --covered --by <LABEL | login/LABEL> [--board <owner/repo>] [--next "<act>"]
+#       closes a follow-on row under its program, by the row's own seat (row_seat_require), with no words: refused unless
+#       its Follows: line names a sub-act the program covers now (program_cover); the close line is "Closed as covered by
+#       <the program's approving answer url> by <seat id>" (row_close_comment, kind covered)
 #   decision.sh revise <owner/repo#N | url> --by <LABEL | login/LABEL> [--decision …] [--unblocks …] [--waits …]
-#       [--recommendation …] [--approve-with "<exact phrase>"] [--record …] | --body-file <md>
-#       answers the decider's revise: by revising the row itself: refuses unless the decider's standing answer on the row
-#       is a revise: (row_answer_url), rewrites only the named sections of the body (section_replace; --approve-with
+#       [--recommendation …] [--approve-with "<exact phrase>"] [--record …] [--sub "<slug>: <act>"]... | --body-file <md>
+#       revises the row itself, in one of two cases. (a) The decider's standing answer on the row is a revise:
+#       (row_answer_url): the revision answers it. (b) The row has no standing answer yet (none, or only an approval older
+#       than its latest amend line): its own seat amends it (row_seat_require: --by is the row's filer or one of its seats),
+#       when the facts under it changed. Refused on a closed row and once the decider's standing answer is an approve or a
+#       reject. Either case rewrites only the named sections of the body (section_replace; --sub replaces the program's
+#       whole `## Sub-acts`; --approve-with
 #       swaps the quoted phrase and keeps the paragraph; --body-file replaces the six, each checked by section_required),
 #       then posts ONE comment whose first line is the amend line (amend_line: "revised after <revise url>; changed:
-#       <sections>"). An approval older than the amend no longer counts (row_answer_url), and until the amend no approval
+#       <sections>", or in case (b) "amended by <seat id> before any answer; changed: <sections>") and whose last line is the
+#       body line (body_line). An approval older than the amend no longer counts (row_answer_url), and until the amend no approval
 #       closes the row (row_revise_pending: decision.sh close, pr.sh close --merge, publish.sh merge). A reply comment
 #       is not a revision. On a pull request, push the change first; --body-file then replaces the PR body whole.
 #   decision.sh restore <owner/repo#N | url> --by <LABEL | login/LABEL>
@@ -61,7 +82,7 @@ cmd="${1:-}"; shift || true
 case "$cmd" in
   new)
     repo=""; decides=""; title=""; assignee=""; by=""; hands=0; body_file=""; projects=(); seats=(); ms=""; waits=()
-    d=""; u=""; w=""; r=""; a=""; rec=""
+    d=""; u=""; w=""; r=""; a=""; rec=""; subs=(); follows=""; subact=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --repo) repo="$2"; shift 2 ;;
@@ -81,10 +102,15 @@ case "$cmd" in
         --record) rec="$2"; shift 2 ;;
         --milestone) ms="$2"; shift 2 ;;
         --waits-on) wr="$(waits_on_ref "$2")" || exit 1; waits+=("$wr"); shift 2 ;;
+        --sub) subs+=("$2"); shift 2 ;;
+        --follows) follows="$2"; shift 2 ;;
+        --sub-act) subact="$2"; shift 2 ;;
         *) die "unknown argument $1" ;;
       esac
     done
     [[ -n "$title" && -n "$assignee" && -n "$by" ]] || die "new needs --title, --assignee and --by <the filing seat>"
+    [[ -z "$follows" && -z "$subact" ]] || [[ -n "$follows" && -n "$subact" ]] || die "a follow-on row takes --follows <program row> and --sub-act <slug> together"
+    [[ -z "$follows" || ${#subs[@]} -eq 0 ]] || die "a row is a program (--sub) or a follow-on (--follows), not both"
     by="$(seat_id "$by")" || exit 1
     [[ -n "$repo" ]] || repo="$(roster_repo)" || exit 1
     [[ -z "$decides" || "$decides" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "--decides '$decides' is not owner/repo"
@@ -131,6 +157,26 @@ EOF
         { print }
         END { if (on) print line }' "$tmp" > "$tmp.d" && mv "$tmp.d" "$tmp"
     fi
+    if [[ -n "$follows" ]]; then
+      # The follow-on's marker is a line at the end of ## Decision (follows_line), like Decides:.
+      frn="$(parse_issue_ref "$follows")" || exit 1; read -r fr fn <<< "$frn"
+      fl="$(follows_line "$fr#$fn" "$subact")" || exit 1
+      FL="$fl" awk '
+        $0 == "## Decision" { on = 1; print; next }
+        on && /^## / { print ENVIRON["FL"]; print ""; on = 0 }
+        { print }
+        END { if (on) print ENVIRON["FL"] }' "$tmp" > "$tmp.f" && mv "$tmp.f" "$tmp"
+    fi
+    if [[ ${#subs[@]} -gt 0 ]]; then
+      # The program's sub-acts: the section ## Sub-acts right after ## Decision (sub_acts_render, the one writer).
+      [[ -z "$(section "$SUB_ACTS_SECTION" < "$tmp")" ]] || die "new decision '$title': the body already has '## $SUB_ACTS_SECTION': pass the sub-acts in the body or with --sub, not both"
+      sl="$(sub_acts_render "${subs[@]}")" || exit 1
+      SL="$sl" H="## $SUB_ACTS_SECTION" awk '
+        $0 == "## Decision" { on = 1; print; next }
+        on && /^## / { print ENVIRON["H"]; print ENVIRON["SL"]; print ""; on = 0 }
+        { print }
+        END { if (on) { print ""; print ENVIRON["H"]; print ENVIRON["SL"] } }' "$tmp" > "$tmp.s" && mv "$tmp.s" "$tmp"
+    fi
     if [[ ${#waits[@]} -gt 0 ]]; then
       # Each dependency is a "Waits on: <ref>" line at the end of ## Waits (the one shape, waits_on_line).
       wl="$(for wr in "${waits[@]}"; do waits_on_line "$wr"; done)" || exit 1
@@ -147,6 +193,18 @@ $body"
     for h in "${ROW_SECTIONS[@]}"; do
       section_required "$h" "$body" "new decision '$title'" >/dev/null
     done
+    # A program or a follow-on is read from the body itself (a --body-file one too), before anything is written.
+    progsubs="$(sub_acts_parse "new decision '$title'" "$body")" || exit 1
+    fol="$(follows_parse "new decision '$title'" "$body")" || exit 1
+    [[ -z "$progsubs" || -z "$fol" ]] || die "new decision '$title': a row is a program (## $SUB_ACTS_SECTION) or a follow-on (Follows:), not both"
+    cover=""
+    if [[ -n "$fol" ]]; then
+      IFS=$'\t' read -r fref fslug <<< "$fol"
+      cover="$(program_cover "$fref" "$fslug")" || exit 1
+      frn="$(parse_issue_ref "$fref")" || exit 1; read -r fr fn <<< "$frn"
+      issue_get "$fr" "$fn" | jq -e --arg a "$assignee" 'any(.assignees[]; .login == $a)' >/dev/null \
+        || die "new decision '$title': --assignee $assignee is not an assignee of the program $fref: a follow-on is assigned to the program's decider"
+    fi
     phrase="$(approve_phrase "$body")"
     [[ -n "$phrase" ]] || die "new decision '$title': its '## Approve with' section has no double-quoted phrase (the exact words that approve it, in \"…\")"
     [[ "$phrase$a" != *"|"* ]] || die "new decision '$title': the approving phrase '${a:-$phrase}' carries '|': one exact approving phrase per row; a choice between options is a desk ask (desk.sh ask <SEAT> --text \"…\" --options \"a | b\")"
@@ -187,6 +245,8 @@ $(body_line "$body")" >/dev/null \
         || die "$url is filed but the filer's ack was NOT posted (named above): rerun the same decision.sh new, which reuses the row and posts it"
     fi
     echo "$url"
+    [[ -z "$cover" ]] || echo "covered: sub-act $fslug of the program $fref, approved at $cover; once the sub-act is done: decision.sh close $url --covered --by $by" >&2
+    [[ -z "$progsubs" ]] || echo "program: the decider's one approving answer pre-authorizes $(cut -f1 <<< "$progsubs" | paste -sd, - | sed 's/,/, /g'); file each as a follow-on (decision.sh new --follows $url --sub-act <slug> …) once approved" >&2
     for p in "${projects[@]:-}"; do
       [[ -n "$p" ]] || continue
       owner="${p%%/*}"; number="${p##*/}"
@@ -195,7 +255,7 @@ $(body_line "$body")" >/dev/null \
     ;;
   close)
     ref="${1:-}"; shift || true
-    words=""; rec=""; by=""; board=""; rejected=0; next="execute on the words"
+    words=""; rec=""; by=""; board=""; rejected=0; covered=0; next=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --next) next="$2"; shift 2 ;;
@@ -204,15 +264,36 @@ $(body_line "$body")" >/dev/null \
         --by) by="$2"; shift 2 ;;
         --board) board="$2"; shift 2 ;;
         --rejected) rejected=1; shift ;;
+        --covered) covered=1; shift ;;
         *) die "unknown argument $1" ;;
       esac
     done
-    [[ -n "$ref" && -n "$words" && -n "$rec" && -n "$by" ]] || die "close needs <issue> --words --record --by [--rejected]"
+    if [[ $covered -eq 1 ]]; then
+      [[ -n "$ref" && -n "$by" ]] || die "close --covered needs <issue> --by <SEAT>"
+      [[ -z "$words$rec" && $rejected -eq 0 ]] || die "close --covered takes no --words, --record or --rejected: a covered close quotes no words; its record is the program's approving answer"
+      [[ -n "$next" ]] || next="execute the sub-act"
+    else
+      [[ -n "$ref" && -n "$words" && -n "$rec" && -n "$by" ]] || die "close needs <issue> --words --record --by [--rejected], or <issue> --covered --by"
+      [[ -n "$next" ]] || next="execute on the words"
+    fi
     [[ -n "$board" ]] || board="$(board_repo)"
     by="$(seat_id "$by")" || exit 1
     rn="$(parse_issue_ref "$ref")" || exit 1; read -r repo number <<< "$rn"
     coord_write_guard "$repo" "$by"
     issue_get "$repo" "$number" | jq -e '.pull_request == null' >/dev/null || die "$repo#$number is a pull request: close it with pr.sh close (--merge or --rejected)"
+    if [[ $covered -eq 1 ]]; then
+      # A follow-on closed under its program: its own seat, its Follows: line, and the program covering that sub-act now.
+      who="$repo#$number"
+      rd="$(row_read "$repo" "$number")" || exit 1
+      [[ "$(jq -r .issue.state <<< "$rd")" == open ]] || die "$who is closed"
+      fol="$(follows_parse "$who" "$(jq -r '.issue.body // ""' <<< "$rd")")" || exit 1
+      [[ -n "$fol" ]] || die "$who is not a follow-on row (its body has no 'Follows: <program> sub-act <slug>' line): it closes on the decider's words"
+      row_seat_require "$rd" "$by" "$who" "closes it as covered"
+      IFS=$'\t' read -r fref fslug <<< "$fol"
+      ans="$(program_cover "$fref" "$fslug")" || exit 1
+      row_close "$repo" "$number" "" "$ans" "$by" "$next" covered "$board"
+      exit 0
+    fi
     if [[ $rejected -eq 0 ]]; then
       pend="$(row_revise_pending "$(row_read "$repo" "$number")")" || exit 1
       [[ -z "$pend" ]] || revise_pending_refusal "$pend"
@@ -221,11 +302,12 @@ $(body_line "$body")" >/dev/null \
     ;;
   revise)
     ref="${1:-}"; shift || true
-    by=""; body_file=""; names=(); vals=()
+    by=""; body_file=""; names=(); vals=(); subs=()
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --by) by="$2"; shift 2 ;;
         --body-file) body_file="$2"; shift 2 ;;
+        --sub) subs+=("$2"); shift 2 ;;
         --decision) names+=("Decision"); vals+=("$2"); shift 2 ;;
         --unblocks) names+=("Unblocks"); vals+=("$2"); shift 2 ;;
         --waits) names+=("Waits"); vals+=("$2"); shift 2 ;;
@@ -235,7 +317,8 @@ $(body_line "$body")" >/dev/null \
         *) die "unknown argument $1" ;;
       esac
     done
-    [[ -n "$ref" && -n "$by" ]] || die "usage: decision.sh revise <issue> --by <SEAT> (--decision … | --unblocks … | --waits … | --recommendation … | --approve-with \"…\" | --record …)... | --body-file <md>"
+    if [[ ${#subs[@]} -gt 0 ]]; then sl="$(sub_acts_render "${subs[@]}")" || exit 1; names+=("$SUB_ACTS_SECTION"); vals+=("$sl"); fi
+    [[ -n "$ref" && -n "$by" ]] || die "usage: decision.sh revise <issue> --by <SEAT> (--decision … | --unblocks … | --waits … | --recommendation … | --approve-with \"…\" | --record … | --sub \"<slug>: <act>\"...)... | --body-file <md>"
     [[ -z "$body_file" || ${#names[@]} -eq 0 ]] || die "revise takes the sections to change, or --body-file, not both"
     [[ -n "$body_file" || ${#names[@]} -gt 0 ]] || die "revise needs the sections to change (--decision, --unblocks, --waits, --recommendation, --approve-with, --record) or --body-file: a revision changes the row, a reply comment does not"
     [[ -z "$body_file" || -f "$body_file" ]] || die "no body file $body_file"
@@ -252,9 +335,13 @@ $(body_line "$body")" >/dev/null \
     phrase="$(row_phrase "$who" "$info" 2>/dev/null)"
     rev="$(row_answer_url "$rd" "$phrase" revise 2>/dev/null)" || exit 1
     if [[ -z "$rev" ]]; then
-      standing="none"
-      for k in approve reject; do u="$(row_answer_url "$rd" "$phrase" "$k" 2>/dev/null)" || exit 1; [[ -z "$u" ]] || standing="$k ($u)"; done
-      die "$who: the decider's standing answer is not a revise: (it is $standing): decision.sh revise answers a revise only; a question back is a reply on the row"
+      # No revise: to answer: the row's own seat amends it, only while the decider has given no standing answer (an
+      # approval older than the latest amend line is none: it no longer counts).
+      for k in approve reject; do
+        u="$(row_answer_url "$rd" "$phrase" "$k" 2>/dev/null)" || exit 1
+        [[ -z "$u" ]] || die "$who: the decider has already answered ($k: $u): a seat amends only a row with no answer yet; a change now is the decider's revise: or a new row"
+      done
+      row_seat_require "$rd" "$by" "$who" "amends it before the decider answers"
     fi
     old="$(jq -r '.body // ""' <<< "$info")"
     tmp="$(mktemp)"
@@ -262,8 +349,8 @@ $(body_line "$body")" >/dev/null \
       cp "$body_file" "$tmp"
       new="$(cat "$tmp")"
       if [[ $is_pr -eq 0 ]]; then
-        for h in "${ROW_SECTIONS[@]}"; do
-          section_required "$h" "$new" "revise $who" >/dev/null
+        for h in "${ROW_SECTIONS[@]}" "$SUB_ACTS_SECTION"; do
+          [[ "$h" == "$SUB_ACTS_SECTION" ]] || section_required "$h" "$new" "revise $who" >/dev/null
           [[ "$(printf '%s\n' "$old" | section "$h")" == "$(printf '%s\n' "$new" | section "$h")" ]] || names+=("$h")
         done
       else
@@ -290,6 +377,9 @@ $(body_line "$body")" >/dev/null \
     ask_inline_check "revise $who" "$new"
     if [[ $is_pr -eq 0 ]]; then
       waits_on_parse "revise $who" "$new" >/dev/null || exit 1
+      rs="$(sub_acts_parse "revise $who" "$new")" || exit 1
+      rf="$(follows_parse "revise $who" "$new")" || exit 1
+      [[ -z "$rs" || -z "$rf" ]] || die "revise $who: a row is a program (## $SUB_ACTS_SECTION) or a follow-on (Follows:), not both"
       np="$(approve_phrase "$new")"
       [[ -n "$np" ]] || die "revise $who: its '## Approve with' section has no double-quoted phrase"
       [[ "$np" != *"|"* ]] || die "revise $who: the approving phrase '$np' carries '|': one exact approving phrase per row; a choice between options is a desk ask"
@@ -298,24 +388,36 @@ $(body_line "$body")" >/dev/null \
     fi
     pend="$(row_revise_pending "$rd")" || exit 1
     if [[ "$new" == "$old" ]]; then
-      # A rerun after the body edit landed and the amend comment did not: post the comment only.
-      [[ -n "$pend" ]] || die "revise $who: nothing to change: the body already carries these sections, and the row was amended after $rev"
+      # A rerun after the body edit landed and the amend comment did not: post the comment only. Answering a revise:, the
+      # amend is missing while the revise is pending; amending an unanswered row, while no body line records this body.
+      if [[ -n "$rev" ]]; then
+        [[ -n "$pend" ]] || die "revise $who: nothing to change: the body already carries these sections, and the row was amended after $rev"
+      else
+        last="$(body_record_last "$(jq -c .comments <<< "$rd")")" || die "$who: cannot read the row's comments"
+        [[ "${last%%$'\t'*}" != "$(body_digest "$new")" ]] || die "revise $who: nothing to change: the body already carries these sections, recorded at ${last#*$'\t'}"
+      fi
       echo "the body of $who already carries this revision; posting the amend line only" >&2
     else
       issue_edit_body "$repo" "$number" "$tmp"
     fi
     rm -f "$tmp"
     # The changed sections in the body's own order, once each.
-    changed="$(for h in "${ROW_SECTIONS[@]}" "the PR body"; do for n in "${names[@]:-}"; do if [[ "$n" == "$h" ]]; then echo "$h"; break; fi; done; done | paste -sd, - | sed 's/,/, /g')"
-    line="$(amend_line "revised after $rev; changed: $changed")"
-    summary="$(for h in "${ROW_SECTIONS[@]}"; do
+    changed="$(for h in "${ROW_SECTIONS[@]}" "$SUB_ACTS_SECTION" "the PR body"; do for n in "${names[@]:-}"; do if [[ "$n" == "$h" ]]; then echo "$h"; break; fi; done; done | paste -sd, - | sed 's/,/, /g')"
+    if [[ -n "$rev" ]]; then
+      line="$(amend_line "revised after $rev; changed: $changed")"
+      why="The row's body is revised in answer to the decider's revise (by seat $by)."
+    else
+      line="$(amend_line "amended by $by before any answer; changed: $changed")"
+      why="The row's body is amended by its seat $by before the decider answered: the facts under it changed."
+    fi
+    summary="$(for h in "${ROW_SECTIONS[@]}" "$SUB_ACTS_SECTION"; do
         [[ ",$(sed 's/, /,/g' <<< "$changed")," == *",$h,"* ]] || continue
         first="$(printf '%s\n' "$new" | section "$h" | sed '/^[[:space:]]*$/d' | head -1 | cut -c1-200)"
         echo "- $h: $first"
       done)"
     cbody="$line
 
-The row's body is revised in answer to the decider's revise (by seat $by). ${summary:+The changed sections now open:
+$why ${summary:+The changed sections now open:
 $summary
 
 }Approve with \"$np\", or answer again; an approval given before this line no longer counts.
@@ -344,12 +446,7 @@ $(body_line "$new")"
     info="$(jq '.issue' <<< "$rd")"
     who="$repo#$number"
     [[ "$(jq -r .state <<< "$info")" == open ]] || die "$who is closed: a decided row is not restored"
-    # Seat-only: the row's filer (row_filer) or one of its seats (row_seats).
-    filer="$(tag_jq -r 'row_filer(.comments) // empty' <<< "$rd")" || die "$who: cannot read the row's filer"
-    [[ -z "$filer" ]] || filer="$(seat_resolve "$filer" 2>/dev/null || true)"
-    seats="$(row_seats "$(jq -c .issue.labels <<< "$rd")" "$(jq -c .comments <<< "$rd")")" || exit 1
-    [[ "$by" == "$filer" ]] || grep -qxF -- "$by" <<< "$seats" \
-      || die "$who: $by is neither the row's filer (${filer:-none}) nor one of its seats ($(paste -sd, - <<< "$seats" | sed 's/^$/none/')): only the row's own seat restores its body"
+    row_seat_require "$rd" "$by" "$who" "restores its body"
     pend="$(row_revise_pending "$rd")" || exit 1
     [[ -z "$pend" ]] || die "$who: the decider asked for a revision at $pend: decision.sh revise answers it (--body-file restores and revises in one act); a restore is not a revision"
     if jq -e '.pull_request != null' <<< "$info" >/dev/null; then list=("${PR_ROW_SECTIONS[@]}"); else list=("${ROW_SECTIONS[@]}"); fi
@@ -449,5 +546,10 @@ $(body_line "$old")"
     [[ "$url" == https://github.com/* ]] || die "record: the row was not filed: $url"
     "$0" close "$url" --words "$words" --record "$rec" --by "$by" $([[ $rejected -eq 1 ]] && echo --rejected)
     ;;
-  *) die "usage: decision.sh new|close|revise|restore|record|inbox" ;;
+  -h|--help|help)
+    sed -n '2,/^source /p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
+    echo
+    echo "A row's text (--title, the sections or --body-file) carries: $ASK_INLINE_RULE."
+    exit 0 ;;
+  *) die "usage: decision.sh new|close|revise|restore|record|inbox|--help — a row's text carries $ASK_INLINE_RULE" ;;
 esac

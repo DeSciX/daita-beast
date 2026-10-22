@@ -83,6 +83,8 @@ h2 { font: 600 1.2rem/1.25 var(--display); margin: 0; text-wrap: balance; overfl
 .chip { font: 600 0.74rem var(--mono); padding: 2px 8px; border-radius: 99px; background: var(--sunk); color: var(--muted); white-space: nowrap; }
 .chip.hands { background: var(--hands-bg); color: var(--hands); }
 .chip.latitude { background: var(--hands-bg); color: var(--hands); }
+.chip.covered, .chip.program { background: var(--sunk); color: var(--accent); }
+.card.follow { margin-left: 1.5rem; }
 .chip.ok { background: var(--sunk); color: var(--ok); }
 .chip.miss { background: var(--hands-bg); color: var(--hands); }
 .chip.warn { background: var(--warn-bg); color: var(--warn); }
@@ -353,11 +355,39 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
      quoted phrase of a "## Approve with" section when the body has that heading (no quoted phrase there is
      malformed), otherwise a bare "approve". */
   function parseItem(it) {
-    if (!isPR(it)) { var d = parseBody(it.body, SECTIONS); d.kind = "decision"; return d; }
+    if (!isPR(it)) { var d = parseBody(it.body, SECTIONS); d.kind = "decision"; d.subs = subActsOf(it.body); d.follows = followsOf(it.body); return d; }
     var p = parseBody(it.body, PR_SECTIONS), has = /^##\s+Approve with\s*$/im.test(String(it.body || ""));
     return { kind: "pr", sec: p.sec, missing: p.missing, phrase: has ? p.phrase : "approve", nested: has && p.nested, approveWith: has };
   }
   function titleOf(it) { return String(it.title || "").replace(/^Decision:\s*/i, ""); }
+  /* Programs and follow-ons (lib.sh SUB_ACT_RE / FOLLOWS_RE and sub_acts_parse / follows_parse, the owners;
+     plugin/tests/regex-mirror.test.mjs and plugin/tests/program.test.mjs hold the twins alike). A program row lists its
+     sub-acts in "## Sub-acts", "- <slug>: <act>" each; the decider's one approving answer pre-authorizes all of them. A
+     follow-on row carries "Follows: <owner/repo#N> sub-act <slug>": it is rendered under its program and is never the
+     viewer's turn. A malformed line reads as none here (the scripts refuse to write one and board.sh names it). */
+  var SUBACT_RE = /^- ([a-z0-9][a-z0-9-]*): (\S.*)$/;
+  var FOLLOWS_RE = /^Follows: ([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[0-9]+) sub-act ([a-z0-9][a-z0-9-]*)$/;
+  function subActsOf(body) {
+    var on = false, out = [];
+    String(body || "").split(/\r?\n/).forEach(function (l) {
+      if (/^## /.test(l)) { on = l === "## Sub-acts"; return; }
+      var m = on && SUBACT_RE.exec(l.replace(/\s+$/, ""));
+      if (m) out.push({ slug: m[1], act: m[2] });
+    });
+    return out;
+  }
+  function followsOf(body) {
+    var got = [];
+    String(body || "").split(/\r?\n/).forEach(function (l) { var m = FOLLOWS_RE.exec(l.replace(/\s+$/, "")); if (m) got.push({ ref: m[1], slug: m[2] }); });
+    return got.length === 1 ? got[0] : null;
+  }
+  /* The rows a body's "Waits on:" lines name (lib.sh waits_on_parse, the one reader; WAITS_RE its twin): a row that names
+     one still open is queued behind it (lib.sh row_queued_behind; queuedOf below). A seat ref never queues a row. */
+  function waitsOnRows(body) {
+    var out = [];
+    String(body || "").split(/\r?\n/).forEach(function (l) { var m = WAITS_RE.exec(l.replace(/\s+$/, "")); if (m && m[1].indexOf("#") >= 0) out.push(m[1]); });
+    return out;
+  }
   function linkify(text) {
     var frag = document.createDocumentFragment(), re = /https:\/\/[^\s<>()"']+/g, last = 0, m;
     while ((m = re.exec(text))) {
@@ -437,8 +467,12 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     for (var i = lines.length - 1; i >= 0; i--) if (lines[i].trim()) { last = lines[i]; break; }
     var cl = CLOSER_RE.exec(String(body || ""));
     if (cl && ms(closedAt || createdAt) !== null) return { seat: cl[1], at: closedAt || createdAt, state: "seen" };
-    var m = ACK_RE.exec(first) || ACK_RE.exec(last);
-    if (m && ms(m[2]) !== null) { var nx = /\snext=(.+)$/.exec(m.input); return { seat: m[1], at: m[2], state: m[3], next: nx ? nx[1].trim() : "" }; }
+    var m = ACK_RE.exec(first), onLast = false;
+    if (!m) { m = ACK_RE.exec(last); onLast = !!m; }
+    /* An ack on a comment's last line is the seat's ack at the post (lib.sh seat_acks): the later of its at= and created_at. */
+    if (m && ms(m[2]) !== null) { var nx = /\snext=(.+)$/.exec(m.input), at = m[2];
+      if (onLast && ms(createdAt) !== null && String(createdAt) > at) at = String(createdAt);
+      return { seat: m[1], at: at, state: m[3], next: nx ? nx[1].trim() : "" }; }
     return /^BEAST-ACK/.test(first) || /^BEAST-ACK/.test(last) ? "malformed" : null;
   }
   function deriveRow(it, s, phrase) {
@@ -475,8 +509,10 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
   /* ---------- desks: the one parser of a desk's comments ---------- */
   /* A desk is one open issue per seat (labels desk + seat:<id>, title "Desk: <id>"). Its comments carry:
        BEAST-ASK n=<seq> seat=<id> at=<UTC>[ milestone="<title>"]   then the question lines, optional "options: a | b | c",
-                                              optional "default: a", "Waits on: <ref>" lines (lib.sh ASK_HEADER_RE / WAITS_ON_RE)
-       BEAST-ANSWER n=<seq> <text>            the answer to ask n
+                                              optional "default: a", "Waits on: <ref>" lines (lib.sh ASK_HEADER_RE / WAITS_ON_RE),
+                                              optional "Replaces: n=<k>" (desk.sh ask --supersedes; lib.sh ASK_REPLACES_RE)
+       BEAST-ANSWER n=<seq> <text>            the answer to ask n (desk.sh answer, recording words typed to a session,
+                                              ends it with the recorder's BEAST-ACK line, which is not answer text)
        BEAST-WITHDRAW n=<seq>                 ask n withdrawn by the seat
        BEAST-MSG from=<composite> to=<composite> re=<ref|none> blocking=no at=<UTC>   the seat-to-seat tag (lib.sh MSG_HEADER_RE), then the body
      A comment that is none of these and starts with no BEAST- line is a message from its author (the viewer, today).
@@ -486,6 +522,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
      acted on: counted in `history`, never listed. With no ack by the seat every line is in the window. */
   var ASK_RE = /^BEAST-ASK n=(\d+) seat=((?:[A-Za-z0-9-]+\/)?[A-Z0-9_-]+) at=(\S+)(?: milestone="([^"]+)")?\s*$/;
   var WAITS_RE = /^Waits on: ([A-Za-z0-9-]+\/[A-Z0-9_-]+|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[0-9]+)$/;
+  var REPLACES_RE = /^Replaces: n=([0-9]+)$/;
   var ANSWER_RE = /^BEAST-ANSWER n=(\d+)(?: (.*))?$/;
   var WITHDRAW_RE = /^BEAST-WITHDRAW n=(\d+)\s*$/;
   var MSG_RE = /^BEAST-MSG from=([a-z0-9][a-z0-9-]*\/[A-Z0-9_-]+\/[A-Za-z0-9-]+) to=([a-z0-9][a-z0-9-]*\/[A-Z0-9_-]+\/[A-Za-z0-9-]+) re=([^ ]+) blocking=no at=([^ ]+)$/;
@@ -513,11 +550,13 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
         if (ms(m[3]) === null) return bad(c, "at= is not a time");
         if (byN[m[1]]) return bad(c, "a second ask n=" + m[1]);
         if (deskSeat && !seatMatch(m[2], deskSeat)) return bad(c, "seat=" + m[2] + " on the desk of " + deskSeat);
-        var q = [], options = null, def = null, why = null, waits = [];
+        var q = [], options = null, def = null, why = null, waits = [], replaces = null;
         rest.forEach(function (l) {
           var o = /^options:\s*(.*)$/.exec(l), d = /^default:\s*(.*)$/.exec(l), w;
           if (/^Waits on:/.test(l)) {
             if ((w = WAITS_RE.exec(l.replace(/\s+$/, "")))) waits.push(w[1]); else why = why || "a Waits on: line that is not Waits on: <seat id | owner/repo#N>";
+          } else if (/^Replaces:/.test(l)) {
+            if ((w = REPLACES_RE.exec(l.replace(/\s+$/, ""))) && replaces === null) replaces = Number(w[1]);
           } else if (o) {
             if (options) why = why || "two options: lines";
             options = o[1].split("|").map(function (x) { return x.trim(); });
@@ -531,7 +570,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
         if (!q.length) why = why || "no question line";
         if (!why && options && def !== null && options.indexOf(def) < 0) why = "default: " + def + " is not one of the options";
         if (why) return bad(c, why);
-        var ask = { n: Number(m[1]), seat: m[2], at: m[3], milestone: m[4] || null, waits: waits, question: q.join("\n"), options: options, def: def, url: c.html_url, created_at: c.created_at, answer: null, withdrawn: null };
+        var ask = { n: Number(m[1]), seat: m[2], at: m[3], milestone: m[4] || null, waits: waits, replaces: replaces, question: q.join("\n"), options: options, def: def, url: c.html_url, created_at: c.created_at, answer: null, withdrawn: null };
         byN[m[1]] = ask; out.asks.push(ask);
         return;
       }
@@ -554,7 +593,8 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
       if (!ask) return bad(c, "names no ask n=" + m[1] + " on this desk");
       if (ask.answer || ask.withdrawn) return bad(c, "ask n=" + m[1] + " is no longer open");
       if (x.form === "WITHDRAW") { ask.withdrawn = { at: c.created_at, url: c.html_url }; return; }
-      var text = [m[2] || ""].concat(x.rest).join("\n").trim();
+      /* a seat that records the decider's typed words ends the comment with its own ack line: not part of the answer */
+      var text = [m[2] || ""].concat(x.rest.filter(function (l) { return !/^BEAST-ACK /.test(l); })).join("\n").trim();
       if (!text) return bad(c, "BEAST-ANSWER n=" + m[1] + " carries no answer text");
       ask.answer = { text: text, at: c.created_at, url: c.html_url, by: c.user && c.user.login };
     });
@@ -637,7 +677,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
   function answerable(it) {
     var r = repoOf(it); if (!r) return null;
     var key = keyOf(it, r), s = state(key), p = parseItem(it);
-    if (p.missing.length || !p.phrase || s.answered || s.gap || s.mode || s.pending || s.ambiguous) return null;
+    if (p.missing.length || !p.phrase || s.answered || s.gap || s.mode || s.pending || s.ambiguous || p.follows || queuedOf(it)) return null;
     return { it: it, r: r, key: key, phrase: p.phrase };
   }
   function renderBulk() {
@@ -728,9 +768,57 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
      executed a part, is blocked), never who decides (docs/protocol.md: the board is a queue of rows waiting on the
      decider's word). The newest current blocked / executed ack is then a muted note after "Your turn", with the ack's
      next= text when it is blocked. since: when the viewer's turn began (waitSince; the filing until the thread is read). */
+  /* The state of a row a Waits on: line names: open or closed from the rows the page holds (the open board, the decided
+     list), else read once with issue_read get (refSt, re-rendered when it lands). Until it is known the row is not
+     treated as queued. */
+  var refSt = {};
+  function refState(ref) {
+    var k = String(ref).toLowerCase(), hit = null;
+    (items || []).forEach(function (it) { if (keyOf(it, repoOf(it)).toLowerCase() === k) hit = "open"; });
+    if (hit) return hit;
+    (ditems || []).forEach(function (it) { if (keyOf(it, repoOf(it)).toLowerCase() === k) hit = "closed"; });
+    if (hit) return hit;
+    if (refSt[k]) return refSt[k];
+    var m = /^([^/]+)\/([^#]+)#(\d+)$/.exec(ref);
+    if (!m || !mcp) return "unknown";
+    refSt[k] = "pending";
+    read(function () { return mcp.callTool(SERVER, "issue_read", { method: "get", owner: m[1], repo: m[2], issue_number: Number(m[3]) }, { cache: { staleTime: 60000 } }); })
+      .then(function (res) { var p = res && res.payload; refSt[k] = p && (p.state === "open" || p.state === "closed") ? p.state : "unknown"; render(); },
+            function (e) { refSt[k] = "unknown"; console.warn("board: cannot read " + ref + " (a Waits on: row): " + explain(e)); render(); });
+    return "pending";
+  }
+  /* queuedOf(it): the first row its Waits on: lines name that is still open, or null (lib.sh row_queued_behind's twin). */
+  function queuedOf(it) {
+    var refs = waitsOnRows(it.body);
+    for (var i = 0; i < refs.length; i++) if (refState(refs[i]) === "open") return refs[i];
+    return null;
+  }
+  /* followOf(row): a follow-on's {ref, slug, covered, why}: covered while the viewer's standing answer on the program is
+     an approve (standingOf, read from the program's thread when the page holds it); else why it is not, or "…" while the
+     program's thread is not read. The scripts measure it for real (lib.sh program_cover); the page only shows it. */
+  function followOf(row) {
+    var f = row.p.follows;
+    if (!f) return null;
+    var prog = null, k = String(f.ref).toLowerCase();
+    (items || []).concat(ditems || []).forEach(function (it) { if (keyOf(it, repoOf(it)).toLowerCase() === k) prog = it; });
+    var out = { ref: f.ref, slug: f.slug, covered: false, why: "the program is not on your board" };
+    if (!prog) return out;
+    var ps = state(keyOf(prog, repoOf(prog))), pp = parseItem(prog);
+    if (!pp.subs.some(function (x) { return x.slug === f.slug; })) { out.why = "the program lists no sub-act " + f.slug; return out; }
+    if (!ps.comments) { out.why = "…"; return out; }
+    var w = standingOf(ps.comments, pp.phrase, login);
+    if (w.kind === "approve") { out.covered = true; out.why = ""; out.answer = w.answer.html_url; }
+    else out.why = w.kind === "reject" ? "the program was rejected" : w.kind === "revise" ? "a revision of the program is pending" : w.stale ? "the program was amended after your approval" : "the program is not approved yet";
+    return out;
+  }
   function turnOf(row) {
     var s = row.s, d = row.d, seats = d.seats, names = seats.length ? seats.map(seatText).join(", ") : "the seat";
     var since = s.since || row.it.created_at || null;
+    var fo = followOf(row);
+    if (fo) return fo.covered ? { mine: false, cls: "done", text: "Covered by " + fo.ref + " (" + fo.slug + ")" }
+                              : { mine: false, cls: "wait", text: "Under " + fo.ref + " (" + fo.slug + ")" + (fo.why ? ": " + fo.why : "") };
+    var q = row.p.kind === "decision" || row.p.kind === "pr" ? queuedOf(row.it) : null;
+    if (q) return { mine: false, cls: "wait", text: "Queued behind " + q };
     if (s.gap === "replied") return { mine: true, cls: "turn", text: "Your turn — " + names + " replied, row not yet revised", since: since };
     var newest = null;
     if (d.known) seats.forEach(function (x) { var a = ackFor(d.acks, x); if (a && d.current.indexOf(x) >= 0 && (!newest || a.cAt >= newest.a.cAt)) newest = { a: a, x: x }; });
@@ -766,7 +854,9 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     bar.appendChild(h("span", { class: "ttl", text: titleOf(it) }));
     var chips = h("div", { class: "chips" });
     if (row.p.kind === "pr") chips.appendChild(h("span", { class: "chip", title: "A pull request; answered by comment, the diff is on GitHub", text: "PR" }));
+    if (row.p.subs && row.p.subs.length) chips.appendChild(h("span", { class: "chip program", title: "A program: one approving answer pre-authorizes every sub-act it lists", text: "program · " + row.p.subs.length + " sub-act" + (row.p.subs.length > 1 ? "s" : "") }));
     var lat = tab === "decided" ? closeOf(s.comments) : null;
+    if (lat && lat.kind === "covered") chips.appendChild(h("span", { class: "chip covered", title: "Closed by " + lat.seat + " as covered by the program's approval, with no new words of yours: " + lat.record, text: "covered" }));
     if (lat && lat.kind === "latitude") chips.appendChild(h("span", { class: "chip latitude", title: "Merged under " + lat.seat + "'s standing latitude, with no words of yours: audit the record " + lat.record, text: "latitude" }));
     if (labelNames(it).indexOf("hands") >= 0) chips.appendChild(h("span", { class: "chip hands", title: "Only you can perform this act", text: "hands" }));
     d.seats.forEach(function (x) {
@@ -787,15 +877,16 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
 
   function buildCard(row, seat, expanded) {
     var it = row.it, r = row.r, key = row.key, s = row.s, p = row.p, id = cardId(key, seat);
-    var card = h("article", { class: "card" + (s.answered ? " answered" : "") + (expanded ? " open" : ""), id: id });
+    var card = h("article", { class: "card" + (s.answered ? " answered" : "") + (p.follows ? " follow" : "") + (expanded ? " open" : ""), id: id });
     card.appendChild(crow(row, seat, expanded, "decisions"));
     if (!expanded) return card;
     card.appendChild(h("div", { class: "hrow tools" }, p.kind === "pr" ? openOnGitHub(it) : null, ctxButton(row)));
 
     var dl = h("dl");
-    ["Decision", "Unblocks", "Waits", "Recommendation", "Record"].forEach(function (name) {
-      if (!p.sec[name]) return;
-      var dd = h("dd"); dd.appendChild(linkify(p.sec[name]));
+    ["Decision", "Sub-acts", "Unblocks", "Waits", "Recommendation", "Record"].forEach(function (name) {
+      var text = name === "Sub-acts" ? (p.subs || []).map(function (x) { return x.slug + ": " + x.act; }).join("\n") : p.sec[name];
+      if (!text) return;
+      var dd = h("dd"); dd.appendChild(linkify(text));
       dl.appendChild(h("div", { class: "sec" }, h("dt", { text: name }), dd));
     });
     card.appendChild(h("div", { class: "cbody" }, dl));
@@ -808,6 +899,16 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
       foot.appendChild(h("div", { class: "note err", text: "malformed: " + why }));
       return card;
     }
+    var fo = followOf(row);
+    if (fo) {
+      if (fo.covered) foot.appendChild(h("div", { class: "note ok" }, "Covered: sub-act " + fo.slug + " of " + fo.ref + " is pre-authorized by your approval ",
+        h("a", { href: fo.answer, target: "_blank", rel: "noopener noreferrer", text: "of the program" }), ". No word is needed here; the seat closes it as covered."));
+      else foot.appendChild(h("div", { class: "note warn", text: "Under " + fo.ref + " (sub-act " + fo.slug + "): " + fo.why + ". Your word goes on the program; this row needs none." }));
+      return card;
+    }
+    var qb = queuedOf(it);
+    if (qb) foot.appendChild(h("div", { class: "note warn", text: "Queued behind " + qb + ": it waits on that row, and is your turn once it closes." }));
+    if (p.subs && p.subs.length) foot.appendChild(h("div", { class: "meta", text: "A program: approving it pre-authorizes every listed sub-act (" + p.subs.map(function (x) { return x.slug; }).join(", ") + "); a later revise or amend re-opens them all." }));
     if (s.gap && s.mode === "approve") s.mode = null;
     if (s.gap) foot.appendChild(h("div", { class: "note warn", text: "Not revised yet: you asked for a revision and the row has no amend line after it, so it cannot be approved until the seat revises it (decision.sh revise). Reply, revise or reject." }));
     else {
@@ -875,8 +976,9 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
 
   /* A closed decision: the close (the hearing seat's close comment), then the thread. The close line (lib.sh CLOSE_LINE_RE,
      the owner; plugin/tests/regex-mirror.test.mjs holds the two alike) is the words the row closed on, or a latitude
-     close: merged under the seat's standing latitude, no words, the record linked, shown as kind "latitude" to audit. */
-  var CLOSE_RE = /^(?:(?<verdict>Closed|Rejected) on the (?:word, verbatim: |decider.s word)|Merged under standing latitude <(?<record>https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/blob\/[0-9a-f]{40}\/[^ <>]+)> by (?<seat>[A-Za-z0-9-]+\/[A-Z0-9_-]+)$)/;
+     close: merged under the seat's standing latitude, no words, the record linked, shown as kind "latitude" to audit; or a
+     covered close: a follow-on closed under its program, no new words, the program's approving answer linked. */
+  var CLOSE_RE = /^(?:(?<verdict>Closed|Rejected) on the (?:word, verbatim: |decider.s word)|Merged under standing latitude <(?<record>https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/blob\/[0-9a-f]{40}\/[^ <>]+)> by (?<seat>[A-Za-z0-9-]+\/[A-Z0-9_-]+)$|Closed as covered by <(?<answer>https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/(?:issues|pull)\/[0-9]+#issuecomment-[0-9]+)> by (?<cseat>[A-Za-z0-9-]+\/[A-Z0-9_-]+)$)/;
   function closeOf(list) {
     var best = null, bm = null;
     (list || []).forEach(function (c) {
@@ -885,6 +987,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     });
     if (!best) return null;
     if (bm.groups.record) return { kind: "latitude", record: bm.groups.record, seat: bm.groups.seat, url: best.html_url };
+    if (bm.groups.answer) return { kind: "covered", record: bm.groups.answer, seat: bm.groups.cseat, url: best.html_url };
     return { kind: bm.groups.verdict === "Rejected" ? "rejected" : "closed", words: String(best.body).split(/\r?\n/)[0].replace(/\s+$/, "").slice(bm[0].length).trim(), url: best.html_url };
   }
   function buildClosed(row, seat, expanded) {
@@ -897,6 +1000,13 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
       dt = "Latitude";
       dd.appendChild(document.createTextNode("No words: merged under the standing latitude of " + seatText(w.seat) + ". "));
       dd.appendChild(h("a", { href: w.record, target: "_blank", rel: "noopener noreferrer", text: "the record" }));
+      dd.appendChild(document.createTextNode(" · "));
+      dd.appendChild(h("a", { href: w.url, target: "_blank", rel: "noopener noreferrer", text: "the close" }));
+    }
+    else if (w && w.kind === "covered") {
+      dt = "Covered";
+      dd.appendChild(document.createTextNode("No new words: closed by " + seatText(w.seat) + " under the program's approval. "));
+      dd.appendChild(h("a", { href: w.record, target: "_blank", rel: "noopener noreferrer", text: "your approval" }));
       dd.appendChild(document.createTextNode(" · "));
       dd.appendChild(h("a", { href: w.url, target: "_blank", rel: "noopener noreferrer", text: "the close" }));
     }
@@ -915,7 +1025,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
   function byUpdated(a, b) { return String(b.it.updated_at || "").localeCompare(String(a.it.updated_at || "")); }
   function mount(map, ck, row, seat, tab, expanded) {
     var s = row.s, it = row.it;
-    var sig = JSON.stringify([tab, seat, ui.flat, expanded, it.updated_at, it.title, it.body, it.closed_at, labelNames(it), s.mode, s.pending, s.err && s.err.code, s.ambiguous, s.answered && s.answered.at, s.thread && s.thread.reply.at, s.gap, s.stale && s.stale.at, s.revised && s.revised.at, s.checkErr && s.checkErr.code, selected.has(row.key), bulkBusy, s.ctx && [s.ctx.open, s.ctx.loading, s.ctx.v], s.comments ? [s.acks, s.event, s.malformedAcks] : null, tab === "decisions" ? [s.since, waitText(s.since || it.created_at)] : null]);
+    var sig = JSON.stringify([tab, seat, ui.flat, expanded, it.updated_at, it.title, it.body, it.closed_at, labelNames(it), s.mode, s.pending, s.err && s.err.code, s.ambiguous, s.answered && s.answered.at, s.thread && s.thread.reply.at, s.gap, s.stale && s.stale.at, s.revised && s.revised.at, s.checkErr && s.checkErr.code, selected.has(row.key), bulkBusy, s.ctx && [s.ctx.open, s.ctx.loading, s.ctx.v], s.comments ? [s.acks, s.event, s.malformedAcks] : null, tab === "decisions" ? [s.since, waitText(s.since || it.created_at), turnOf(row).text] : null]);
     var c = map.get(ck);
     if (!c || c.sig !== sig) { c = { el: tab === "decided" ? buildClosed(row, seat, expanded) : buildCard(row, seat, expanded), sig: sig }; map.set(ck, c); }
     return c.el;
@@ -932,6 +1042,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
       var expanded = ui.flat || !!s.open[seat] || !!s.mode || !!s.pending || !!(s.draft && s.draft.trim());
       parent.appendChild(mount(map, ck, row, seat, tab, expanded));
       seen.add(ck);
+      if (tab === "decisions") putUnder(map, row, seat, parent, seen);
     };
     if (ui.flat) {
       rows.slice().sort(byUpdated).forEach(function (row) { put(row, "", listEl); });
@@ -970,6 +1081,16 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
       h("button", { class: "btn small", type: "button", "aria-pressed": String(ui.flat), text: "By updated", onclick: sortTo(true) })));
   }
 
+  /* A program's follow-ons on the board (under, filled by renderDecisions), each mounted right after every copy of its
+     program's card, indented: never in "Waiting on you" on their own, never counted. */
+  var under = {};
+  function putUnder(map, row, seat, parent, seen) {
+    (under[row.key.toLowerCase()] || []).forEach(function (fr) {
+      var us = "under:" + seat, fck = us + "|" + fr.key;
+      parent.appendChild(mount(map, fck, fr, us, "decisions", ui.flat || !!fr.s.open[us]));
+      seen.add(fck);
+    });
+  }
   /* "Waiting on you": the rows whose turn is the viewer's and every open desk ask, in one list, longest waiting first
      (a row from turnOf's since, an ask from its comment's time; ties by key). Rows open by default when there are three
      or fewer; an ask is always shown whole, answerable in place (askCard, the desk drill-down's own card). */
@@ -985,6 +1106,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
       var expanded = (s.open.turn === undefined ? auto : !!s.open.turn) || !!s.mode || !!s.pending || !!(s.draft && s.draft.trim());
       listEl.appendChild(mount(map, ck, row, "turn", "decisions", expanded));
       seen.add(ck);
+      putUnder(map, row, "turn", listEl, seen);
     });
     map.forEach(function (c, ck) { if (!seen.has(ck)) map.delete(ck); });
   }
@@ -1015,8 +1137,15 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
   function renderDecisions() {
     if (items === null) return;
     var boot = $("boot"); if (boot) boot.remove();
-    var rows = items.map(rowOf), mine = [], theirs = [], asks = openAsks();
-    rows.forEach(function (row) { (turnOf(row).mine ? mine : theirs).push(row); });
+    var rows = items.map(rowOf), mine = [], theirs = [], asks = openAsks(), keys = {};
+    /* A follow-on whose program is on the board goes under it (putUnder); the rest split by whose turn it is. */
+    rows.forEach(function (row) { keys[row.key.toLowerCase()] = 1; });
+    under = {};
+    rows.forEach(function (row) {
+      var f = row.p.follows, pk = f && String(f.ref).toLowerCase();
+      if (pk && keys[pk] && pk !== row.key.toLowerCase()) { (under[pk] = under[pk] || []).push(row); return; }
+      (turnOf(row).mine ? mine : theirs).push(row);
+    });
     var waiting = mine.length + asks.length;
     $("count").textContent = waiting ? "(" + waiting + " waiting)" : "(nothing waiting)";
     var head = $("turn"); head.textContent = "";
@@ -1230,7 +1359,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
   function askCard(d, a, where) {
     var k = d.key + "@" + a.n, s = state(k), label = d.seat ? seatText(d.seat) : "the seat", tid = "t-" + where + "-" + anchorOf(k);
     var card = h("div", { class: "ask", id: "ask-" + where + "-" + anchorOf(k) });
-    card.appendChild(h("div", { class: "meta" }, h("a", { class: "ref", href: a.url, target: "_blank", rel: "noopener noreferrer", text: "ask n=" + a.n }), " · asked " + utc(a.at) + (a.def !== null ? " · default: " + a.def : "") + (a.milestone ? " · milestone " + a.milestone : "") + (a.waits.length ? " · waits on " + a.waits.join(", ") : "")));
+    card.appendChild(h("div", { class: "meta" }, h("a", { class: "ref", href: a.url, target: "_blank", rel: "noopener noreferrer", text: "ask n=" + a.n }), " · asked " + utc(a.at) + (a.def !== null ? " · default: " + a.def : "") + (a.milestone ? " · milestone " + a.milestone : "") + (a.waits.length ? " · waits on " + a.waits.join(", ") : "") + (a.replaces !== null ? " · replaces n=" + a.replaces : "")));
     var q = h("div", { class: "q" }); q.appendChild(linkify(a.question)); card.appendChild(q);
     if (s.answered) { card.appendChild(h("div", { class: "note ok" }, "answered " + utc(s.answered.at) + " ", h("a", { href: s.answered.url, target: "_blank", rel: "noopener noreferrer", text: "the record" }))); return card; }
     if (writeState(d, k, card)) return card;
