@@ -80,7 +80,7 @@ flowchart TB
     L3["Workstreams: workstream_issue, workstream_master, ws_seats_table_parse, ws_seats_render, ws_seats_write, ws_seats_all"]
     L4["Addresses and tags: address_header, seat_address_read, msg_header, MSG_HEADER_RE, BOOKKEEPING_FIRST_LINE_RE"]
     L5["Blocks: claude_block_render, block_replace, block_write, ws_block_render, ws_block_write_local, ws_block_write_remote"]
-    L6["Queue: answer_kind, row_phrase, row_events, seat_acks, row_close_comment, row_close, close_of, latitude_record, row_after_close, row_answer_url, ask_inline_check"]
+    L6["Queue: answer_kind, row_phrase, row_events, seat_acks, row_close_comment, row_close, close_of, latitude_record, row_after_close, row_answer_url, program_cover, row_queued_behind, ask_inline_check"]
     L7["Privacy: repo_public_why, roster_pair_check, coord_write_guard"]
     L8["Scrub and license: roster_scrub, scrub_patterns, scrub_scan, roster_license, WORDS_*"]
     L9["Desks, deps, milestones: ask_header, desk_parse, waits_on_*, milestone_*, dep_state, deps_declared"]
@@ -210,7 +210,7 @@ One owner per fact. Every other place that shows a fact is a rendered copy of it
 | A pending decision (an act without code) | issue labelled `decision`, six `##` sections, assignee the decider, `seat:<id>` labels (`decision.sh new`) | the generated board; the board page | a chat message or a session's context |
 | A code change awaiting the decider | the PR, labelled `needs-review` and `seat:<id>`, assigned (`pr.sh request`) | the board | a review request (refused while seats post as the PR author's login) |
 | The decider's answer | their comment on the row in one of four forms (`lib.sh::answer_kind`), or words typed to a session quoted in the close comment | the decided table | a paraphrase anywhere |
-| A close | the close comment (`lib.sh::row_close_comment`, read by `close_of` against `CLOSE_LINE_RE`): the words verbatim, the record, the closer, the closer's ack; or, under a seat's standing latitude, no words and the record's link in the close line (kind `latitude`) | the decided table | an edited body |
+| A close | the close comment (`lib.sh::row_close_comment`, read by `close_of` against `CLOSE_LINE_RE`): the words verbatim, the record, the closer, the closer's ack; or, under a seat's standing latitude, no words and the record's link in the close line (kind `latitude`); or, for a follow-on, no words and the program's approving answer in the close line (kind `covered`) | the decided table | an edited body |
 | A seat's consumption of a row or desk | its newest `BEAST-ACK seat=<id> …` comment (`ack.sh`, read by `lib.sh::seat_acks`) | the board's per-seat ack state | a local watermark |
 | A seat's inbox | computed: rows whose latest event (`lib.sh::row_events`) is newer than the seat's newest ack, then its desk (`decision.sh inbox`) | none | stored anywhere |
 | A desk ask, answer, withdrawal, message | comments on the seat's desk issue (`desk.sh`, parsed by `lib.sh::desk_parse`) | the desk body (`desk.sh publish`); the page's desk strip | the body as a source |
@@ -228,7 +228,8 @@ One owner per fact. Every other place that shows a fact is a rendered copy of it
 | The Cowork tick's cut | the viewer's one `BEAST-COWORK by=<login> at=<UTC> …` comment on the pinned board issue (`cowork-tick`), bookkeeping, never news | none | a second stamp per login |
 | Which template a board page was published from | the page's first line `<!-- board.html @ <sha> -->`, filled by `board-ui` at publish from the template's stamp line | none | a page edited apart from the template |
 | A milestone and its due date | GitHub milestone; `due_on` is the only copy of the date; the description's fixed lines (`lib.sh::milestone_desc`) | the inbox's due flags | a date in prose |
-| A dependency | one `Waits on: <ref>` line (`lib.sh::waits_on_line`) in a row, an ask or a milestone description | `deps.sh` | a list kept elsewhere |
+| A dependency | one `Waits on: <ref>` line (`lib.sh::waits_on_line`) in a row, an ask or a milestone description | `deps.sh`; a row's queued state on the board (`row_queued_behind`, the page's `queuedOf`) | a list kept elsewhere |
+| What one approval pre-authorizes | the program row's `## Sub-acts` lines (`lib.sh::sub_acts_render`) and the decider's standing approval on it (`row_answer_url`); a follow-on names one sub-act in its `Follows:` line (`follows_line`), covered while `program_cover` holds | the board (follow-ons under their program) | a list in a seat's head or a session |
 | The decider's board | the generated issue "Pending decisions (generated)" in the roster's `board` repo (`board.sh --publish`), and the live search | the board page | hand edits |
 | Rules a seat follows in a home | the block between `<!-- beast:begin -->` and `<!-- beast:end -->` in the home's CLAUDE.md, rendered by `lib.sh::claude_block_write` from `templates/claude-block.md` for that seat | none: the block is itself a rendering of the roster, the agent file and the seat map | hand edits (the next join undoes them) |
 | A workstream's map in its master | the block between `<!-- beast:workstream begin <slug> -->` and `end` in the master's CLAUDE.md (`lib.sh::ws_block_write_local`, `ws_block_write_remote` from `templates/workstream-block.md`) | none: itself a rendering of the table | hand edits (the next render undoes them) |

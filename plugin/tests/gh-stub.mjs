@@ -16,6 +16,12 @@
 //   files serves commits/<sha or prefix> and contents/<path>?ref=<sha>; pulls serves the PR list (state, head=<owner>:<ref>)
 //   and the squash-merge, made for real in the bare repo git names (a commit with the PR head's tree on main); a
 //   DELETE git/refs/heads/<ref> deletes it there.
+//   fail: [{method, route, times, status, message}] makes the next <times> calls whose method and route (the path before
+//   "?", matched as a regex) match fail as GitHub does: the message on stderr (a GET with -i also gets the status line
+//   and {message} on stdout), exit 1; each failure decrements times. A comment POST bumps the issue's comments count.
+//   clock: an ISO time; when set, every time the stub stamps (a created issue or comment, an update, a close) is the clock,
+//   which then advances one second, so a test orders the scripts' comments against the ones it injects; unset, the stub
+//   stamps the wall clock.
 import { writeFileSync, readFileSync, mkdirSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 
@@ -44,9 +50,20 @@ for (let i = 1; i < argv.length; i++) {
 }
 log((method === "GET" ? "" : "WRITE ") + method + " " + p + (method === "GET" ? "" : " " + JSON.stringify(fields)));
 const [route, qs] = p.split("?"); const q = new URLSearchParams(qs || "");
+for (const f of S.fail || []) {
+  if (f.times > 0 && f.method === method && new RegExp("^" + f.route + "$").test(route)) {
+    f.times--; save(); log("FAILED " + method + " " + p);
+    process.stderr.write("gh: " + f.message + " (HTTP " + (f.status || 403) + ")\n");
+    if (head) process.stdout.write("HTTP/2.0 " + (f.status || 403) + " X\r\nContent-Type: application/json\r\n\r\n" + JSON.stringify({ message: f.message }) + "\n");
+    process.exit(1);
+  }
+}
 let m;
 const key = (o, r, n) => o + "/" + r + "#" + n;
-const now = () => new Date().toISOString().replace(/\.\d+Z$/, "Z");
+const now = () => {
+  if (!S.clock) return new Date().toISOString().replace(/\.\d+Z$/, "Z");
+  const t = S.clock; S.clock = new Date(Date.parse(t) + 1000).toISOString().replace(/\.\d+Z$/, "Z"); return t;
+};
 if (method === "GET") {
   if (route === "user") out(200, { login: S.login }, head);
   if (route === "rate_limit") out(200, { resources: { core: { remaining: 5000, limit: 5000 }, search: { remaining: 30, limit: 30 } } }, head);
@@ -137,7 +154,7 @@ if ((m = /^repos\/([^/]+)\/([^/]+)\/issues\/(\d+)(\/(labels|assignees|comments))
   if (m[5] === "labels" && method === "POST") { for (const l of fields.labels) if (!it.labels.some((x) => x.name === l)) it.labels.push({ name: l }); save(); out(200, it.labels); }
   if (m[5] === "assignees" && method === "POST") { for (const l of fields.assignees) if (!it.assignees.some((x) => x.login === l)) it.assignees.push({ login: l }); save(); out(200, it); }
   if (m[5] === "comments" && method === "POST") { const list = S.comments[k] = S.comments[k] || []; const id = 1000 + list.length + Object.keys(S.comments).length * 100;
-    const c = { id, body: fields.body, user: { login: S.login }, created_at: now(), html_url: it.html_url + "#issuecomment-" + id }; list.push(c); save(); out(201, c); }
+    const c = { id, body: fields.body, user: { login: S.login }, created_at: now(), html_url: it.html_url + "#issuecomment-" + id }; list.push(c); it.comments = list.length; save(); out(201, c); }
   if (!m[5] && method === "PATCH" && "body" in fields && fields.body !== it.body) { const h = (S.edits = S.edits || {})[k] = S.edits[k] || [];
     if (!h.length) h.push({ editedAt: it.created_at, deletedAt: null, diff: it.body }); h.push({ editedAt: now(), deletedAt: null, diff: fields.body }); }
   if (!m[5] && method === "PATCH") { for (const f of ["body", "state", "title", "state_reason"]) if (f in fields) it[f] = fields[f]; if (fields.state === "closed") it.closed_at = now(); if (fields.milestone) it.milestone = { number: Number(fields.milestone) }; save(); out(200, it); }

@@ -184,7 +184,8 @@ watchdog_guard "$@"
 # GitHub, protocol.md). A long-running loop (watch.sh --interval) empties it before each poll (run_cache_clear).
 # Every EXIT cleanup goes through on_exit, so a script's own temp dir and the run cache are both removed.
 BEAST_EXIT_CMDS=()
-on_exit() { BEAST_EXIT_CMDS+=("$1"); trap 'for c in "${BEAST_EXIT_CMDS[@]}"; do eval "$c"; done' EXIT; }
+# on_exit <command>: run at exit, after the ones registered before it; BEAST_EXIT_RC holds the script's exit status.
+on_exit() { BEAST_EXIT_CMDS+=("$1"); trap 'BEAST_EXIT_RC=$?; for c in "${BEAST_EXIT_CMDS[@]}"; do eval "$c"; done' EXIT; }
 if [[ -z "${BEAST_WS_CACHE:-}" ]]; then
   BEAST_WS_CACHE="$(mktemp -d)" || die "cannot make the run cache directory (mktemp -d)"
   export BEAST_WS_CACHE
@@ -596,6 +597,34 @@ fault_clear() {
 # rate_limit_text "<stderr text>": status 0 when GitHub's answer was a rate limit (the primary quota, which gh_request
 # names "quota: resets at", or the secondary burst limit, or a 429), 1 otherwise. The one reader of that fact.
 rate_limit_text() { grep -qiE 'quota: resets at|secondary rate limit|rate limit exceeded|HTTP 429' <<< "${1:-}"; }
+
+# backoff_next <previous seconds | ""> <base> <max>: the next wait of a rate-limit backoff: <base> first, then doubling
+# while the limit repeats, capped at <max>. The one schedule: watch.sh's poll backoff and rate_retry use it.
+backoff_next() {
+  [[ $# -eq 3 && "$2" =~ ^[0-9]+$ && "$3" =~ ^[0-9]+$ && ( -z "$1" || "$1" =~ ^[0-9]+$ ) ]] || die "backoff_next takes <previous seconds | \"\"> <base> <max>, not $*"
+  local s="$2"; [[ -z "$1" ]] || s=$(( $1 * 2 ))
+  (( s <= $3 )) || s=$3
+  echo "$s"
+}
+
+# rate_retry <what> <command> [args]...: runs the command (a script or a lib function), its stdout passed through; when it
+# fails on a GitHub rate limit (rate_limit_text over its stderr) it waits (backoff_next from RATE_RETRY_BASE_S, capped at
+# RATE_RETRY_MAX_S) and runs it again, RATE_RETRY_TRIES runs at most, naming each wait on stderr. Any other failure, or
+# the last rate-limited one, returns 1 with the command's stderr. For an act a caller must not repeat by hand after a
+# write it already made (the board publish after a close).
+RATE_RETRY_TRIES=3; RATE_RETRY_BASE_S="${BEAST_RATE_RETRY_BASE_S:-20}"; RATE_RETRY_MAX_S=120
+rate_retry() {
+  [[ $# -ge 2 ]] || die "rate_retry takes <what> <command> [args]..., not $*"
+  local what="$1" i=1 secs="" err out; shift
+  err="$(mktemp)"
+  while :; do
+    if out="$("$@" 2>"$err")"; then cat "$err" >&2; rm -f "$err"; [[ -z "$out" ]] || printf '%s\n' "$out"; return 0; fi
+    if ! rate_limit_text "$(cat "$err")" || (( i >= RATE_RETRY_TRIES )); then cat "$err" >&2; rm -f "$err"; return 1; fi
+    secs="$(backoff_next "$secs" "$RATE_RETRY_BASE_S" "$RATE_RETRY_MAX_S")"
+    echo "daita-beast: $what: GitHub rate limit (run $i of $RATE_RETRY_TRIES: $(grep -m1 -iE 'rate limit|quota|HTTP 429' "$err" | sed 's/^daita-beast: //' | cut -c1-200)); retrying in $secs s" >&2
+    sleep "$secs"; i=$((i + 1))
+  done
+}
 
 # ---- a seat's address: the one owner is its BEAST-ADDRESS comment on its workstream tracking issue -------------
 # BEAST-ADDRESS seat=<composite> account=<claude account> address="<name>[ [ref]]" machine=<hostname> at=<UTC>
@@ -1330,6 +1359,19 @@ row_seats() {
   [[ -z "$f" ]] || seat_resolve "$f" || true
 }
 
+# row_seat_require <row> <by-id> <who> "<what the seat does>": dies unless <by-id> is the row's filer (row_filer) or one of
+# its seats (row_seats): the seat-only acts on a row (decision.sh restore, a seat's revise of its unanswered row, close
+# --covered) are its own seat's. <row> is a row_read result.
+row_seat_require() {
+  [[ $# -eq 4 ]] || die "row_seat_require takes <row> <by-id> <who> <what>, not $*"
+  local filer seats
+  filer="$(tag_jq -r 'row_filer(.comments) // empty' <<< "$1")" || die "$3: cannot read the row's filer"
+  [[ -z "$filer" ]] || filer="$(seat_resolve "$filer" 2>/dev/null || true)"
+  seats="$(row_seats "$(jq -c .issue.labels <<< "$1")" "$(jq -c .comments <<< "$1")")" || exit 1
+  [[ "$2" == "$filer" ]] || grep -qxF -- "$2" <<< "$seats" \
+    || die "$3: $2 is neither the row's filer (${filer:-none}) nor one of its seats ($(paste -sd, - <<< "$seats" | sed 's/^$/none/')): only the row's own seat $4"
+}
+
 # seat_labels_require <repo> <N> <id>...: dies unless <repo>#<N> carries seat:<id> for every id, read back from GitHub
 # after the write (a row whose seat label did not land is invisible to its seat's inbox and relay).
 seat_labels_require() {
@@ -1955,17 +1997,20 @@ answer_kind() {
 #   tag_ack(l)       a well-formed `BEAST-ACK seat=<token> at=<UTC> state=seen|executed|blocked` line, or null
 #   tag_closer(b)    the "Closed by seat <token> at <UTC>." of a close comment (row_close_comment), or null
 #   close_of(b)      of a comment body: the close comment it is (row_close_comment's shape, CLOSE_LINE_RE), as
-#                    {kind: closed|rejected|latitude, words, record, seat, line}, or null. words: the verbatim words of a
-#                    closed or rejected row (null on a latitude close, which quotes none); record: its record (a latitude
-#                    close's is the link in its close line); seat: the closer; line: the close line
+#                    {kind: closed|rejected|latitude|covered, words, record, seat, line}, or null. words: the verbatim
+#                    words of a closed or rejected row (null on a latitude or covered close, which quotes none); record:
+#                    its record (a latitude or covered close's is the link in its close line); seat: the closer; line:
+#                    the close line
 #   close_text(c)    of a close_of result: the one line a reader shows for it (the quoted words; a latitude close as
-#                    "no words: merged under standing latitude by <seat>, record <link>")
+#                    "no words: merged under standing latitude by <seat>, record <link>"; a covered close as "no words:
+#                    covered by the program approval <answer url>, closed by <seat>")
 #   close_last(cs)   of a comment list: the newest close comment's close_of, plus its url, or null
 #   row_filer(cs)    of a row's comment list: the seat that filed it, the writer of its first BEAST-ACK comment (the
 #                    filer's ack, decision.sh new and pr.sh request), or null
-#   tag_actor(desk)  of a comment: the seat id that wrote it, or null (an untagged comment, a BEAST-ANSWER: the decider's).
-#                    In order: the closer; a BEAST-ACK first line, or last line (a seat's own reply on a row ends with
-#                    it); a BEAST-STATUS or BEAST-NOTES header; a BEAST-ASK header; a BEAST-MSG sender (from=); on a
+#   tag_actor(desk)  of a comment: the seat id that wrote it, or null (an untagged comment, a BEAST-ANSWER the decider
+#                    posted: the decider's). In order: the closer; a BEAST-ACK first line, or last line (a seat's own reply
+#                    on a row ends with it, and so does a BEAST-ANSWER a seat recorded with desk.sh answer --by); a status
+#                    or notes header (BEAST-STATUS, BEAST-NOTES); a BEAST-ASK header; a BEAST-MSG sender (from=); on a
 #                    desk (desk = the desk's seat id, else ""), a BEAST-WITHDRAW, which only the desk's seat posts. A
 #                    bare label (a comment written before the 2026-10-15 relabel) is read as <the comment's login>/<LABEL>.
 SEAT_TAG_JQ='
@@ -1978,11 +2023,12 @@ def close_of(b):
   | (first($f | capture($closere)) // null) as $m
   | if $m == null then null
     elif ($m.record // "") != "" then {kind: "latitude", words: null, record: $m.record, seat: $m.seat, line: $f}
+    elif ($m.answer // "") != "" then {kind: "covered", words: null, record: $m.answer, seat: $m.cseat, line: $f}
     else {kind: (if $m.verdict == "Rejected" then "rejected" else "closed" end),
           words: (first($b | capture("^(Closed|Rejected) on the word, verbatim: \"(?<w>.*)\"\n\nRecord: "; "p") | .w) // null),
           record: (first($b | capture("\nRecord: (?<r>.*)\\. Closed by seat ") | .r) // null),
           seat: (tag_closer($b) | .seat?), line: $f} end;
-def close_text(c): if c.kind == "latitude" then "no words: merged under standing latitude by \(c.seat), record \(c.record)" elif c.words != null then "\"\(c.words)\"" else c.line end;
+def close_text(c): if c.kind == "latitude" then "no words: merged under standing latitude by \(c.seat), record \(c.record)" elif c.kind == "covered" then "no words: covered by the program approval \(c.record), closed by \(c.seat)" elif c.words != null then "\"\(c.words)\"" else c.line end;
 def close_last(cs): ([cs[]? | . as $c | close_of($c.body) | select(. != null) | . + {url: $c.html_url}] | last // null);
 def tag_actor(desk):
   . as $c | (($c.body // "") | gsub("\r"; "")) as $b | ($b | tag_first | sub("\\s+$"; "")) as $f
@@ -2015,7 +2061,10 @@ ack_line() {
 }
 
 # seat_acks <row>: (a row_read result) one line per seat id, "<id>\t<at>\t<state>\t<url>", the NEWEST well-formed BEAST-ACK
-# by that seat (first line, or the last non-empty line of a close comment). The seat is a qualified id, or a
+# by that seat (first line, or the last non-empty line of a comment that carries the seat's own act: a close, a reply, a
+# recorded desk answer). An ack on a comment's last line is the seat's ack AT THE POST: its time is the later of its
+# at= and the comment's created_at (the line is stamped seconds before the comment lands, and the act it closes
+# is in the same comment). The seat is a qualified id, or a
 # bare label (comments written before the 2026-10-15 relabel), read as <the comment author's login>/<LABEL>:
 # a comment is posted by the seat's own login, so it names its seat without any roster. A line that starts
 # with BEAST-ACK and does not match the shape is named on stderr and dropped.
@@ -2027,7 +2076,7 @@ seat_acks() {
     # The close comment is the closer'"'"'s seen ack AT THE CLOSE: its time is the issue'"'"'s closed_at (the comment lands seconds before the close).
     def closer(b): (tag_closer(b) | if . == null then null else {seat:.seat, at:(if $closed != "" then $closed else .at end), state:"seen"} end);
     .[] | . as $c | ((.body // "") | tag_first) as $f | ((.body // "") | tag_last) as $l
-      | (closer(.body // "") // tag_ack($f) // tag_ack($l)) as $a
+      | (closer(.body // "") // tag_ack($f) // (tag_ack($l) | if . == null then null else .at = ([.at, ($c.created_at // "")] | max) end)) as $a
       | if $a != null then "\(if ($a.seat | contains("/")) then $a.seat else "\($c.user.login)/\($a.seat)" end)\t\($a.at)\t\($a.state)\t\($c.html_url)"
         elif ($f | startswith("BEAST-ACK")) or ($l | startswith("BEAST-ACK")) then "BAD\t\($c.html_url)"
         else empty end' \
@@ -2040,7 +2089,8 @@ seat_acks() {
 }
 
 # event_actors NEW|DECIDED|UPDATED <delta> <comments-json> <desk seat | "">: the seats whose acts make up one watch.sh
-# event on a row, one per line, "-" for an act no seat tag names (the decider's: an untagged comment, a BEAST-ANSWER).
+# event on a row, one per line, "-" for an act no seat tag names (the decider's: an untagged comment, a BEAST-ANSWER the
+# decider posted; one a seat recorded ends with the recorder's ack and is the recorder's act).
 #   NEW      the filer (the seat of the row's first BEAST-ACK comment: the filer's ack, which decision.sh new and pr.sh
 #            request post), then the writer of every comment that is not bookkeeping
 #   DECIDED  the closer (the newest comment, when it is a close comment), then the writer of every newer comment that is
@@ -2698,22 +2748,26 @@ coord_write_guard() {
 }
 
 # ---- the close comment: the one owner of its shape (row_close_comment writes it; close_of, SEAT_TAG_JQ, reads it) ------
-# The one comment that closes a row. Its first line, the close line, is of one of three kinds:
+# The one comment that closes a row. Its first line, the close line, is of one of four kinds:
 #   Closed on the word, verbatim: "<words>"                       closed    the decider's words (decision.sh close,
 #   Rejected on the word, verbatim: "<words>"                     rejected  pr.sh close, publish.sh merge --words)
 #   Merged under standing latitude <<record link>> by <seat id>  latitude  publish.sh merge --latitude: quotes no words;
 #                                                                           the record is the decider's standing word, a
 #                                                                           file at a commit in the seat's own private repo
-# then "Record: <record>. Closed by seat <id> at <UTC>." ("Closed by seat <id> at <UTC>." on a latitude close, whose record
-# is in its close line), then the closer's BEAST-ACK (state=seen). A close line is never an answer form (answer_kind): it
+#   Closed as covered by <<answer url>> by <seat id>             covered   decision.sh close --covered: a follow-on row
+#                                                                           closed under its program (program_cover); quotes
+#                                                                           no words, cites the program's approving answer
+# then "Record: <record>. Closed by seat <id> at <UTC>." ("Closed by seat <id> at <UTC>." on a latitude or covered close,
+# whose record is in its close line), then the closer's BEAST-ACK (state=seen). A close line is never an answer form (answer_kind): it
 # never stands as the decider's answer. CLOSE_LINE_RE reads the close line (jq, and the page's CLOSE_RE alike:
 # plugin/tests/regex-mirror.test.mjs); "Closed on the decider's word" is the old pointer close, read with no words.
-CLOSE_LINE_RE='^(?:(?<verdict>Closed|Rejected) on the (?:word, verbatim: |decider.s word)|Merged under standing latitude <(?<record>https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/blob/[0-9a-f]{40}/[^ <>]+)> by (?<seat>[A-Za-z0-9-]+/[A-Z0-9_-]+)$)'
+CLOSE_LINE_RE='^(?:(?<verdict>Closed|Rejected) on the (?:word, verbatim: |decider.s word)|Merged under standing latitude <(?<record>https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/blob/[0-9a-f]{40}/[^ <>]+)> by (?<seat>[A-Za-z0-9-]+/[A-Z0-9_-]+)$|Closed as covered by <(?<answer>https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:issues|pull)/[0-9]+#issuecomment-[0-9]+)> by (?<cseat>[A-Za-z0-9-]+/[A-Z0-9_-]+)$)'
 
-# row_close_comment <repo> <N> "<words>" "<record>" <by-id> "<next>" closed|rejected|latitude: posts the close comment,
-# the one writer of its shape for a decision issue and a pull request alike. A latitude close takes no words ("") and its
-# record is the link latitude_record verified; its close line is checked against CLOSE_LINE_RE before it is posted. The
-# caller closes, merges or labels (row_close does it for an issue).
+# row_close_comment <repo> <N> "<words>" "<record>" <by-id> "<next>" closed|rejected|latitude|covered: posts the close
+# comment, the one writer of its shape for a decision issue and a pull request alike. A latitude or covered close takes no
+# words (""); a latitude close's record is the link latitude_record verified, a covered close's the program's approving
+# answer program_cover returned; either close line is checked against CLOSE_LINE_RE before it is posted. The caller
+# closes, merges or labels (row_close does it for an issue).
 row_close_comment() {
   local repo="$1" n="$2" words="$3" rec="$4" by="$5" next="$6" first tail
   [[ "$by" =~ $SEAT_ID_RE ]] || die "row_close_comment: --by '$by' is not a seat id"
@@ -2726,7 +2780,12 @@ row_close_comment() {
       first="Merged under standing latitude <$rec> by $by"; tail="Closed by seat $by at $(utc_now)."
       jq -en --arg l "$first" --arg re "$CLOSE_LINE_RE" '$l | test($re)' >/dev/null \
         || die "row_close_comment: the latitude close line '$first' does not read back as one (CLOSE_LINE_RE): the record is not a blob link at a full sha" ;;
-    *) die "row_close_comment: the kind is closed, rejected or latitude, not '$7'" ;;
+    covered)
+      [[ -z "$words" ]] || die "row_close_comment: a covered close quotes no words"
+      first="Closed as covered by <$rec> by $by"; tail="Closed by seat $by at $(utc_now)."
+      jq -en --arg l "$first" --arg re "$CLOSE_LINE_RE" '$l | test($re)' >/dev/null \
+        || die "row_close_comment: the covered close line '$first' does not read back as one (CLOSE_LINE_RE): the record is not an answer comment's URL" ;;
+    *) die "row_close_comment: the kind is closed, rejected, latitude or covered, not '$7'" ;;
   esac
   local ack; ack="$(ack_line "$by" seen "$next")" || exit 1
   issue_comment "$repo" "$n" "$first
@@ -2736,16 +2795,18 @@ $tail
 $ack" >/dev/null
 }
 
-# row_close <repo> <N> "<words>" "<record>" <by-id> "<next>" closed|rejected|latitude <board repo>: closes a decision issue:
+# row_close <repo> <N> "<words>" "<record>" <by-id> "<next>" closed|rejected|latitude|covered <board repo>: closes a decision issue:
 # the close comment (row_close_comment), the issue closed (not_planned and labelled rejected on a reject), then
 # row_after_close. The caller has refused a public repo (coord_write_guard) and a pending revise (row_revise_pending).
 row_close() {
   [[ $# -eq 8 ]] || die "row_close takes <repo> <N> <words> <record> <by> <next> <kind> <board>, not $*"
+  local assignee
+  assignee="$(issue_get "$1" "$2" | jq -r '.assignees[0].login // empty')" || die "$1#$2: cannot read its assignee (named above): nothing was written"
   row_close_comment "$1" "$2" "$3" "$4" "$5" "$6" "$7"
   if [[ "$7" == rejected ]]; then row_mark_rejected "$1" "$2"; issue_close "$1" "$2" not_planned
   else issue_close "$1" "$2" completed; fi
   echo "closed $1#$2"
-  row_after_close "$1" "$2" "$5" "$8"
+  row_after_close "$1" "$2" "$5" "$8" "$assignee"
 }
 
 # latitude_record "<owner/repo> <commit> — <path>" <seat id>: the record of a seat's standing latitude (the decider's word
@@ -2774,16 +2835,69 @@ latitude_record() {
 # row_mark_rejected <repo> <N>: the label `rejected` (defined in templates/labels.json) on a rejected row.
 row_mark_rejected() { label_ensure_template "$1" rejected; issue_add_labels "$1" "$2" rejected; }
 
-# row_after_close <repo> <N> <by-id> <board-repo>: what every close does next: republish the decider's board
-# and print the row's seats (row_seats), each acked by this close or unacked with its live address.
+# ---- the board's stale marker: the one owner of "the published board is behind a close" -----------------------------
+# A close that cannot republish the board (a rate limit outlasting rate_retry, GitHub down) leaves one machine-local file
+# per board and decider, ~/.beast/board/stale/<owner>__<repo>__<assignee>, holding the line
+#   BEAST-BOARD stale since=<UTC> repo=<owner/repo> assignee=<login> why=<one line>
+# (since= is the first failure's; a later failure keeps it). Every successful board.sh --publish for that board and
+# decider deletes it (board_stale_clear); the watchdog's next tick republishes every marked board (board_republish).
+BOARD_STALE_RE='^BEAST-BOARD stale since=(?<since>[0-9TZ:-]+) repo=(?<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+) assignee=(?<assignee>[A-Za-z0-9-]+) why=(?<why>.*)$'
+board_stale_dir() { echo "$HOME/.beast/board/stale"; }
+board_stale_file() { [[ "$1" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && "$2" =~ ^[A-Za-z0-9-]+$ ]] || die "board_stale_file takes <owner/repo> <login>, not $*"; echo "$(board_stale_dir)/${1%%/*}__${1#*/}__$2"; }
+# board_stale_mark <board repo> <assignee> "<why>": writes the marker (keeping an earlier since=); prints its path.
+board_stale_mark() {
+  local f since="" t
+  f="$(board_stale_file "$1" "$2")" || exit 1
+  [[ ! -f "$f" ]] || since="$(jq -Rr --arg re "$BOARD_STALE_RE" 'capture($re) | .since' < "$f" 2>/dev/null || true)"
+  mkdir -p "$(dirname "$f")"; t="$(mktemp "$(dirname "$f")/.tmp.XXXXXX")"   # a dotfile: board_stale_list never reads it
+  printf 'BEAST-BOARD stale since=%s repo=%s assignee=%s why=%s\n' "${since:-$(utc_now)}" "$1" "$2" "$(tr '\n' ' ' <<< "$3" | cut -c1-300)" > "$t" && mv -f "$t" "$f"
+  echo "$f"
+}
+# board_stale_clear <board repo> <assignee>: deletes the marker, saying so when there was one.
+board_stale_clear() {
+  local f; f="$(board_stale_file "$1" "$2")" || exit 1
+  [[ -f "$f" ]] || return 0
+  rm -f "$f"; echo "daita-beast: the board in $1 for @$2 is current again; its stale marker is cleared" >&2
+}
+# board_stale_list: one "<board repo>\t<assignee>\t<since>\t<file>" per marker; a file that is not the shape is named and skipped.
+board_stale_list() {
+  local f l
+  for f in "$(board_stale_dir)"/*; do
+    [[ -f "$f" ]] || continue
+    l="$(jq -Rr --arg re "$BOARD_STALE_RE" 'capture($re) | [.repo, .assignee, .since] | @tsv' < "$f" 2>/dev/null || true)"
+    if [[ -z "$l" ]]; then echo "daita-beast: the board stale marker $f is not the BEAST-BOARD stale shape; skipped (delete it after board.sh --publish)" >&2; continue; fi
+    printf '%s\t%s\n' "$l" "$f"
+  done
+}
+# board_republish <board repo> <assignee>: board.sh --publish through rate_retry; status 0 when published (board.sh
+# clears the marker), else 1 with the marker written and its why on stderr. The one publisher a close and the watchdog call.
+board_republish() {
+  local err why f
+  err="$(mktemp)"
+  if rate_retry "board.sh --publish --repo $1 (@$2)" "$BEAST_SCRIPTS/board.sh" --assignee "$2" --publish --repo "$1" >/dev/null 2>"$err"; then rm -f "$err"; return 0; fi
+  cat "$err" >&2
+  why="$(grep -v 'retrying in' "$err" | grep -m1 'daita-beast:' | sed 's/^daita-beast: //')"; rm -f "$err"
+  f="$(board_stale_mark "$1" "$2" "${why:-board.sh failed}")" || exit 1
+  echo "$f"
+  return 1
+}
+
+# row_after_close <repo> <N> <by-id> <board-repo> <assignee>: what every close does next: republish the decider's board
+# (board_republish; <assignee> is the row's decider, read by the caller before its close wrote anything) and print the
+# row's seats (row_seats), each acked by this close or unacked with its live address. The close has already succeeded:
+# nothing here fails it. A board that cannot be republished is marked stale, named on one loud stderr line, and
+# republished by the watchdog's next tick; the close exits 0 and is never rerun for it.
 row_after_close() {
-  local repo="$1" n="$2" by="$3" board="$4" rd info assignee waiting s addr
-  rd="$(row_read "$repo" "$n")" || exit 1
+  [[ $# -eq 5 ]] || die "row_after_close takes <repo> <N> <by> <board> <assignee>, not $*"
+  local repo="$1" n="$2" by="$3" board="$4" assignee="$5" rd info waiting s addr f
+  if [[ -z "$assignee" ]]; then echo "daita-beast: $repo#$n is closed and has no assignee: no decider's board to republish" >&2
+  elif f="$(board_republish "$board" "$assignee")"; then echo "board republished in $board"
+  else echo "daita-beast: BOARD STALE: $repo#$n IS CLOSED (the close stands; never rerun it), but the board in $board was NOT republished (named above); marked stale in $f. The watchdog's next tick republishes it; or run board.sh --assignee $assignee --publish --repo $board" >&2; fi
+  if ! rd="$(rate_retry "read $repo#$n after its close" row_read "$repo" "$n")"; then
+    echo "daita-beast: $repo#$n is closed, but it could not be read back (named above): its seats are not listed here; each sees the close in its inbox (decision.sh inbox)" >&2
+    return 0
+  fi
   info="$(jq '.issue' <<< "$rd")"
-  assignee="$(jq -r '.assignees[0].login // empty' <<< "$info")"
-  [[ -n "$assignee" ]] || die "$repo#$n has no assignee: no decider's board to republish"
-  if "$BEAST_SCRIPTS/board.sh" --assignee "$assignee" --publish --repo "$board" >/dev/null; then echo "board republished in $board"
-  else echo "daita-beast: the row is closed but the board in $board was NOT republished (board.sh failed, named above); fix that and run board.sh --publish --repo $board" >&2; fi
   waiting="$(row_seats "$(jq -c .labels <<< "$info")" "$(jq -c .comments <<< "$rd")")"
   if [[ -z "$waiting" ]]; then echo "no seat on this row (no seat: label, no filer ack); nobody to tell beyond the board"; return 0; fi
   echo "seats on this row (each acks for itself with ack.sh; the words verbatim + $(jq -r .html_url <<< "$info")):"
@@ -2820,6 +2934,10 @@ row_events() {
 # before milestones existed has no milestone field and still parses. The seat is a seat token (SEAT_TOKEN_RE's shape). ASK_HEADER_RE
 # is read by desk_parse (jq) and ask_header writes it; plugin/tests/regex-mirror.test.mjs holds the page's ASK_RE to it.
 ASK_HEADER_RE='^BEAST-ASK n=(?<n>[0-9]+) seat=(?<seat>([A-Za-z0-9-]+/)?[A-Z0-9_-]+) at=(?<at>[^ ]+)( milestone="(?<ms>[^"]+)")?$'
+# Replaces: n=<k>   a line of an ask posted by desk.sh ask --supersedes <k> (which then withdraws k with BEAST-WITHDRAW):
+# the ask that replaces k, shown as "replaces n=<k>" on the desk body and the page. desk_parse reads it (ASK_REPLACES_RE);
+# the page's REPLACES_RE is its twin (plugin/tests/regex-mirror.test.mjs).
+ASK_REPLACES_RE='^Replaces: n=(?<n>[0-9]+)$'
 
 # ---- the seat-to-seat tag: the one owner (the page's MSG_RE is the JS twin) ----
 # BEAST-MSG from=<composite> to=<composite> re=<ref|none> blocking=no at=<UTC>   the first line of every direct line
@@ -2858,7 +2976,9 @@ ask_header() {
 # ask_inline_check <what> <text>: dies when a question for the decider points elsewhere for its substance: a session ("see
 # session", "see my session", "as discussed", "per our chat") or a path on one machine (/Users/…, /home/…, ~/…). The decider
 # reads only the row: its content is inline, or a URL to a file or diff at a commit. decision.sh new (record files through
-# it) and desk.sh ask run it before anything is written.
+# it), desk.sh ask, pr.sh request and issue.sh new run it before anything is written. ASK_INLINE_RULE is the one text of
+# the rule: the refusal names it, and the usage and --help of desk.sh and decision.sh state it before a seat composes.
+ASK_INLINE_RULE='the content inline, or a URL to a file or diff at a commit (https://github.com/<owner>/<repo>/blob/<sha>/<path>, …/commit/<sha>), never a session ("see session", "as discussed", "per our chat") or a local path (/Users/…, /home/…, ~/…): the decider reads only the row'
 ask_inline_check() {
   local what="$1" hit
   hit="$(printf '%s' "$2" | python3 -I -c '
@@ -2870,7 +2990,7 @@ for rx, fl in ((r"\bsee (?:the |my |our |this )?session\b", re.I), (r"\bas (?:we
     m = re.search(rx, t, fl)
     if m: print(m.group(0)); break
 ')" || die "$what: cannot read the question text"
-  [[ -z "$hit" ]] || die "$what: the question points elsewhere for its substance (\"$hit\"), and the decider reads only the row. The rule: the content inline, or a URL to a file or diff at a commit (https://github.com/<owner>/<repo>/blob/<sha>/<path>, …/commit/<sha>), never a session or a local path"
+  [[ -z "$hit" ]] || die "$what: the question points elsewhere for its substance (\"$hit\"). The rule: $ASK_INLINE_RULE"
 }
 
 # ask_next_n <comments-json>: the n of a desk's next ask: the highest n of every comment whose first line opens as an
@@ -2897,8 +3017,9 @@ desk_find() {
 
 # desk_parse <id> <row>: (a row_read of the desk) the desk's comments read into {asks:[…], messages:[…], dropped:[…],
 # history: <n>}, in comment order. Each ask: {n, url, at, milestone (null on an ask without one), waits_on:[refs],
-# question:[lines], options, default, state: open|answered|withdrawn, answer:{text, url, at, by}}. The question lines
-# are the ask's lines other than `options:`, `default:` and the `Waits on: <ref>` lines (waits_on_parse's shape). Each
+# replaces (the n of its `Replaces: n=<k>` line, ASK_REPLACES_RE, or null), question:[lines], options, default, state:
+# open|answered|withdrawn, answer:{text, url, at, by}}. The question lines are the ask's lines other than `options:`,
+# `default:`, `Replaces:` and the `Waits on: <ref>` lines (waits_on_parse's shape). Each
 # message: {from, at, url, text}. The dropped lines are printed on stderr here. A BEAST-MSG line that is not the shape
 # (the pre-1.5.0 `from=<login>/<LABEL> to=<login>/<LABEL> at=<UTC>` tag) is dropped loud only inside the seat's inbox
 # window, newer than its last ack on the desk (seat_acks); older ones are dated history the seat acted on: counted
@@ -2906,7 +3027,7 @@ desk_find() {
 desk_parse() {
   local id="$1" row="$2" parsed ack
   ack="$(seat_acks "$row" | awk -F'\t' -v s="$id" '$1 == s {print $2}')"
-  parsed="$(jq '.comments' <<< "$row" | jq -c --arg seat "$id" --arg ack "$ack" --arg askre "$ASK_HEADER_RE" --arg wre "$WAITS_ON_RE" --arg msgre "$MSG_HEADER_RE" --argjson as "$(jq -c '[.issue.assignees[].login]' <<< "$row")" '
+  parsed="$(jq '.comments' <<< "$row" | jq -c --arg seat "$id" --arg ack "$ack" --arg askre "$ASK_HEADER_RE" --arg wre "$WAITS_ON_RE" --arg rre "$ASK_REPLACES_RE" --arg msgre "$MSG_HEADER_RE" --argjson as "$(jq -c '[.issue.assignees[].login]' <<< "$row")" '
     def m(re): [capture(re)] | .[0];
     def short: split("/") | if length == 3 then "\(.[2])/\(.[1])" else join("/") end;
     ("(words typed to " + $seat + "'"'"'s session, verbatim)") as $typed |
@@ -2921,7 +3042,8 @@ desk_parse() {
              elif .asks[$a.n] != null then .dropped += ["a second ask n=\($a.n) (the first stands): \($c.url)"]
              else .asks[$a.n] = {n: ($a.n | tonumber), url: $c.url, at: $c.at, milestone: $a.ms,
                     waits_on: [$rest[] | select(startswith("Waits on:")) | (capture($wre) // {ref: "MALFORMED:\(.)"}) | .ref],
-                    question: [$rest[] | select(test("\\S") and (test("^(options|default):") | not) and (startswith("Waits on:") | not))],
+                    replaces: ([$rest[] | select(startswith("Replaces:")) | (capture($rre) | .n | tonumber) // "MALFORMED:\(.)"] | .[0] // null),
+                    question: [$rest[] | select(test("\\S") and (test("^(options|default):") | not) and (startswith("Waits on:") | not) and (startswith("Replaces:") | not))],
                     options: ([$rest[] | select(startswith("options:")) | sub("^options:\\s*"; "")] | .[0]),
                     default: ([$rest[] | select(startswith("default:")) | sub("^default:\\s*"; "")] | .[0]),
                     state: "open", answer: null}
@@ -2929,7 +3051,7 @@ desk_parse() {
          elif ($f | startswith("BEAST-ANSWER")) then
            ($f | m("^BEAST-ANSWER n=(?<n>[0-9]+)( (?<t>.*))?$")) as $a
            | ([$rest[] | select(. == $typed)] | length > 0) as $is_typed
-           | ((([($a.t // "")] + [$rest[] | select(. != $typed)]) | map(select(test("\\S"))) | join("\n"))) as $text
+           | ((([($a.t // "")] + [$rest[] | select(. != $typed and (startswith("BEAST-ACK ") | not))]) | map(select(test("\\S"))) | join("\n"))) as $text
            | if $a == null then .dropped += ["malformed BEAST-ANSWER line: \($c.url)"]
              elif (($as | index($c.by)) == null and ($is_typed | not)) then .dropped += ["BEAST-ANSWER n=\($a.n) by \($c.by), not an assignee of the desk nor posted by desk.sh answer: \($c.url)"]
              elif (.asks[$a.n] == null or .asks[$a.n].state != "open") then .dropped += ["BEAST-ANSWER n=\($a.n) answers no open ask: \($c.url)"]
@@ -2954,7 +3076,23 @@ desk_parse() {
   jq -r '.dropped[] | "daita-beast: desk of '"$id"': dropped: \(.)"' <<< "$parsed" >&2
   jq -r 'select(.history > 0) | "daita-beast: desk of '"$id"': \(.history) pre-1.5.0 message line(s) older than the last ack ('"$ack"'): history, not read"' <<< "$parsed" >&2
   jq -r '.asks[] | .url as $u | .waits_on[] | select(startswith("MALFORMED:")) | "daita-beast: desk of '"$id"': a \"Waits on:\" line that is not \"Waits on: <seat id | owner/repo#N>\" (\(sub("^MALFORMED:"; ""))): \($u)"' <<< "$parsed" >&2
-  jq -c '.asks |= map(.waits_on |= map(select(startswith("MALFORMED:") | not)))' <<< "$parsed"
+  jq -r '.asks[] | select((.replaces | type) == "string") | "daita-beast: desk of '"$id"': a \"Replaces:\" line that is not \"Replaces: n=<k>\" (\(.replaces | sub("^MALFORMED:"; ""))): \(.url)"' <<< "$parsed" >&2
+  jq -c '.asks |= map((.waits_on |= map(select(startswith("MALFORMED:") | not))) | (if (.replaces | type) == "string" then .replaces = null else . end))' <<< "$parsed"
+}
+
+# desk_news <id> <parsed> <ack UTC | "">: (desk_parse's result for the desk of <id>) what is news for the seat on its
+# desk since its ack, one line each, "<at>\t  answered n=…" or "<at>\t  message from …", oldest first: every answer to
+# its asks newer than the ack, and every message newer than the ack that another sender wrote (a message the seat sent
+# itself, report.sh --post's section for its own poster included, is its own act, as event_actors reads it). The one
+# owner: desk.sh inbox prints it, desk.sh answer names what the recorder's ack covers, the watchdog's unacked check
+# takes its newest <at>.
+desk_news() {
+  [[ $# -eq 3 && "$1" =~ $SEAT_ID_RE ]] || die "desk_news takes <seat id> <parsed desk> <ack UTC | \"\">, not ${1:-}"
+  jq -r --arg ack "$3" --arg id "$1" '
+    def short: split("/") | if length == 3 then "\(.[2])/\(.[1])" else join("/") end;
+    ([.asks[] | select(.state == "answered" and .answer.at > $ack) | {at: .answer.at, l: "  answered n=\(.n): \(.question[0] // "") -> \(.answer.text | split("\n")[0])  \(.answer.url)"}]
+     + [.messages[] | select(.at > $ack and ((.from | short) != $id)) | {at, l: "  message from \(.from) at \(.at): \(.text | split("\n")[0])  \(.url)"}])
+    | sort_by(.at) | .[] | "\(.at)\t\(.l)"' <<< "$2"
 }
 
 # ---- dependencies as data: the one owner of the waits-on shape --------------------------------------
@@ -2987,6 +3125,114 @@ waits_on_parse() {
   bad="$(printf '%s\n' "$text" | tr -d '\r' | jq -Rr --arg re "$WAITS_ON_RE" 'select(startswith("Waits on:")) | sub("\\s+$"; "") | select(test($re) | not)')"
   [[ -z "$bad" ]] || die "$who: a \"Waits on:\" line that is not \"Waits on: <seat id | owner/repo#N>\": $bad"
   printf '%s\n' "$text" | tr -d '\r' | jq -Rr --arg re "$WAITS_ON_RE" 'sub("\\s+$"; "") | capture($re) // empty | .ref'
+}
+
+# ---- programs and follow-ons: the one owner of each shape ------------------------------------------------------
+# A PROGRAM row is a decision row whose body carries the section `## Sub-acts` (filed right after `## Decision`), one line
+# per sub-act the decider's one word pre-authorizes:
+#   - <slug>: <one-line act>                       SUB_ACT_RE; <slug>: lowercase letters, digits and '-'
+# sub_acts_render writes the lines (decision.sh new --sub, revise --sub), sub_acts_parse reads them. The decider's standing
+# approving answer on the program row (row_answer_url) pre-authorizes every listed sub-act; a later revise: or amend line
+# makes it not stand, and so re-opens every sub-act until the decider approves the program again.
+# A FOLLOW-ON row is a decision row filed for one listed sub-act (decision.sh new --follows <program> --sub-act <slug>),
+# marked by one line at the end of its `## Decision`:
+#   Follows: <owner/repo#N> sub-act <slug>         FOLLOWS_RE
+# follows_line writes it, follows_parse reads it. It is covered while program_cover holds: the board and the page render it
+# under its program, never as the decider's turn, and its seat closes it with decision.sh close --covered, whose close line
+# cites the program's approving answer and quotes no words (row_close_comment, kind covered). The page's SUBACT_RE and
+# FOLLOWS_RE are the twins (plugin/tests/regex-mirror.test.mjs; plugin/tests/program.test.mjs runs both readers).
+SUB_ACT_RE='^- (?<slug>[a-z0-9][a-z0-9-]*): (?<act>\S.*)$'
+FOLLOWS_RE='^Follows: (?<ref>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+) sub-act (?<slug>[a-z0-9][a-z0-9-]*)$'
+SUB_ACTS_SECTION="Sub-acts"
+
+# sub_acts_render "<slug>: <act>"...: the section's lines, one per sub-act; dies on a malformed one or a slug named twice.
+sub_acts_render() {
+  [[ $# -ge 1 ]] || die "sub_acts_render takes one or more \"<slug>: <one-line act>\""
+  local s l slug out="" slugs=$'\n'
+  for s in "$@"; do
+    l="- $s"
+    [[ "$s" != *$'\n'* ]] && jq -en --arg l "$l" --arg re "$SUB_ACT_RE" '$l | test($re)' >/dev/null \
+      || die "--sub '$s' is not '<slug>: <one-line act>' (slug: lowercase letters, digits and -)"
+    slug="${s%%:*}"
+    [[ "$slugs" != *$'\n'"$slug"$'\n'* ]] || die "--sub names the sub-act '$slug' twice"
+    slugs+="$slug"$'\n'; out+="$l"$'\n'
+  done
+  printf '%s' "$out"
+}
+
+# sub_acts_parse <who> <body>: "<slug>\t<act>" per sub-act of the body's `## Sub-acts`, nothing when it has none. A
+# non-empty line there that is not the shape, or a slug listed twice, dies naming <who>: a sub-act is never guessed.
+sub_acts_parse() {
+  local who="$1" sec bad out dup
+  sec="$(printf '%s\n' "$2" | tr -d '\r' | section "$SUB_ACTS_SECTION")"
+  [[ -n "${sec//[[:space:]]/}" ]] || return 0
+  bad="$(jq -Rr --arg re "$SUB_ACT_RE" 'sub("\\s+$"; "") | select(test("\\S")) | select(test($re) | not)' <<< "$sec")"
+  [[ -z "$bad" ]] || die "$who: a '## $SUB_ACTS_SECTION' line that is not '- <slug>: <one-line act>': $bad"
+  out="$(jq -Rr --arg re "$SUB_ACT_RE" 'sub("\\s+$"; "") | capture($re) // empty | "\(.slug)\t\(.act)"' <<< "$sec")"
+  dup="$(cut -f1 <<< "$out" | sort | uniq -d | paste -sd, -)"
+  [[ -z "$dup" ]] || die "$who: '## $SUB_ACTS_SECTION' lists the sub-act $dup twice"
+  printf '%s\n' "$out"
+}
+
+# follows_line <owner/repo#N> <slug>: the follow-on's marker line.
+follows_line() {
+  local l="Follows: $1 sub-act $2"
+  jq -en --arg l "$l" --arg re "$FOLLOWS_RE" '$l | test($re)' >/dev/null || die "'$l' is not 'Follows: <owner/repo#N> sub-act <slug>'"
+  printf '%s\n' "$l"
+}
+
+# follows_parse <who> <body>: "<owner/repo#N>\t<slug>" of the body's Follows: line, nothing when it has none. A line that
+# starts "Follows:" and is not the shape, or a second one, dies naming <who>.
+follows_parse() {
+  local who="$1" bad got
+  bad="$(printf '%s\n' "$2" | tr -d '\r' | jq -Rr --arg re "$FOLLOWS_RE" 'select(startswith("Follows:")) | sub("\\s+$"; "") | select(test($re) | not)')"
+  [[ -z "$bad" ]] || die "$who: a \"Follows:\" line that is not \"Follows: <owner/repo#N> sub-act <slug>\": $bad"
+  got="$(printf '%s\n' "$2" | tr -d '\r' | jq -Rr --arg re "$FOLLOWS_RE" 'sub("\\s+$"; "") | capture($re) // empty | "\(.ref)\t\(.slug)"')"
+  [[ "$(printf '%s' "$got" | awk 'END { print NR }')" -le 1 ]] || die "$who: more than one \"Follows:\" line: a follow-on follows one sub-act of one program"
+  [[ -z "$got" ]] || printf '%s\n' "$got"
+}
+
+# program_cover <program owner/repo#N | url> <slug>: the URL of the decider's standing approving answer on the program row
+# when it covers the sub-act <slug> now; else dies naming why: not a decision row with `## Sub-acts`, no such sub-act
+# listed, rejected (closed not planned, labelled rejected, or a standing reject:), a revise: pending, or no standing
+# approval (unanswered, or approved before its latest amend line). Measured live on every call (decision.sh new --follows,
+# close --covered, board.sh): a revise or amend of the program re-opens every follow-on at once.
+program_cover() {
+  [[ $# -eq 2 ]] || die "program_cover takes <program owner/repo#N> <sub-act slug>, not $*"
+  local rn r n who rd info subs phrase u pend
+  rn="$(parse_issue_ref "$1")" || exit 1; read -r r n <<< "$rn"
+  who="$r#$n"
+  rd="$(row_read "$r" "$n")" || exit 1
+  info="$(jq -c .issue <<< "$rd")"
+  jq -e '.pull_request == null' <<< "$info" >/dev/null || die "$who is a pull request, not a program row"
+  subs="$(sub_acts_parse "$who" "$(jq -r '.body // ""' <<< "$info")")" || exit 1
+  [[ -n "$subs" ]] || die "$who is not a program row: its body lists no '## $SUB_ACTS_SECTION' (decision.sh new --sub files one)"
+  cut -f1 <<< "$subs" | grep -qxF -- "$2" \
+    || die "$who lists no sub-act '$2' (it lists: $(cut -f1 <<< "$subs" | paste -sd, - | sed 's/,/, /g')): a follow-on that wants anything not listed is a normal row"
+  ! jq -e '.state == "closed" and (.state_reason == "not_planned" or any(.labels[]; .name == "rejected"))' <<< "$info" >/dev/null \
+    || die "$who was rejected: a rejected program covers nothing"
+  phrase="$(row_phrase "$who" "$info" 2>/dev/null)"
+  u="$(row_answer_url "$rd" "$phrase" reject 2>/dev/null)" || exit 1
+  [[ -z "$u" ]] || die "$who was rejected ($u): a rejected program covers nothing"
+  pend="$(row_revise_pending "$rd")" || exit 1
+  [[ -z "$pend" ]] || die "$who: the decider asked for a revision at $pend: the program covers nothing until it is revised and approved again"
+  u="$(row_answer_url "$rd" "$phrase" approve)" || exit 1
+  [[ -n "$u" ]] || die "$who is not approved (no standing approval by its decider, or one older than its latest amend line): it covers nothing until the decider approves it"
+  echo "$u"
+}
+
+# row_queued_behind <who> <body>: the first row (owner/repo#N) the body's `Waits on:` lines name (waits_on_parse, the one
+# reader) that is still open, or nothing. A row queued behind an open row is not the decider's turn (board.sh; the page's
+# queuedOf is the twin, plugin/tests/program.test.mjs). A seat ref never queues a row. Dies when a named row cannot be read.
+row_queued_behind() {
+  local who="$1" refs ref rn r n st
+  refs="$(waits_on_parse "$who" "$2")" || exit 1
+  while IFS= read -r ref; do
+    [[ "$ref" == *#* ]] || continue
+    rn="$(parse_issue_ref "$ref")" || exit 1; read -r r n <<< "$rn"
+    st="$(issue_get "$r" "$n")" || exit 1
+    [[ "$(jq -r .state <<< "$st")" != open ]] || { echo "$ref"; return 0; }
+  done <<< "$refs"
 }
 
 # ---- milestones: the one owner of the milestone shape -------------------------------------------------

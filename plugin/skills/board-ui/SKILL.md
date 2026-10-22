@@ -34,11 +34,11 @@ Load `artifact-capabilities`. Read this session's definitions of the six tools a
 | `get_me` | `{}` | `login` |
 | `search_issues` | `{query: "is:open assignee:<login> label:decision,desk", perPage: 100, sort: "updated", order: "desc", fields: [...]}` (scoped to is:issue: it never returns a PR) | `items[]`: `number`, `title`, `body`, `html_url`, `labels` (strings), `comments`, `updated_at`, `repository_url` |
 | `search_pull_requests` | `{query: "is:open assignee:<login> label:needs-review", perPage: 100, sort: "updated", order: "desc", fields: [...]}` | the same `items[]` fields, for the PRs |
-| `issue_read` | `{method: "get_comments", owner, repo, issue_number, perPage: 20, page}` | a bare comment array (the shape inside a page) or `comments[]`: `body`, `created_at`, `html_url`, `user.login` |
+| `issue_read` | `{method: "get_comments", owner, repo, issue_number, perPage: 20, page}`; and `{method: "get", owner, repo, issue_number}` for a row a `Waits on:` line names that is on neither list (assigned to someone else) | a bare comment array (the shape inside a page) or `comments[]`: `body`, `created_at`, `html_url`, `user.login`; for `get`, the issue's `state` |
 | `add_issue_comment` | `{owner, repo, issue_number, body}` | `html_url` and `created_at` when present; otherwise the issue URL |
 | `get_file_contents` | `{owner, repo, path}` plus `sha` or `ref` | the content block of type `resource`, field `resource.text` |
 
-The shapes of `get_me`, `search_issues`, `issue_read`, `add_issue_comment` and `get_file_contents` were observed on 2026-10-10 and 2026-10-11 against the connector at `api.githubcopilot.com/mcp`; `search_pull_requests` is called with `search_issues`'s arguments and read the same way, and was not yet observed from a page. A search the connector refuses fails the whole list in the banner, naming the tool.
+The shapes of `get_me`, `search_issues`, `issue_read`, `add_issue_comment` and `get_file_contents` were observed on 2026-10-10 and 2026-10-11 against the connector at `api.githubcopilot.com/mcp`; `search_pull_requests` is called with `search_issues`'s arguments and read the same way, and was not yet observed from a page; nor was `issue_read` with `method: "get"`. A search the connector refuses fails the whole list in the banner, naming the tool.
 
 ## 4. Publish
 
@@ -64,7 +64,7 @@ To update an existing board (a republish):
 Tell the decider:
 
 - The first time the page calls GitHub, claude.ai asks them to allow the connector for this page. Posting an answer is a write and asks for approval unless they set it to always allow.
-- The top list is everything waiting on them: the decisions and PRs whose turn is theirs and every open desk ask, counted together in the headline and sorted longest waiting first, each with how long it has waited. A desk ask is answered in that list, as in the seat's desk. Rows already answered fold into "With the seats" below the desks strip, grouped by seat (a row with no `seat:` label under its filer, "—" when it has none); a row's labels never take it out of the top list or its count.
+- The top list is everything waiting on them: the decisions and PRs whose turn is theirs and every open desk ask, counted together in the headline and sorted longest waiting first, each with how long it has waited. A desk ask is answered in that list, as in the seat's desk. Rows already answered fold into "With the seats" below the desks strip, grouped by seat (a row with no `seat:` label under its filer, "—" when it has none); a row's labels never take it out of the top list or its count. Two kinds of open row are not their turn: a follow-on of a program (listed under the program, "Covered by …": their one approval of the program pre-authorized it) and a row queued behind an open row it waits on ("Queued behind <ref>", their turn once that row closes).
 - `#<owner>.<repo>.<number>` after the artifact link opens on that card; `#desk.<login>.<LABEL>` opens that seat's desk.
 
 An agent cannot operate the page: browser automation does not reach the artifact's frame (measured 2026-10-11, clicks, scroll and keys all dropped). Answering from the page is the decider's own click. The agent's check is reading GitHub afterwards.

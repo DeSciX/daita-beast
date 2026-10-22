@@ -26,20 +26,27 @@ Four reads, all for the viewer:
 
 | Read | Call | Holds |
 |---|---|---|
-| rows | `search_issues` `{query: "is:open label:decision assignee:<login>", perPage: 100, sort: "updated", order: "desc", fields: ["number", "title", "html_url", "labels", "updated_at", "repository_url"]}` and `search_pull_requests` with the same arguments and `label:needs-review` (`search_issues` never returns a PR) | every open decision issue and PR waiting on the viewer (a PR when `html_url` contains `/pull/`) |
+| rows | `search_issues` `{query: "is:open label:decision assignee:<login>", perPage: 100, sort: "updated", order: "desc", fields: ["number", "title", "html_url", "labels", "updated_at", "repository_url", "body"]}` and `search_pull_requests` with the same arguments and `label:needs-review` (`search_issues` never returns a PR) | every open decision issue and PR assigned to the viewer (a PR when `html_url` contains `/pull/`); which of them wait on the viewer is decided below |
+| queue refs | `issue_read` `{method: "get", owner, repo, issue_number}`, once per distinct row a row's body names on a `Waits on: <owner/repo#N>` line (a `Waits on:` naming a seat is skipped) | whether that row is still `open` |
 | desks | `search_issues` `{query: "is:open is:issue label:desk assignee:<login>", perPage: 100, fields: ["number", "title", "html_url", "labels", "updated_at", "repository_url"]}` | one desk per seat |
 | latitude closes | `search_issues` `{query: "is:closed label:decision assignee:<login> closed:>=<cut>", perPage: 100, fields: ["number", "title", "html_url", "closed_at", "repository_url"]}`, then `issue_read` `get_comments` on each (pages until a short page) | the rows a seat closed since the cut; one is a latitude close when its newest close comment's first line is `Merged under standing latitude <<record link>> by <seat id>` (the latitude form of `lib.sh` `CLOSE_LINE_RE`): merged under that seat's standing latitude, with no words of the viewer's |
 | desk comments | `issue_read` `get_comments`, only for a desk whose `updated_at` is newer than the cut | its open asks (a `BEAST-ASK n=` with no later `BEAST-ANSWER n=` or `BEAST-WITHDRAW n=` of that n, read in comment order as `desk_parse` does) and its messages created after the cut (`BEAST-MSG … to=<login>/<LABEL>` and `BEAST-MSG … to=<login>` lines, or a plain comment by someone other than the viewer) |
+
+**Waiting on the viewer** is decided per row as the board page does (`plugin/templates/board.html`; the scripts own the same rules in `board.sh`), in this order:
+
+- A **follow-on** is never the viewer's turn: its body carries exactly one line `Follows: <owner/repo#N> sub-act <slug>` (the page's `FOLLOWS_RE` and `followsOf`; `lib.sh` `FOLLOWS_RE`, `follows_parse`). The page's `turnOf` shows it as covered by its program, or under it, through `followOf`; either way the seat closes it, with no word of the viewer's (`decision.sh close --covered`).
+- A **queued** row is not the viewer's turn while a row it waits on is open: of its `Waits on: <owner/repo#N>` lines (the page's `WAITS_RE` and `waitsOnRows`; `lib.sh` `waits_on_parse`), the first whose row reads `open` (the queue refs read) queues it (the page's `queuedOf`; `lib.sh` `row_queued_behind`). A ref that cannot be read is named in the reply and the row counts as waiting.
+- Every other row waits on the viewer, a program row (one with `## Sub-acts`) included: its one approving answer covers its sub-acts.
 
 Something **moved** when any row or desk has `updated_at` newer than the cut, or a latitude close was found. (Editing a comment does not move `updated_at`; an edited answer waits for the next new comment, as the protocol notes.)
 
 - **Nothing moved: post nothing, edit nothing, republish nothing** (step 3 still runs). The reply is empty.
 - **Something moved:** the reply is the digest, a short list with links, in this order:
-  1. `Waiting on you (<n>)`: one line per row, `<owner/repo>#<N> <title> — <PR | decision>, <seat labels> <link>`, newest `updated_at` first; nothing else from the body.
+  1. `Waiting on you (<n>)`: one line per row that waits on the viewer, `<owner/repo>#<N> <title> — <PR | decision | program>, <seat labels> <link>`, newest `updated_at` first; nothing else from the body. Then, when there are any, `Not your turn (<q> queued, <f> follow-ons)`: one line per row, `<owner/repo>#<N> <title> — queued behind <owner/repo#N>` or `— follow-on of <owner/repo#N> sub-act <slug>`, <link>. Neither counts in `<n>`.
   2. `Open asks (<m>)`: one line per open ask, `<LABEL> ask <n>: <first question line> [options: …] <link to the comment>`.
   3. `Messages since <cut> (<k>)`: one line per message, `<from> on <LABEL>'s desk: <first body line> <link>`.
   4. `Merged under a standing latitude since <cut> (<l>)`: one line per latitude close, `<owner/repo>#<N> <title> — latitude, by <seat id>, record <record link> <link to the close comment>`, for the viewer to audit against the word they recorded. A latitude close is never the viewer's answer, and the tick never answers it.
-  Then edit the stamp in place with `update_issue_comment` `{owner, repo, comment_id, body: "BEAST-COWORK by=<login> at=<now UTC> rows=<n> asks=<m> msgs=<k>"}`; when no stamp exists, `add_issue_comment` with that body once. Never a second comment for the same login.
+  Then edit the stamp in place with `update_issue_comment` `{owner, repo, comment_id, body: "BEAST-COWORK by=<login> at=<now UTC> rows=<n> asks=<m> msgs=<k>"} (`rows=` is `<n>`, the rows waiting on the viewer)`; when no stamp exists, `add_issue_comment` with that body once. Never a second comment for the same login.
 
 Answers go through the board page or the `connector` skill's recipes (5, 11), never from the tick.
 
@@ -53,4 +60,4 @@ A template that moved republishes exactly once: the next tick reads the new stam
 
 ## What a tick costs
 
-A quiet tick: `get_me`, one `get_file_contents` (the roster), one `search_issues` and one `issue_read` (the stamp), four searches (rows: `search_issues` and `search_pull_requests`; latitude closes and desks: `search_issues`), one `list_commits`, and one Artifact read of the page (the whole page, the one large read). A tick that moved adds one `issue_read` per desk that changed and per row closed since the cut, and one comment edit; a template that moved adds the `board-ui` publish (one `get_file_contents` and one Artifact publish). The GitHub search quota (30 a minute) is shared with the board page's own searches (two calls every 2 min, two every 15 min) and the relay: schedule the task no more often than every 15 minutes.
+A quiet tick: `get_me`, one `get_file_contents` (the roster), one `search_issues` and one `issue_read` (the stamp), four searches (rows: `search_issues` and `search_pull_requests`; latitude closes and desks: `search_issues`), one `list_commits`, and one Artifact read of the page (the whole page, the one large read). A tick that moved adds one `issue_read` per desk that changed, per row closed since the cut and per distinct `Waits on:` row, and one comment edit; a template that moved adds the `board-ui` publish (one `get_file_contents` and one Artifact publish). The GitHub search quota (30 a minute) is shared with the board page's own searches (two calls every 2 min, two every 15 min) and the relay: schedule the task no more often than every 15 minutes.

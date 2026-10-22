@@ -50,9 +50,11 @@ function matches(it, q) {
 // created_at, html_url}]; issuesScoped false makes search_issues return pull requests too (the connector as measured
 // 2026-10-12); a tool named in missing is refused as outside the page's grant; hash is the location hash the page opens
 // with (a deep link). add_issue_comment appends the comment to the thread it names and answers it as the connector does.
+// issue_read get answers an item of rows or of others (connector-shaped items no search returns: rows assigned to
+// someone else), by owner/repo and number; any other item is refused as not found.
 // Resolves once the page has rendered every read; returns {doc, calls, text(id), turnRows(), withSeats(), turnAsks(),
 // click(node), settle()}.
-export async function loadPage(pagePath, { login = "alice", rows = [], comments = {}, issuesScoped = true, missing = [], hash = "" } = {}) {
+export async function loadPage(pagePath, { login = "alice", rows = [], comments = {}, issuesScoped = true, missing = [], hash = "", others = [] } = {}) {
   const html = readFileSync(pagePath, "utf8");
   const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
   if (!scripts.length) throw new Error(`${pagePath}: no inline <script>`);
@@ -72,6 +74,10 @@ export async function loadPage(pagePath, { login = "alice", rows = [], comments 
         list.push(c);
         const it = rows.find((r) => r.html_url.endsWith(`/${args.owner}/${args.repo}/issues/${args.issue_number}`)); if (it) it.updated_at = c.created_at;
         return ok(c);
+      }
+      if (tool === "issue_read" && args.method === "get") {
+        const it = rows.concat(others).find((r) => r.html_url.replace(/\/pull\//, "/issues/").endsWith(`/${args.owner}/${args.repo}/issues/${args.issue_number}`));
+        return it ? ok(it) : Promise.reject({ code: "tool_error", message: "Not Found" });
       }
       if (tool === "issue_read" && args.method === "get_comments") return ok((comments[`${args.owner}/${args.repo}#${args.issue_number}`] || comments[args.issue_number] || []).slice((args.page - 1) * args.perPage, args.page * args.perPage));
       return Promise.reject({ code: "tool_error", message: "stub connector has no " + tool });

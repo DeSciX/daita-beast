@@ -9,6 +9,8 @@ Which tier: would a development team put this on a PR or an issue for the lead's
 
 A decision is an issue in your home repo (the roster's `repo`, always private), labelled `decision`, assigned to the decider, with six sections: Decision, Unblocks, Waits, Recommendation, Approve with, Record. Add `--hands` when only the assignee can perform the act (public flip, chain, secret, scope grant). The Record section cites the dated record (repo and commit id) that holds the context; the verbatim words of a ruling live in that record, the issue cites it.
 
+Compose every row to the rule `new` (and so `record`) and `revise` enforce (`decision.sh --help` states it): the content inline, or a URL to a file or diff at a commit (`https://github.com/<owner>/<repo>/blob/<sha>/<path>`, `…/commit/<sha>`); never a local path (`/Users/…`, `/home/…`, `~/…`) or "see session", "as discussed", "per our chat". The decider reads only the row. A row that breaks it is refused before anything is written.
+
 File one BEFORE you ask the decider for anything you wait on (it files in the roster's `repo`; `--decides <owner/repo>` names the repo it decides, as a `Decides:` link at the end of the Decision section):
 ```
 ${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh new --assignee <decider login> --by <YOUR SEAT> [--seat <SEAT>]... [--decides <owner/repo>] \
@@ -23,17 +25,40 @@ Add `--seat <LABEL>` for every other seat that waits on it (label `seat:<login>/
 
 Every row belongs to a milestone: `--milestone "<title>"` files it under that open milestone of the repo, and `new` refuses a row without one when the repo has any open milestone, listing them (`/daita-beast:milestone`). Declare what you wait on as data with `--waits-on <seat | owner/repo#N>` (repeatable): each becomes a `Waits on: <ref>` line at the end of the `## Waits` section, read by `/daita-beast:deps` and the participant report.
 
+**One word for several acts: a program row.** When several acts serve one program the decider would approve as a whole (a deploy and its follow-up deploy, a release and its announcement), file ONE program row listing the sub-acts, never one row per act:
+```
+${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh new … --title "powch program: deploy and ship" \
+  --sub "deploy-ms: deploy the Powch microservice to PROD" --sub "deploy-site: deploy the Powch site to PROD"
+```
+Its body gets `## Sub-acts` (one `- <slug>: <one-line act>` each) right after `## Decision`. The decider's one approving answer on it pre-authorizes every listed sub-act; a later `revise:` or amend re-opens all of them until the decider approves again. When you reach a sub-act that needs its own record on the board, file a follow-on under the approved program:
+```
+${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh new … --follows acme/widgets#74 --sub-act deploy-ms
+```
+It adds `Follows: <program> sub-act <slug>` to its Decision section and is filed already covered: assigned to the decider, listed under its program on the board, never as their turn. It is refused, before anything is written, for a sub-act the program does not list, while the program is unanswered, revise-pending or rejected, and with an `--assignee` the program does not have. Anything not listed is a normal row. Once the sub-act is done, close it with no words; the close line cites the program's approval:
+```
+${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh close acme/widgets#75 --covered --by <YOUR SEAT>
+```
+Only the row's own seat closes it, and only while the program still covers that sub-act. Change a program's sub-acts with `revise --sub …` (it replaces the whole list).
+
+**Queued rows.** A row filed with `--waits-on <owner/repo#N>` naming a row that is still open shows on the board as "queued behind <ref>", not as the decider's turn, until that row closes. File the dependency as data; do not hold the row back.
+
 Close one on the word (comments the verbatim words with the record, closes, republishes the decider's board in the roster's `board` repo, and prints the waiting seats with their live addresses):
 ```
 ${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh close acme/widgets#12 --words "<verbatim>" --record "<repo> <commit id> | <issue comment URL>" --by <YOUR SEAT>
 ```
-The close comment's last line is your `BEAST-ACK … state=seen` (`--next` names your act). Then send each other seat printed as unacked ONE line by `SendMessage`: the words verbatim and the issue URL. A seat with no live address is not sent; its inbox lists the row until it acks.
+The close comment's last line is your `BEAST-ACK … state=seen` (`--next` names your act). The board republish retries a GitHub rate limit with backoff; when it still fails, the close stands and exits 0 with one loud line, `BOARD STALE: <row> IS CLOSED (the close stands; never rerun it) …`, and leaves the board's stale marker (`~/.beast/board/stale/`): the machine watchdog's next tick republishes the board, and any successful `board.sh --publish` clears the marker. Never rerun the close. Then send each other seat printed as unacked ONE line by `SendMessage`: the words verbatim and the issue URL. A seat with no live address is not sent; its inbox lists the row until it acks.
 
 Answer a `revise:` by revising the row, never by a reply comment (`/daita-beast:respond`):
 ```
 ${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh revise acme/widgets#12 --by <YOUR SEAT> --recommendation "<new text>" --approve-with "<new phrase>"
 ```
-It refuses unless the decider's standing answer is a revise, rewrites only the named sections (`--body-file` replaces the six), and posts one comment whose first line is the amend line. Until then `close` refuses an approval, naming the revise; a reject still closes.
+It rewrites only the named sections (`--body-file` replaces the six; `--sub` the program's sub-acts) and posts one comment whose first line is the amend line. Until then `close` refuses an approval, naming the revise; a reject still closes.
+
+When the facts under your own open row change before the decider has answered it (an artifact became ready, a target moved), amend the row with the same verb instead of a reply or a new row:
+```
+${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh revise acme/widgets#12 --by <YOUR SEAT> --decision "<new text>"
+```
+Only the row's filer or one of its seats may run it, only while the decider's standing answer is neither an approve nor a reject (an approval older than the row's latest amend line is none), and never on a closed row. Its amend line reads `amended by <seat> before any answer; changed: <sections>`, so an approval given before it no longer counts. After the decider answered, a change is their `revise:` or a new row.
 
 If a hand edit broke your row's body (the watchdog's `row-shape` reminder, or the board shows it malformed), put back the last body a Beast script wrote, from the issue's edit history; no word of the decider's is needed:
 ```
@@ -55,5 +80,11 @@ It opens with your home's milestones due within 3 days or overdue, one line each
 If the decider commented their answer on the issue itself, that comment is the record: pass its URL as `--record`. Words typed to a session are committed to the coordinating repo's dated records first, then cited by commit.
 
 Rules: decisions are repo- and project-specific, never Beast-wide. A decision is filed by the seat that is blocked, in its home repo, naming the repo it decides with `--decides`, and added to the workstream's Project. Every write refuses a public or public-intended repo (exit 1, naming the private repo to use): coordination stays in the private twin, and a public repo receives only publishes. Before filing, re-read the current end of the record you cite: a row built from an earlier snapshot files a decision already made. The approving phrase is exact; any other wording from the decider is a question back, not an approval. Never paraphrase a ruling: record the words first (the repo's dated records, committed), then close with the commit id.
+
+A plain issue that is not a decision (a bug, a defect, a follow-up) is filed with `issue.sh`, never with a bare `gh issue create`: it lists the repo's open issues and refuses a title that matches one (the same words after normalising case and punctuation, or 4+ shared content words covering half of the shorter title), naming each candidate; `--force` files it after you have read them:
+```
+${CLAUDE_PLUGIN_ROOT}/scripts/issue.sh new --repo <owner/repo> --title "<title>" --body-file <f> [--label <name>]... [--force]
+```
+It refuses a public or public-intended repo, a title or body that points to a local path or a session, and a coordination label (`decision`, `desk`, `needs-review`, …).
 
 Without a shell (Cowork, claude.ai), use the `connector` skill: its recipe of the same name, or its list of the acts it cannot do.
