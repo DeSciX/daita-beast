@@ -1167,40 +1167,33 @@ fill_template() {
 import sys
 s = open(sys.argv[1], encoding="utf-8").read()
 kv = dict(a.split("=", 1) for a in sys.argv[2:])
-if "@@TWIN@@\n\n" in s and not kv.get("TWIN", ""): s = s.replace("@@TWIN@@\n\n", "")
 for k, v in kv.items(): s = s.replace("@@%s@@" % k, v)
 if "@@" in s: sys.exit("daita-beast: unfilled field in %s: %s" % (sys.argv[1], s[s.index("@@"):].split("\n")[0]))
 sys.stdout.write(s)
 PY
 }
 
-# claude_block_render <seat>: the Beast block of one seat's home, from templates/claude-block.md: the seat's identity,
-# its role (the agent file), and its workstream's `## Seats` table rendered from the tracking issue (the one owner).
+# claude_block_render <seat>: the Beast block of one seat's home, from templates/claude-block.md: who the seat is
+# (identity, agent, tracking issue), the decider's board, and the rule that irreversible acts go on it.
 claude_block_render() {
-  local seat id slug short roster board pub twin="" proto decider decider_name agent apath ref r n title table
+  local seat id slug short roster decider decider_name agent ref r n
   seat="${1:-}"; [[ -n "$seat" ]] || die "claude_block_render takes a seat"
   id="$(seat_identity "$seat")" || exit 1
   short="$(seat_short "$id")"; slug="${id%%/*}"
   roster="$(roster_path)"
   [[ -n "$(roster_row "$short")" ]] || die "seat $short is not in $roster: a home's block is rendered from the seat's own roster"
   agent="$(roster_field "$short" agent)"
-  apath="$(seat_agent_path "$(roster_field "$short" repo)" "$agent")" || exit 1
+  seat_agent_path "$(roster_field "$short" repo)" "$agent" >/dev/null || exit 1
   ref="$(workstream_issue "$slug")" || exit 1
   r="${ref%%#*}"; n="${ref#*#}"
-  title="$(issue_get "$r" "$n" | jq -r '.title // ""')" || exit 1
-  table="$(ws_seats_render "$slug" "$(ws_seats_parse "$slug")")" || exit 1
-  pub="$(roster_pair_check "$roster")" || exit 1
-  proto="$(protocol_repo)" || exit 1
-  [[ -z "$pub" ]] || twin="**This repo is the private twin of \`$pub\`.** All work and coordination happen here: decision rows, desks, tracking issues, status, notes, acks and the decider's words. \`$pub\` receives only publishes and never a coordination comment: the scripts refuse every coordination write to a public or public-intended repo, and \`publish.sh\` is the only writer to \`$pub\`. To publish: (1) \`publish.sh prepare <slug> --paths <path>… | --commits <sha>… --message-file <f>\` cuts \`publish/<slug>\` from \`$pub\`'s default branch with ONE new commit, its message written for outside readers, never this repo's history; (2) the scrub gate runs in prepare and again before every push and merge (\`publish.sh scrub <slug>\`), naming each hit: a private repo's slug or name, a local path, a \`BEAST-\` line, a record path, words from a closed row here, a roster \`scrub\` pattern, a secret-shaped file name; a branch that is not exactly one commit on the public base is refused; (3) \`publish.sh request <slug> --seat <SEAT> --body-file <f>\` pushes the branch, opens the PR on \`$pub\` with an outside-reader description and files the approval row HERE, approved with \`publish <slug>\`; the decider answers on the row, nothing of theirs goes on the PR; (4) on the word, \`publish.sh merge <slug> --words \"<verbatim>\" --by <SEAT>\` squash-merges, deletes the branch and closes the row; (5) \`publish.sh pull\` brings outside contributions merged on \`$pub\` into this repo's default branch."
-  board="$(jq -r '.board // .repo' "$roster")"
+  roster_pair_check "$roster" >/dev/null || exit 1
   # the decider: the roster's one owner (roster_decider dies naming the roster when there is not exactly one); the
   # name shown is that people[] row's "name", required
   decider="$(roster_decider)" || exit 1
   decider_name="$(jq -r --arg g "$decider" '[.people[] | select(.github == $g) | .name // empty] | first // empty' "$roster")"
   [[ -n "$decider_name" ]] || die "roster $roster: the owner $decider has no \"name\" in people[]: the CLAUDE.md block names the decider"
-  fill_template "$BEAST_SCRIPTS/../templates/claude-block.md" "TWIN=$twin" "IDENTITY=$id" "SEAT=$short" "AGENT=$agent" "AGENT_PATH=$apath" \
-    "SLUG=$slug" "WS_TITLE=$title" "MASTER=$r" "TRACKING=https://github.com/$r/issues/$n" "SEATS=$table" \
-    "BOARD=$board" "PROTOCOL=$proto" "DECIDER_NAME=$decider_name" "DECIDER=$decider"
+  fill_template "$BEAST_SCRIPTS/../templates/claude-block.md" "IDENTITY=$id" "AGENT=$agent" \
+    "TRACKING=https://github.com/$r/issues/$n" "DECIDER_NAME=$decider_name" "DECIDER=$decider"
 }
 
 # block_replace <begin regex> <end regex> <block>: stdin text with its first begin…end stretch (Python regexes,
@@ -1246,14 +1239,13 @@ ws_block_markers() {
   printf '%s\t%s\n' "<!-- beast:workstream begin $e -->" "<!-- beast:workstream end $e -->"
 }
 
-# ws_block_render <slug>: the block, from templates/workstream-block.md: the tracking issue, the master, the table.
+# ws_block_render <slug>: the block, from templates/workstream-block.md: one line naming the tracking issue, whose
+# `## Seats` table is the one owner of the seat map (it is not copied into CLAUDE.md).
 ws_block_render() {
-  local slug="$1" ref r n title table
+  local slug="$1" ref r n
   ref="$(workstream_issue "$slug")" || exit 1
   r="${ref%%#*}"; n="${ref#*#}"
-  title="$(issue_get "$r" "$n" | jq -r '.title // ""')" || exit 1
-  table="$(ws_seats_render "$slug" "$(ws_seats_parse "$slug")")" || exit 1
-  fill_template "$BEAST_SCRIPTS/../templates/workstream-block.md" "SLUG=$slug" "TITLE=$title" "MASTER=$r" "TRACKING=https://github.com/$r/issues/$n" "SEATS=$table"
+  fill_template "$BEAST_SCRIPTS/../templates/workstream-block.md" "SLUG=$slug" "TRACKING=https://github.com/$r/issues/$n"
 }
 
 # ws_block_write_local <CLAUDE.md> <slug>: the workstream's block written into a local checkout's CLAUDE.md.
