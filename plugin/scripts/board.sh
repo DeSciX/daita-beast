@@ -11,7 +11,9 @@
 # name a row that is still open is "queued behind <owner/repo#N>" (row_queued_behind, lib.sh); a follow-on row (its
 # Follows: line, follows_parse) is listed right under its program, "↳", as "covered by <program> (<sub-act>)" while the
 # program covers it (program_cover) or "under <program> (<sub-act>): not covered" with why; a program row's Kind names its
-# sub-acts (sub_acts_parse). The header counts the queued and the follow-on rows apart.
+# sub-acts (sub_acts_parse), each with "(when: <condition>)" when it carries one. A decision row's optional sections
+# (ROW_OPTIONAL_SECTIONS: ## Stops if, ## Undo; row_optional_check) follow its Recommendation in that cell, as
+# "Stops if: <c>; <c>" and "Undo: <text>". The header counts the queued and the follow-on rows apart.
 # Between the open table and the decided table: the roster's home repos' milestones due within 3 days or overdue.
 # --publish rewrites the body of the issue titled "Pending decisions (generated)" in --repo (created
 # and pinned when absent); a successful publish deletes this board's stale marker (board_stale_clear, lib.sh: left by a
@@ -83,7 +85,7 @@ while IFS=$'\t' read -r num url_ full; do
         if ( program_cover "$fref" "$fslug" ) >/dev/null 2>/tmp/board.why; then kind="covered by $fref ($fslug)"
         else kind="under $fref ($fslug): not covered: $(sed 's/^daita-beast: //' /tmp/board.why | head -1)"; fi
       fi
-      [[ -z "$subs" ]] || kind="$kind · program: $(cut -f1 <<< "$subs" | paste -sd, - | sed 's/,/, /g')"
+      [[ -z "$subs" ]] || kind="$kind · program: $(awk -F'\t' '{ printf "%s%s%s", (NR > 1 ? ", " : ""), $1, ($3 != "" ? " (when: " $3 ")" : "") }' <<< "$subs")"
     else cat /tmp/board.err >&2; errors=$((errors+1)); fi
   fi
   if jq -e '.pull_request != null' <<< "$live" >/dev/null; then
@@ -100,8 +102,16 @@ while IFS=$'\t' read -r num url_ full; do
     row="| ${kind/decision/PR} | [$who]($url_) | $(jq -r .title <<< "$live" | cell) | $pu | — | $pr_ | $(row_phrase "$who" "$live" | cell) | —"
   else
     row="| $(printf '%s' "$kind" | cell) | $mark[$who]($url_)"
+    # The optional sections ride in the Recommendation cell (one reader: row_optional_check, stops_if_parse, section).
+    opt=""
+    if ( row_optional_check "$who" "$body" ) 2>/tmp/board.err; then
+      st="$(stops_if_parse "$who" "$body" | paste -sd ';' - | sed 's/;/; /g')"
+      un="$(printf '%s\n' "$body" | tr -d '\r' | section "Undo" | sed '/^[[:space:]]*$/d')"
+      opt="${st:+ — Stops if: $st}${un:+ — Undo: $un}"
+    else cat /tmp/board.err >&2; errors=$((errors+1)); opt=" — (malformed optional section)"; fi
     for h in "${ROW_SECTIONS[@]}"; do
       if text="$(section_required "$h" "$body" "$who" 2>/tmp/board.err)"; then
+        [[ "$h" != Recommendation ]] || text="$text$opt"
         row="$row | $(printf '%s' "$text" | cell)"
       else
         cat /tmp/board.err >&2; errors=$((errors+1)); row="$row | (empty or missing ## $h)"

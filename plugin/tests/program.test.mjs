@@ -112,7 +112,7 @@ test("(1) a seat revises its own unanswered row: the body changes, the amend lin
 // ---- (2) programs and follow-ons ----
 const SUBS = ["--sub", "deploy-ms: deploy the Powch microservice to PROD", "--sub", "deploy-site: deploy the Powch site to PROD"];
 test("(2) a program row covers its follow-ons on one approval; a follow-on is filed covered, listed under it, closed --covered citing the approval", () => {
-  const { gh, run, sh, say, file } = world("program");
+  const { gh, run, sh, say, edit, file } = world("program");
   const prog = file("powch program", SUBS);
   assert.equal(prog.status, 0, prog.stderr);
   const pb = issue(gh, prog.n).body;
@@ -161,6 +161,9 @@ test("(2) a program row covers its follow-ons on one approval; a follow-on is fi
   assert.doesNotMatch(close, /verbatim/, "a covered close quotes no words");
   const kind = sh(`close_of_comments "$1" | jq -r '.kind + " " + .record + " " + .seat'`, [JSON.stringify(comments(gh, f1.n))]);
   assert.equal(kind.stdout.trim(), `covered ${approval} alice/DEVPLANE`, kind.stderr);
+  // The decided table's window is the wall clock's last 7 days; the stub's clock stamped the close in the fixture's past,
+  // so the close is moved to now, where the window can see it (a fixture that cannot exhibit the row measures nothing).
+  edit((s) => { s.issues[`${REPO}#${f1.n}`].closed_at = new Date().toISOString().replace(/\.\d+Z$/, "Z"); });
   const d = run("board.sh", ["--assignee", "alice"]);
   assert.match(d.stdout, new RegExp(`\\| covered \\| \\[acme/twin#${f1.n}\\]\\([^)]*\\) \\| powch deploy-ms \\| no words: covered by the program approval ${approval.replace(/[.#]/g, "\\$&")}, closed by alice/DEVPLANE \\|`), d.stdout);
   // A revise of the program re-opens every sub-act: a filed follow-on no longer closes covered, and none is filed.
@@ -223,6 +226,7 @@ test("(2) the readers: lib.sh sub_acts_parse / follows_parse / waits_on_parse an
   const f = pageFns(PAGE, ["subActsOf", "followsOf", "waitsOnRows"], ["SUBACT_RE", "FOLLOWS_RE", "WAITS_RE"]);
   const TABLE = [
     PROG,
+    PROG.replace("- deploy-site: deploy the site", "- deploy-site: deploy the site when: npm test green on the exact commit, served == built"),
     BODY(`\nFollows: ${REPO}#74 sub-act deploy-ms`),
     BODY(`\nFollows: some.org/repo_x#9 sub-act a-1  `),
     BODY().replace("## Waits\nw", `## Waits\nw\nWaits on: ${REPO}#71\nWaits on: alice/DEVX\nWaits on: other/repo#3`),
@@ -231,12 +235,13 @@ test("(2) the readers: lib.sh sub_acts_parse / follows_parse / waits_on_parse an
   ];
   for (const body of TABLE) {
     const lib = (fn, jqp) => { const r = sh(`${fn} t "$1"`, [body]); assert.equal(r.status, 0, r.stderr); return r.stdout.split("\n").filter(Boolean).map(jqp); };
-    assert.deepEqual(lib("sub_acts_parse", (l) => { const [slug, act] = l.split("\t"); return { slug, act }; }), JSON.parse(JSON.stringify(f.subActsOf(body))), body);
+    assert.deepEqual(lib("sub_acts_parse", (l) => { const [slug, act, when] = l.split("\t"); return { slug, act, when: when || null }; }), JSON.parse(JSON.stringify(f.subActsOf(body))), body);
     assert.deepEqual(lib("follows_parse", (l) => { const [ref, slug] = l.split("\t"); return { ref, slug }; })[0] ?? null, JSON.parse(JSON.stringify(f.followsOf(body))), body);
     assert.deepEqual(lib("waits_on_parse", (l) => l).filter((r) => r.includes("#")), Array.from(f.waitsOnRows(body)), body);
   }
   // A malformed line: the scripts die naming it; the page reads none.
-  for (const [fn, body] of [["sub_acts_parse", BODY().replace("## Unblocks", "## Sub-acts\n- Deploy: x\n\n## Unblocks")], ["follows_parse", BODY("\nFollows: acme/twin#74 deploy-ms")],
+  for (const [fn, body] of [["sub_acts_parse", BODY().replace("## Unblocks", "## Sub-acts\n- Deploy: x\n\n## Unblocks")], ["sub_acts_parse", BODY().replace("## Unblocks", "## Sub-acts\n- deploy: x when:\n\n## Unblocks")],
+    ["follows_parse", BODY("\nFollows: acme/twin#74 deploy-ms")],
     ["follows_parse", BODY(`\nFollows: ${REPO}#74 sub-act a\nFollows: ${REPO}#74 sub-act b`)]]) {
     const r = sh(`${fn} t "$1"`, [body]);
     assert.notEqual(r.status, 0, `${fn} accepted ${body}`);

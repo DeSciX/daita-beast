@@ -18,6 +18,7 @@ assignees: ''
 
 ## Recommendation
 <the recommended answer and why, one or two sentences>
+<!-- Optional, right here, in this order: "## Stops if" (one "- <condition>" line per condition under which the seat halts and comes back; decision.sh new --stops-if) and "## Undo" (how the act is undone, the rollback named; every deploy, release or publish row carries it; --undo). A sub-act line may end " when: <condition>". A hands row may end ## Decision with "Run sheet: <https url>" (--run-sheet). -->
 
 ## Approve with
 "<the exact phrase that approves it>" — typed to the orchestrator session, or commented here by the assignee (here a bare `approve` also counts; `<phrase> — <comment>` approves with a comment; `revise: <what to change>` sends it back; `reject: <reason>` closes it). Any other wording is a question back.

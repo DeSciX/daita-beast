@@ -19,7 +19,13 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh new --assignee <decider login> --by <Y
   --recommendation "<answer and why>" --approve-with "<exact phrase>" \
   --record "<repo> <commit id> — <record path>" [--hands] [--project <owner>/<number>]
 ```
-Long text: write the six sections to a file and pass `--body-file <md>` instead of the section flags. `--by` is you, the filing seat: the row always carries your label `seat:<login>/<LABEL>`, and its first comment is your seen ack, so the filing never comes back to you as an event and never sits in your inbox, while the decider's answer and close do.
+Long text: write the six sections to a file and pass `--body-file <md>` instead of the section flags.
+
+Two optional sections go right before `## Approve with` (flags, or in the `--body-file`, never both): `--stops-if "<condition>"` (repeatable) writes `## Stops if`, one `- <condition>` line each, the conditions under which you halt and come back instead of proceeding; `--undo "<how>"` writes `## Undo`, how the act is undone, the rollback named. Every deploy, release or publish row carries `## Undo` (`publish.sh request` writes it). The board shows both after the Recommendation.
+
+Before a build, deploy or release row, run the census (`/daita-beast:census`) and put every line it printed into the row: what you already reviewed but is not served is found before new work is asked for.
+
+A `--hands` row whose act happens in the decider's browser gets a run sheet (`/daita-beast:stage-hands`), linked with `--run-sheet <url>` (a hands row only; `Run sheet: <url>` at the end of `## Decision`). `--by` is you, the filing seat: the row always carries your label `seat:<login>/<LABEL>`, and its first comment is your seen ack, so the filing never comes back to you as an event and never sits in your inbox, while the decider's answer and close do.
 
 Add `--seat <LABEL>` for every other seat that waits on it (label `seat:<login>/<LABEL>`, visible in the GitHub UI and filterable). Every label is read back after the write; one that did not land fails the filing, naming it, before your ack is posted.
 
@@ -30,7 +36,7 @@ Every row belongs to a milestone: `--milestone "<title>"` files it under that op
 ${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh new … --title "powch program: deploy and ship" \
   --sub "deploy-ms: deploy the Powch microservice to PROD" --sub "deploy-site: deploy the Powch site to PROD"
 ```
-Its body gets `## Sub-acts` (one `- <slug>: <one-line act>` each) right after `## Decision`. The decider's one approving answer on it pre-authorizes every listed sub-act; a later `revise:` or amend re-opens all of them until the decider approves again. When you reach a sub-act that needs its own record on the board, file a follow-on under the approved program:
+Its body gets `## Sub-acts` (one `- <slug>: <one-line act>` each) right after `## Decision`. A sub-act that may only run once something holds carries its condition: `--sub "build: merge the PR when: npm test green on the exact commit, served == built"`; the first ` when: ` splits act from condition. The decider's one approving answer on it pre-authorizes every listed sub-act; a later `revise:` or amend re-opens all of them until the decider approves again. When you reach a sub-act that needs its own record on the board, file a follow-on under the approved program:
 ```
 ${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh new … --follows acme/widgets#74 --sub-act deploy-ms
 ```
@@ -38,7 +44,11 @@ It adds `Follows: <program> sub-act <slug>` to its Decision section and is filed
 ```
 ${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh close acme/widgets#75 --covered --by <YOUR SEAT>
 ```
-Only the row's own seat closes it, and only while the program still covers that sub-act. Change a program's sub-acts with `revise --sub …` (it replaces the whole list).
+Only the row's own seat closes it, and only while the program still covers that sub-act. A sub-act with a condition closes only with the evidence that it holds, written into the close line (`…; condition met: <evidence>`):
+```
+${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh close acme/widgets#75 --covered --condition-met "npm test 131/131 at 0123abc; served == built" --by <YOUR SEAT>
+```
+Without it the close is refused; `--condition-met` on a sub-act without a condition is refused too. A condition that does not hold is a stop: come back to the decider with a new row, never widen the sub-act. Change a program's sub-acts with `revise --sub …` (it replaces the whole list).
 
 **Queued rows.** A row filed with `--waits-on <owner/repo#N>` naming a row that is still open shows on the board as "queued behind <ref>", not as the decider's turn, until that row closes. File the dependency as data; do not hold the row back.
 
@@ -52,7 +62,7 @@ Answer a `revise:` by revising the row, never by a reply comment (`/daita-beast:
 ```
 ${CLAUDE_PLUGIN_ROOT}/scripts/decision.sh revise acme/widgets#12 --by <YOUR SEAT> --recommendation "<new text>" --approve-with "<new phrase>"
 ```
-It rewrites only the named sections (`--body-file` replaces the six; `--sub` the program's sub-acts) and posts one comment whose first line is the amend line. Until then `close` refuses an approval, naming the revise; a reject still closes.
+It rewrites only the named sections (`--body-file` replaces the six; `--sub` the program's sub-acts; `--stops-if` the whole `## Stops if`; `--undo` the `## Undo`; `--run-sheet` the Run sheet: line) and posts one comment whose first line is the amend line. Until then `close` refuses an approval, naming the revise; a reject still closes.
 
 When the facts under your own open row change before the decider has answered it (an artifact became ready, a target moved), amend the row with the same verb instead of a reply or a new row:
 ```

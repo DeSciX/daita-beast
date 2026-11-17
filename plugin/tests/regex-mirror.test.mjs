@@ -127,6 +127,11 @@ const CLOSE_LINES = [
   "Closed as covered by https://github.com/acme/twin/issues/74#issuecomment-501 by acme/DEVPLANE",
   "Closed as covered by <https://github.com/acme/twin/issues/74#issuecomment-501> by acme/DEVPLANE now",
   "closed as covered by <https://github.com/acme/twin/issues/74#issuecomment-501> by acme/DEVPLANE",
+  "Closed as covered by <https://github.com/acme/twin/issues/74#issuecomment-501> by acme/DEVPLANE; condition met: npm test 131/131 at 0123abc, served == built",
+  "Closed as covered by <https://github.com/acme/twin/issues/74#issuecomment-501> by acme/DEVPLANE; condition met:",
+  "Closed as covered by <https://github.com/acme/twin/issues/74#issuecomment-501> by acme/DEVPLANE; condition met:  x  ",
+  "Closed as covered by <https://github.com/acme/twin/issues/74#issuecomment-501> by acme/DEVPLANE; condition: x",
+  "Closed as covered by <https://github.com/acme/twin/issues/74#issuecomment-501> by acme/DEVPLANE condition met: x",
 ];
 
 const SUBACT_LINES = [
@@ -141,6 +146,23 @@ const SUBACT_LINES = [
   "- -ms: x",
   "* deploy-ms: x",
   "- deploy-ms x",
+  "- build: merge the PR when: npm test green on the exact commit",
+  "- build: merge when: a when: b",
+  "- build: merge when:",
+  "- build: merge when:x",
+  "- build: merge  when: x",
+  "- build: when: x",
+];
+
+const RUN_SHEET_LINES = [
+  "Run sheet: https://claude.ai/artifact/0123-abcd",
+  "Run sheet: https://claude.ai/artifact/0123-abcd  ",
+  "Run sheet: http://claude.ai/artifact/0123",
+  "Run sheet: https://",
+  "Run sheet: https://claude.ai/a b",
+  "run sheet: https://claude.ai/artifact/0123",
+  "Run sheet:https://claude.ai/artifact/0123",
+  "Run sheet: claude.ai/artifact/0123",
 ];
 
 const FOLLOWS_LINES = [
@@ -190,18 +212,28 @@ test("the amend line: lib.sh AMEND_LINE_RE and the page's AMEND_RE read every fi
 });
 
 test("the close line: lib.sh CLOSE_LINE_RE and the page's CLOSE_RE read every fixture line alike", () => {
-  compare("CLOSE_LINE_RE", "CLOSE_RE", CLOSE_LINES, ["verdict", "record", "seat", "answer", "cseat"]);
+  compare("CLOSE_LINE_RE", "CLOSE_RE", CLOSE_LINES, ["verdict", "record", "seat", "answer", "cseat", "met"]);
+  // A covered close of a sub-act with a condition carries the evidence, read whole by both.
+  const met = CLOSE_LINES.find((l) => l.includes("; condition met: npm test"));
+  assert.equal(jqCaptures(libRe("CLOSE_LINE_RE"), [met])[0].met, "npm test 131/131 at 0123abc, served == built");
   // The fourth kind is read, not only refused alike: a covered close names the program's approving answer and its closer.
   const covered = CLOSE_LINES.find((l) => l.startsWith("Closed as covered by"));
   assert.deepEqual(jqCaptures(libRe("CLOSE_LINE_RE"), [covered]).map((c) => c && [c.answer, c.cseat])[0], ["https://github.com/acme/twin/issues/74#issuecomment-501", "acme/DEVPLANE"]);
 });
 
 test("a program's sub-act line: lib.sh SUB_ACT_RE and the page's SUBACT_RE read every fixture line alike", () => {
-  compare("SUB_ACT_RE", "SUBACT_RE", SUBACT_LINES, ["slug", "act"]);
+  compare("SUB_ACT_RE", "SUBACT_RE", SUBACT_LINES, ["slug", "act", "when"]);
+  // The first " when: " splits the act from its condition.
+  const c = jqCaptures(libRe("SUB_ACT_RE"), ["- build: merge the PR when: npm test green on the exact commit"])[0];
+  assert.deepEqual([c.act, c.when], ["merge the PR", "npm test green on the exact commit"]);
 });
 
 test("a follow-on's line: lib.sh FOLLOWS_RE and the page's FOLLOWS_RE read every fixture line alike", () => {
   compare("FOLLOWS_RE", "FOLLOWS_RE", FOLLOWS_LINES, ["ref", "slug"]);
+});
+
+test("a hands row's run sheet line: lib.sh RUN_SHEET_RE and the page's RUN_SHEET_RE read every fixture line alike", () => {
+  compare("RUN_SHEET_RE", "RUN_SHEET_RE", RUN_SHEET_LINES, ["url"]);
 });
 
 test("an ask's replaces line: lib.sh ASK_REPLACES_RE and the page's REPLACES_RE read every fixture line alike", () => {
@@ -210,7 +242,7 @@ test("an ask's replaces line: lib.sh ASK_REPLACES_RE and the page's REPLACES_RE 
 
 test("the fixtures exercise both outcomes on both shapes", () => {
   for (const [name, lines] of [["ASK_HEADER_RE", ASK_LINES], ["WAITS_ON_RE", WAITS_LINES], ["MSG_HEADER_RE", MSG_LINES], ["AMEND_LINE_RE", AMEND_LINES], ["CLOSE_LINE_RE", CLOSE_LINES],
-    ["SUB_ACT_RE", SUBACT_LINES], ["FOLLOWS_RE", FOLLOWS_LINES], ["ASK_REPLACES_RE", REPLACES_LINES]]) {
+    ["SUB_ACT_RE", SUBACT_LINES], ["FOLLOWS_RE", FOLLOWS_LINES], ["ASK_REPLACES_RE", REPLACES_LINES], ["RUN_SHEET_RE", RUN_SHEET_LINES]]) {
     const caps = jqCaptures(libRe(name), lines);
     assert.ok(caps.some((c) => c) && caps.some((c) => !c), `${name}: the fixtures must hold lines that match and lines that do not`);
   }

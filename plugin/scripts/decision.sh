@@ -8,10 +8,18 @@
 #       --approve-with "<exact phrase>" --record "<repo commit — path>"
 #       [--seat <LABEL | login/LABEL>]... [--hands] [--project <owner>/<number>]...
 #       [--milestone "<title>"] [--waits-on <seat | owner/repo#N>]...
-#       [--sub "<slug>: <one-line act>"]... | [--follows <program owner/repo#N | url> --sub-act <slug>]
+#       [--stops-if "<condition>"]... [--undo "<how the act is undone>"] [--run-sheet <https url>]
+#       [--sub "<slug>: <one-line act>[ when: <condition>]"]... | [--follows <program owner/repo#N | url> --sub-act <slug>]
 #     or: decision.sh new [--repo ...] [--decides ...] --title ... --assignee ... --by ... --body-file <md> [--seat ...] [--hands] [--project ...]
 #   --sub (repeatable) files a PROGRAM row: its body gets the section `## Sub-acts` right after `## Decision`, one line per
 #   sub-act (sub_acts_render, lib.sh), and the decider's one approving answer on it pre-authorizes every listed sub-act.
+#   A sub-act may carry " when: <condition>": the act waits on it, and its follow-on closes covered only with
+#   --condition-met evidence; a condition that does not hold is a stop, never a widening.
+#   --stops-if (repeatable) and --undo write the optional sections `## Stops if` ("- <condition>" each: the seat halts and
+#   comes back instead of proceeding) and `## Undo` (the rollback, named; every deploy, release or publish row carries it)
+#   right before `## Approve with` (row_optional_set, lib.sh); a --body-file may carry them instead, never both.
+#   --run-sheet (a --hands row only) appends "Run sheet: <url>" (run_sheet_line) to `## Decision`: the page the decider
+#   works through for the act only they can perform (the stage-hands skill).
 #   --follows with --sub-act files a FOLLOW-ON row for one listed sub-act of an approved program: the line "Follows:
 #   <owner/repo#N> sub-act <slug>" (follows_line) is appended to its `## Decision`; it is refused, before anything is
 #   written, unless the program covers that sub-act now (program_cover: the sub-act listed, the program approved, not
@@ -29,19 +37,25 @@
 #   Every write (new, record, close) refuses a public or public-intended repo (coord_write_guard, lib.sh).
 #   decision.sh close <owner/repo#N | url> --words "<verbatim ruling>" --record "<repo commit | comment url>" --by <LABEL | login/LABEL> [--board <owner/repo>] [--next "<act>"]
 #       the close comment's last line is the closing seat's BEAST-ACK (state=seen); the other seats ack separately
-#   decision.sh close <owner/repo#N | url> --covered --by <LABEL | login/LABEL> [--board <owner/repo>] [--next "<act>"]
+#   decision.sh close <owner/repo#N | url> --covered [--condition-met "<evidence>"] --by <LABEL | login/LABEL> [--board <owner/repo>] [--next "<act>"]
 #       closes a follow-on row under its program, by the row's own seat (row_seat_require), with no words: refused unless
 #       its Follows: line names a sub-act the program covers now (program_cover); the close line is "Closed as covered by
-#       <the program's approving answer url> by <seat id>" (row_close_comment, kind covered)
+#       <the program's approving answer url> by <seat id>" (row_close_comment, kind covered). When the program's line for
+#       that sub-act carries " when: <condition>", --condition-met is required (one line: the evidence the condition
+#       holds, e.g. the test run and the served==built hashes) and is written into the close line as "; condition met:
+#       <evidence>"; it is refused on a sub-act without a condition and on any other close.
 #   decision.sh revise <owner/repo#N | url> --by <LABEL | login/LABEL> [--decision …] [--unblocks …] [--waits …]
-#       [--recommendation …] [--approve-with "<exact phrase>"] [--record …] [--sub "<slug>: <act>"]... | --body-file <md>
+#       [--recommendation …] [--approve-with "<exact phrase>"] [--record …] [--sub "<slug>: <act>"]...
+#       [--stops-if "<condition>"]... [--undo "<text>"] [--run-sheet <https url>] | --body-file <md>
 #       revises the row itself, in one of two cases. (a) The decider's standing answer on the row is a revise:
 #       (row_answer_url): the revision answers it. (b) The row has no standing answer yet (none, or only an approval older
 #       than its latest amend line): its own seat amends it (row_seat_require: --by is the row's filer or one of its seats),
 #       when the facts under it changed. Refused on a closed row and once the decider's standing answer is an approve or a
 #       reject. Either case rewrites only the named sections of the body (section_replace; --sub replaces the program's
 #       whole `## Sub-acts`; --approve-with
-#       swaps the quoted phrase and keeps the paragraph; --body-file replaces the six, each checked by section_required),
+#       swaps the quoted phrase and keeps the paragraph; --stops-if replaces the whole `## Stops if`, --undo the `## Undo`,
+#       each added before `## Approve with` when absent; --run-sheet replaces the Run sheet: line of `## Decision`, on a
+#       row labelled hands only; --body-file replaces the six, each checked by section_required),
 #       then posts ONE comment whose first line is the amend line (amend_line: "revised after <revise url>; changed:
 #       <sections>", or in case (b) "amended by <seat id> before any answer; changed: <sections>") and whose last line is the
 #       body line (body_line). An approval older than the amend no longer counts (row_answer_url), and until the amend no approval
@@ -82,9 +96,12 @@ cmd="${1:-}"; shift || true
 case "$cmd" in
   new)
     repo=""; decides=""; title=""; assignee=""; by=""; hands=0; body_file=""; projects=(); seats=(); ms=""; waits=()
-    d=""; u=""; w=""; r=""; a=""; rec=""; subs=(); follows=""; subact=""
+    d=""; u=""; w=""; r=""; a=""; rec=""; subs=(); follows=""; subact=""; stops=(); undo=""; runsheet=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
+        --stops-if) stops+=("$2"); shift 2 ;;
+        --undo) undo="$2"; shift 2 ;;
+        --run-sheet) runsheet="$2"; shift 2 ;;
         --repo) repo="$2"; shift 2 ;;
         --decides) decides="$2"; shift 2 ;;
         --title) title="$2"; shift 2 ;;
@@ -111,6 +128,7 @@ case "$cmd" in
     [[ -n "$title" && -n "$assignee" && -n "$by" ]] || die "new needs --title, --assignee and --by <the filing seat>"
     [[ -z "$follows" && -z "$subact" ]] || [[ -n "$follows" && -n "$subact" ]] || die "a follow-on row takes --follows <program row> and --sub-act <slug> together"
     [[ -z "$follows" || ${#subs[@]} -eq 0 ]] || die "a row is a program (--sub) or a follow-on (--follows), not both"
+    [[ -z "$runsheet" || $hands -eq 1 ]] || die "--run-sheet links the run sheet of a hands row: file it with --hands (only the decider can perform the act)"
     by="$(seat_id "$by")" || exit 1
     [[ -n "$repo" ]] || repo="$(roster_repo)" || exit 1
     [[ -z "$decides" || "$decides" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "--decides '$decides' is not owner/repo"
@@ -177,6 +195,22 @@ EOF
         { print }
         END { if (on) { print ""; print ENVIRON["H"]; print ENVIRON["SL"] } }' "$tmp" > "$tmp.s" && mv "$tmp.s" "$tmp"
     fi
+    # The optional sections, right before ## Approve with (row_optional_set, the one writer of their place).
+    if [[ ${#stops[@]} -gt 0 ]]; then
+      ! grep -qxF -- "## Stops if" "$tmp" || die "new decision '$title': the body already has '## Stops if': pass the conditions in the body or with --stops-if, not both"
+      sl="$(stops_if_render "${stops[@]}")" || exit 1
+      row_optional_set "Stops if" "$sl" < "$tmp" > "$tmp.o" && mv "$tmp.o" "$tmp" || exit 1
+    fi
+    if [[ -n "$undo" ]]; then
+      ! grep -qxF -- "## Undo" "$tmp" || die "new decision '$title': the body already has '## Undo': pass it in the body or with --undo, not both"
+      [[ -n "${undo//[[:space:]]/}" ]] || die "new decision '$title': --undo is empty"
+      row_optional_set "Undo" "$undo" < "$tmp" > "$tmp.o" && mv "$tmp.o" "$tmp" || exit 1
+    fi
+    if [[ -n "$runsheet" ]]; then
+      [[ -z "$(run_sheet_parse "new decision '$title'" "$(cat "$tmp")")" ]] || die "new decision '$title': the body already has a Run sheet: line: pass it in the body or with --run-sheet, not both"
+      rl="$(run_sheet_line "$runsheet")" || exit 1
+      section_line_set "Decision" "Run sheet:" "$rl" < "$tmp" > "$tmp.r" && mv "$tmp.r" "$tmp" || exit 1
+    fi
     if [[ ${#waits[@]} -gt 0 ]]; then
       # Each dependency is a "Waits on: <ref>" line at the end of ## Waits (the one shape, waits_on_line).
       wl="$(for wr in "${waits[@]}"; do waits_on_line "$wr"; done)" || exit 1
@@ -193,17 +227,22 @@ $body"
     for h in "${ROW_SECTIONS[@]}"; do
       section_required "$h" "$body" "new decision '$title'" >/dev/null
     done
+    row_optional_check "new decision '$title'" "$body"
+    rs="$(run_sheet_parse "new decision '$title'" "$body")" || exit 1
+    [[ -z "$rs" || $hands -eq 1 ]] || die "new decision '$title': its body links a run sheet (Run sheet: $rs): a run sheet belongs to a hands row; file it with --hands"
     # A program or a follow-on is read from the body itself (a --body-file one too), before anything is written.
     progsubs="$(sub_acts_parse "new decision '$title'" "$body")" || exit 1
     fol="$(follows_parse "new decision '$title'" "$body")" || exit 1
     [[ -z "$progsubs" || -z "$fol" ]] || die "new decision '$title': a row is a program (## $SUB_ACTS_SECTION) or a follow-on (Follows:), not both"
-    cover=""
+    cover=""; fcond=""
     if [[ -n "$fol" ]]; then
       IFS=$'\t' read -r fref fslug <<< "$fol"
       cover="$(program_cover "$fref" "$fslug")" || exit 1
       frn="$(parse_issue_ref "$fref")" || exit 1; read -r fr fn <<< "$frn"
-      issue_get "$fr" "$fn" | jq -e --arg a "$assignee" 'any(.assignees[]; .login == $a)' >/dev/null \
+      pinfo="$(issue_get "$fr" "$fn")" || exit 1
+      jq -e --arg a "$assignee" 'any(.assignees[]; .login == $a)' <<< "$pinfo" >/dev/null \
         || die "new decision '$title': --assignee $assignee is not an assignee of the program $fref: a follow-on is assigned to the program's decider"
+      fcond="$(sub_act_condition "$fref" "$(jq -r '.body // ""' <<< "$pinfo")" "$fslug")" || exit 1
     fi
     phrase="$(approve_phrase "$body")"
     [[ -n "$phrase" ]] || die "new decision '$title': its '## Approve with' section has no double-quoted phrase (the exact words that approve it, in \"…\")"
@@ -245,7 +284,7 @@ $(body_line "$body")" >/dev/null \
         || die "$url is filed but the filer's ack was NOT posted (named above): rerun the same decision.sh new, which reuses the row and posts it"
     fi
     echo "$url"
-    [[ -z "$cover" ]] || echo "covered: sub-act $fslug of the program $fref, approved at $cover; once the sub-act is done: decision.sh close $url --covered --by $by" >&2
+    [[ -z "$cover" ]] || echo "covered: sub-act $fslug of the program $fref, approved at $cover; once the sub-act is done: decision.sh close $url --covered --by $by${fcond:+ --condition-met \"<evidence that: $fcond>\" (its condition; when it does not hold, stop and come back: never widen the sub-act)}" >&2
     [[ -z "$progsubs" ]] || echo "program: the decider's one approving answer pre-authorizes $(cut -f1 <<< "$progsubs" | paste -sd, - | sed 's/,/, /g'); file each as a follow-on (decision.sh new --follows $url --sub-act <slug> …) once approved" >&2
     for p in "${projects[@]:-}"; do
       [[ -n "$p" ]] || continue
@@ -255,9 +294,10 @@ $(body_line "$body")" >/dev/null \
     ;;
   close)
     ref="${1:-}"; shift || true
-    words=""; rec=""; by=""; board=""; rejected=0; covered=0; next=""
+    words=""; rec=""; by=""; board=""; rejected=0; covered=0; next=""; met=""; metset=0
     while [[ $# -gt 0 ]]; do
       case "$1" in
+        --condition-met) met="$2"; metset=1; shift 2 ;;
         --next) next="$2"; shift 2 ;;
         --words) words="$2"; shift 2 ;;
         --record) rec="$2"; shift 2 ;;
@@ -272,7 +312,11 @@ $(body_line "$body")" >/dev/null \
       [[ -n "$ref" && -n "$by" ]] || die "close --covered needs <issue> --by <SEAT>"
       [[ -z "$words$rec" && $rejected -eq 0 ]] || die "close --covered takes no --words, --record or --rejected: a covered close quotes no words; its record is the program's approving answer"
       [[ -n "$next" ]] || next="execute the sub-act"
+      [[ $metset -eq 0 || -n "${met//[[:space:]]/}" ]] || die "close --covered: --condition-met is empty: it is the evidence that the sub-act's condition holds"
+      [[ "$met" != *$'\n'* ]] || die "close --covered: --condition-met is one line"
     else
+      [[ $metset -eq 0 ]] || die "--condition-met belongs to close --covered (a follow-on whose sub-act carries a condition), not to a close on the words"
+
       [[ -n "$ref" && -n "$words" && -n "$rec" && -n "$by" ]] || die "close needs <issue> --words --record --by [--rejected], or <issue> --covered --by"
       [[ -n "$next" ]] || next="execute on the words"
     fi
@@ -291,7 +335,17 @@ $(body_line "$body")" >/dev/null \
       row_seat_require "$rd" "$by" "$who" "closes it as covered"
       IFS=$'\t' read -r fref fslug <<< "$fol"
       ans="$(program_cover "$fref" "$fslug")" || exit 1
-      row_close "$repo" "$number" "" "$ans" "$by" "$next" covered "$board"
+      # The sub-act's condition, from the program's own line (sub_act_condition): evidence is required for one, refused without.
+      prn="$(parse_issue_ref "$fref")" || exit 1; read -r pr_ pn_ <<< "$prn"
+      pbody="$(issue_get "$pr_" "$pn_" | jq -r '.body // ""')" || exit 1
+      cond="$(sub_act_condition "$fref" "$pbody" "$fslug")" || exit 1
+      if [[ -n "$cond" ]]; then
+        [[ -n "$met" ]] || die "$who: sub-act $fslug of $fref carries the condition \"$cond\": close --covered needs --condition-met \"<the evidence it holds>\"; when it does not hold, stop and come back to the decider (a new row), never widen the sub-act"
+      else
+        [[ -z "$met" ]] || die "$who: sub-act $fslug of $fref carries no condition: --condition-met has nothing to meet"
+      fi
+      if [[ -n "$met" ]]; then row_close "$repo" "$number" "" "$ans" "$by" "$next" covered "$board" "$met"
+      else row_close "$repo" "$number" "" "$ans" "$by" "$next" covered "$board"; fi
       exit 0
     fi
     if [[ $rejected -eq 0 ]]; then
@@ -302,12 +356,15 @@ $(body_line "$body")" >/dev/null \
     ;;
   revise)
     ref="${1:-}"; shift || true
-    by=""; body_file=""; names=(); vals=(); subs=()
+    by=""; body_file=""; names=(); vals=(); subs=(); stops=()
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --by) by="$2"; shift 2 ;;
         --body-file) body_file="$2"; shift 2 ;;
         --sub) subs+=("$2"); shift 2 ;;
+        --stops-if) stops+=("$2"); shift 2 ;;
+        --undo) names+=("Undo"); vals+=("$2"); shift 2 ;;
+        --run-sheet) names+=("Run sheet"); vals+=("$2"); shift 2 ;;
         --decision) names+=("Decision"); vals+=("$2"); shift 2 ;;
         --unblocks) names+=("Unblocks"); vals+=("$2"); shift 2 ;;
         --waits) names+=("Waits"); vals+=("$2"); shift 2 ;;
@@ -318,7 +375,8 @@ $(body_line "$body")" >/dev/null \
       esac
     done
     if [[ ${#subs[@]} -gt 0 ]]; then sl="$(sub_acts_render "${subs[@]}")" || exit 1; names+=("$SUB_ACTS_SECTION"); vals+=("$sl"); fi
-    [[ -n "$ref" && -n "$by" ]] || die "usage: decision.sh revise <issue> --by <SEAT> (--decision … | --unblocks … | --waits … | --recommendation … | --approve-with \"…\" | --record … | --sub \"<slug>: <act>\"...)... | --body-file <md>"
+    if [[ ${#stops[@]} -gt 0 ]]; then sl="$(stops_if_render "${stops[@]}")" || exit 1; names+=("Stops if"); vals+=("$sl"); fi
+    [[ -n "$ref" && -n "$by" ]] || die "usage: decision.sh revise <issue> --by <SEAT> (--decision … | --unblocks … | --waits … | --recommendation … | --approve-with \"…\" | --record … | --sub \"<slug>: <act>\"... | --stops-if \"<condition>\"... | --undo \"…\" | --run-sheet <url>)... | --body-file <md>"
     [[ -z "$body_file" || ${#names[@]} -eq 0 ]] || die "revise takes the sections to change, or --body-file, not both"
     [[ -n "$body_file" || ${#names[@]} -gt 0 ]] || die "revise needs the sections to change (--decision, --unblocks, --waits, --recommendation, --approve-with, --record) or --body-file: a revision changes the row, a reply comment does not"
     [[ -z "$body_file" || -f "$body_file" ]] || die "no body file $body_file"
@@ -332,6 +390,12 @@ $(body_line "$body")" >/dev/null \
     who="$repo#$number"
     [[ "$(jq -r .state <<< "$info")" == open ]] || die "$who is closed: a decided row is not revised"
     is_pr=0; jq -e '.pull_request != null' <<< "$info" >/dev/null && is_pr=1
+    is_hands=0; jq -e 'any(.labels[]; (.name // .) == "hands")' <<< "$info" >/dev/null && is_hands=1
+    for h in "${names[@]:-}"; do
+      case "$h" in
+        "Stops if"|Undo|"Run sheet") [[ $is_pr -eq 0 ]] || die "revise $who: a pull request carries no '$h': it belongs to a decision row" ;;
+      esac
+    done
     phrase="$(row_phrase "$who" "$info" 2>/dev/null)"
     rev="$(row_answer_url "$rd" "$phrase" revise 2>/dev/null)" || exit 1
     if [[ -z "$rev" ]]; then
@@ -349,8 +413,8 @@ $(body_line "$body")" >/dev/null \
       cp "$body_file" "$tmp"
       new="$(cat "$tmp")"
       if [[ $is_pr -eq 0 ]]; then
-        for h in "${ROW_SECTIONS[@]}" "$SUB_ACTS_SECTION"; do
-          [[ "$h" == "$SUB_ACTS_SECTION" ]] || section_required "$h" "$new" "revise $who" >/dev/null
+        for h in "${ROW_SECTIONS[@]}" "$SUB_ACTS_SECTION" "${ROW_OPTIONAL_SECTIONS[@]}"; do
+          [[ "$h" == "$SUB_ACTS_SECTION" || " ${ROW_OPTIONAL_SECTIONS[*]} " == *" $h "* ]] || section_required "$h" "$new" "revise $who" >/dev/null
           [[ "$(printf '%s\n' "$old" | section "$h")" == "$(printf '%s\n' "$new" | section "$h")" ]] || names+=("$h")
         done
       else
@@ -361,6 +425,16 @@ $(body_line "$body")" >/dev/null \
       for i in "${!names[@]}"; do
         h="${names[$i]}"; v="${vals[$i]}"
         [[ -n "$(sed '/^[[:space:]]*$/d' <<< "$v")" ]] || die "revise $who: --$(tr 'A-Z ' 'a-z-' <<< "$h") is empty"
+        if [[ "$h" == "Run sheet" ]]; then
+          [[ $is_hands -eq 1 ]] || die "revise $who: --run-sheet links the run sheet of a hands row; this row is not labelled hands"
+          v="$(run_sheet_line "$v")" || exit 1
+          section_line_set "Decision" "Run sheet:" "$v" < "$tmp" > "$tmp.n" && mv "$tmp.n" "$tmp" || exit 1
+          continue
+        fi
+        if [[ " ${ROW_OPTIONAL_SECTIONS[*]} " == *" $h "* ]]; then
+          row_optional_set "$h" "$v" < "$tmp" > "$tmp.n" && mv "$tmp.n" "$tmp" || exit 1
+          continue
+        fi
         if [[ "$h" == "Approve with" ]]; then
           [[ "$v" != *'"'* && "$v" != *$'\n'* ]] || die "revise $who: --approve-with is the exact phrase, one line, no double quote"
           cur="$(printf '%s\n' "$old" | section "Approve with")"
@@ -380,6 +454,9 @@ $(body_line "$body")" >/dev/null \
       rs="$(sub_acts_parse "revise $who" "$new")" || exit 1
       rf="$(follows_parse "revise $who" "$new")" || exit 1
       [[ -z "$rs" || -z "$rf" ]] || die "revise $who: a row is a program (## $SUB_ACTS_SECTION) or a follow-on (Follows:), not both"
+      row_optional_check "revise $who" "$new"
+      rsh="$(run_sheet_parse "revise $who" "$new")" || exit 1
+      [[ -z "$rsh" || $is_hands -eq 1 ]] || die "revise $who: the body links a run sheet (Run sheet: $rsh) but the row is not labelled hands"
       np="$(approve_phrase "$new")"
       [[ -n "$np" ]] || die "revise $who: its '## Approve with' section has no double-quoted phrase"
       [[ "$np" != *"|"* ]] || die "revise $who: the approving phrase '$np' carries '|': one exact approving phrase per row; a choice between options is a desk ask"
@@ -402,7 +479,7 @@ $(body_line "$body")" >/dev/null \
     fi
     rm -f "$tmp"
     # The changed sections in the body's own order, once each.
-    changed="$(for h in "${ROW_SECTIONS[@]}" "$SUB_ACTS_SECTION" "the PR body"; do for n in "${names[@]:-}"; do if [[ "$n" == "$h" ]]; then echo "$h"; break; fi; done; done | paste -sd, - | sed 's/,/, /g')"
+    changed="$(for h in "${ROW_SECTIONS[@]}" "$SUB_ACTS_SECTION" "${ROW_OPTIONAL_SECTIONS[@]}" "Run sheet" "the PR body"; do for n in "${names[@]:-}"; do if [[ "$n" == "$h" ]]; then echo "$h"; break; fi; done; done | paste -sd, - | sed 's/,/, /g')"
     if [[ -n "$rev" ]]; then
       line="$(amend_line "revised after $rev; changed: $changed")"
       why="The row's body is revised in answer to the decider's revise (by seat $by)."
@@ -410,7 +487,7 @@ $(body_line "$body")" >/dev/null \
       line="$(amend_line "amended by $by before any answer; changed: $changed")"
       why="The row's body is amended by its seat $by before the decider answered: the facts under it changed."
     fi
-    summary="$(for h in "${ROW_SECTIONS[@]}" "$SUB_ACTS_SECTION"; do
+    summary="$(for h in "${ROW_SECTIONS[@]}" "$SUB_ACTS_SECTION" "${ROW_OPTIONAL_SECTIONS[@]}"; do
         [[ ",$(sed 's/, /,/g' <<< "$changed")," == *",$h,"* ]] || continue
         first="$(printf '%s\n' "$new" | section "$h" | sed '/^[[:space:]]*$/d' | head -1 | cut -c1-200)"
         echo "- $h: $first"
