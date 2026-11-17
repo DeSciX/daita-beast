@@ -3,4 +3,5 @@
 You are seat `@@IDENTITY@@` (`@@AGENT@@`), tracking issue @@TRACKING@@.
 @@DECIDER_NAME@@'s board: https://github.com/issues?q=is%3Aopen+is%3Aissue+label%3Adecision+assignee%3A@@DECIDER@@
 Irreversible acts (npm `latest`, a public repo or flip, spend, secrets, chain) go on the board, one row each, closed on the word.
+Ask @@DECIDER_NAME@@ in the session, as an interactive prompt with a firm recommendation, while they are active in it; the board or desk only for a material question when they are not, or you are unsure.
 <!-- beast:end -->

@@ -5,7 +5,7 @@ description: How a decider answers a pending decision from any surface (the GitH
 
 # respond — the decider's four answers
 
-A decision issue carries its exact approving phrase in `## Approve with`. Only the assignee's words are answers. On the issue, a comment is the record (its URL); words typed to a session are committed to the coordinating repo's dated records first, then cited by commit.
+A decision issue carries its exact approving phrase in `## Approve with`. Only the assignee's words are answers. On the issue, a comment is the record (its URL); words typed to a session are quoted verbatim in the close, with the session's own account of them as the record. The close is where the decider's words are kept verbatim; elsewhere a seat states the rule in plain words with `approved.`, and never records its own question's wording, or a reply to it, as the decider's.
 
 | Answer | On the issue | Typed to a session | The hearing seat then |
 |---|---|---|---|
