@@ -1427,6 +1427,126 @@ ROW_SECTIONS=("Decision" "Unblocks" "Waits" "Recommendation" "Approve with" "Rec
 # --recommendation) and read by board.sh; the page's PR_SECTIONS is held equal to it (plugin/tests/board-page.test.mjs).
 PR_ROW_SECTIONS=("Unblocks" "Recommendation")
 
+# ROW_OPTIONAL_SECTIONS: the sections a decision row may carry besides the six, in this order, each right before
+# `## Approve with` and non-empty when its heading is present (row_optional_check): `## Stops if`, the conditions under
+# which the seat halts and comes back instead of proceeding, one "- <condition>" line each (STOPS_IF_RE, stops_if_render,
+# stops_if_parse); `## Undo`, how the act is undone (the rollback, named), free text, carried by every deploy, release or
+# publish row. decision.sh new, record and revise write them (--stops-if, --undo, or in --body-file); board.sh shows them
+# in the Recommendation cell, the page under the Recommendation (its OPTIONAL_SECTIONS, held equal by
+# plugin/tests/board-page.test.mjs).
+ROW_OPTIONAL_SECTIONS=("Stops if" "Undo")
+STOPS_IF_RE='^- (?<cond>\S.*)$'
+
+# stops_if_render "<condition>"...: the `## Stops if` lines, one per condition; dies on an empty or multi-line one.
+stops_if_render() {
+  [[ $# -ge 1 ]] || die "stops_if_render takes one or more conditions"
+  local c out=""
+  for c in "$@"; do
+    [[ "$c" != *$'\n'* ]] && jq -en --arg l "- $c" --arg re "$STOPS_IF_RE" '$l | test($re)' >/dev/null \
+      || die "--stops-if '$c' is not one line of text (a condition under which the seat stops and comes back)"
+    out+="- $c"$'\n'
+  done
+  printf '%s' "$out"
+}
+
+# stops_if_parse <who> <body>: one condition per line of the body's `## Stops if`, nothing when it has none. A non-empty
+# line there that is not "- <condition>" dies naming <who>.
+stops_if_parse() {
+  local who="$1" sec bad
+  sec="$(printf '%s\n' "$2" | tr -d '\r' | section "Stops if")"
+  [[ -n "${sec//[[:space:]]/}" ]] || return 0
+  bad="$(jq -Rr --arg re "$STOPS_IF_RE" 'sub("\\s+$"; "") | select(test("\\S")) | select(test($re) | not)' <<< "$sec")"
+  [[ -z "$bad" ]] || die "$who: a '## Stops if' line that is not '- <condition>': $bad"
+  jq -Rr --arg re "$STOPS_IF_RE" 'sub("\\s+$"; "") | capture($re) // empty | .cond' <<< "$sec"
+}
+
+# row_optional_check <who> <body>: dies naming <who> when an optional section's heading is present twice or with no
+# text, or a `## Stops if` line is malformed. A body without them passes.
+row_optional_check() {
+  local who="$1" body h n
+  body="$(printf '%s\n' "$2" | tr -d '\r')"
+  for h in "${ROW_OPTIONAL_SECTIONS[@]}"; do
+    n="$(grep -cxF -- "## $h" <<< "$body" || true)"
+    [[ "$n" -le 1 ]] || die "$who: '## $h' appears $n times"
+    [[ "$n" -eq 0 ]] || section_required "$h" "$body" "$who" >/dev/null
+  done
+  stops_if_parse "$who" "$body" >/dev/null
+}
+
+# row_optional_set "<heading>" "<content>": stdin body on stdout with the optional section set: its text replaced when
+# the heading is present (section_replace), else the section inserted right before `## Approve with`, after any optional
+# section that comes before it in ROW_OPTIONAL_SECTIONS. Dies on a heading that is not one of them, or a body with no
+# `## Approve with`.
+row_optional_set() {
+  local h="$1" c="$2" body
+  [[ " ${ROW_OPTIONAL_SECTIONS[*]} " == *" $h "* ]] || die "row_optional_set: '$h' is not one of the optional sections (${ROW_OPTIONAL_SECTIONS[*]})"
+  body="$(cat)"
+  if grep -qxF -- "## $h" <<< "$body"; then printf '%s\n' "$body" | section_replace "$h" "$c"; return; fi
+  grep -qxF -- "## Approve with" <<< "$body" || die "row_optional_set: the body has no '## Approve with' to put '## $h' before"
+  # Before "## Approve with", or before a later optional section already present.
+  local before="Approve with" seen=0 o
+  for o in "${ROW_OPTIONAL_SECTIONS[@]}"; do
+    if [[ "$o" == "$h" ]]; then seen=1; continue; fi
+    if [[ $seen -eq 1 ]] && grep -qxF -- "## $o" <<< "$body"; then before="$o"; break; fi
+  done
+  printf '%s\n' "$body" | H="## $h" C="$c" B="## $before" python3 -I -c "$(cat <<'PY'
+import os, sys
+h, c, b = os.environ["H"], os.environ["C"].rstrip("\n"), os.environ["B"]
+lines = sys.stdin.read().rstrip("\n").split("\n")
+i = next(k for k, l in enumerate(lines) if l.rstrip() == b)
+sys.stdout.write("\n".join(lines[:i] + [h] + c.split("\n") + [""] + lines[i:]) + "\n")
+PY
+)"
+}
+
+# A hands row's run sheet (the stage-hands skill: the page a browser agent follows with the decider for the act only they
+# can perform) is linked by one line at the end of the row's `## Decision`:
+#   Run sheet: <https url of the published page>       RUN_SHEET_RE; the page's RUN_SHEET_RE is its twin
+# run_sheet_line writes it (decision.sh new --run-sheet, revise --run-sheet; only on a row labelled hands), run_sheet_parse
+# reads it.
+RUN_SHEET_RE='^Run sheet: (?<url>https://\S+)$'
+
+# run_sheet_line <url>: the line; dies on a URL that is not one https link.
+run_sheet_line() {
+  local l="Run sheet: $1"
+  [[ "$1" != *$'\n'* ]] && jq -en --arg l "$l" --arg re "$RUN_SHEET_RE" '$l | test($re)' >/dev/null \
+    || die "--run-sheet '$1' is not one https link (the published run-sheet page)"
+  printf '%s\n' "$l"
+}
+
+# run_sheet_parse <who> <body>: the URL of the body's Run sheet: line, nothing when it has none. A line that starts
+# "Run sheet:" and is not the shape, or a second one, dies naming <who>.
+run_sheet_parse() {
+  local who="$1" bad got
+  bad="$(printf '%s\n' "$2" | tr -d '\r' | jq -Rr --arg re "$RUN_SHEET_RE" 'select(startswith("Run sheet:")) | sub("\\s+$"; "") | select(test($re) | not)')"
+  [[ -z "$bad" ]] || die "$who: a \"Run sheet:\" line that is not \"Run sheet: <https url>\": $bad"
+  got="$(printf '%s\n' "$2" | tr -d '\r' | jq -Rr --arg re "$RUN_SHEET_RE" 'sub("\\s+$"; "") | capture($re) // empty | .url')"
+  [[ "$(printf '%s' "$got" | awk 'END { print NR }')" -le 1 ]] || die "$who: more than one \"Run sheet:\" line: a hands row links one run sheet"
+  [[ -z "$got" ]] || printf '%s\n' "$got"
+}
+
+# section_line_set "<heading>" "<prefix>" "<line>": stdin body on stdout with every line of the section that starts with
+# <prefix> dropped and <line> put at the end of the section, after one blank line (as decision.sh new puts Decides:).
+# Dies when the body has no such section. Writes the Run sheet: line (decision.sh new and revise --run-sheet).
+section_line_set() {
+  H="## $1" P="$2" L="$3" python3 -I -c "$(cat <<'PY'
+import os, sys
+h, p, l = os.environ["H"], os.environ["P"], os.environ["L"]
+lines = sys.stdin.read().rstrip("\n").split("\n")
+try:
+    i = next(k for k, x in enumerate(lines) if x.rstrip() == h)
+except StopIteration:
+    sys.exit("daita-beast: the body has no '%s' section to put '%s' in" % (h, l))
+j = i + 1
+while j < len(lines) and not lines[j].startswith("## "): j += 1
+sec = [x for x in lines[i + 1:j] if not x.startswith(p)]
+while sec and not sec[-1].strip(): sec.pop()
+tail = [""] if j < len(lines) else []
+sys.stdout.write("\n".join(lines[:i + 1] + sec + [""] + l.split("\n") + tail + lines[j:]) + "\n")
+PY
+)"
+}
+
 # Same, but exits 1 naming the issue when the section is absent or empty.
 section_required() {
   local heading="$1" body="$2" who="$3" out
@@ -1989,13 +2109,14 @@ answer_kind() {
 #   tag_ack(l)       a well-formed `BEAST-ACK seat=<token> at=<UTC> state=seen|executed|blocked` line, or null
 #   tag_closer(b)    the "Closed by seat <token> at <UTC>." of a close comment (row_close_comment), or null
 #   close_of(b)      of a comment body: the close comment it is (row_close_comment's shape, CLOSE_LINE_RE), as
-#                    {kind: closed|rejected|latitude|covered, words, record, seat, line}, or null. words: the verbatim
+#                    {kind: closed|rejected|latitude|covered, words, record, seat, line} (a covered close also met: the
+#                    condition evidence of its close line, or null), or null. words: the verbatim
 #                    words of a closed or rejected row (null on a latitude or covered close, which quotes none); record:
 #                    its record (a latitude or covered close's is the link in its close line); seat: the closer; line:
 #                    the close line
 #   close_text(c)    of a close_of result: the one line a reader shows for it (the quoted words; a latitude close as
 #                    "no words: merged under standing latitude by <seat>, record <link>"; a covered close as "no words:
-#                    covered by the program approval <answer url>, closed by <seat>")
+#                    covered by the program approval <answer url>, closed by <seat>[; condition met: <evidence>]")
 #   close_last(cs)   of a comment list: the newest close comment's close_of, plus its url, or null
 #   row_filer(cs)    of a row's comment list: the seat that filed it, the writer of its first BEAST-ACK comment (the
 #                    filer's ack, decision.sh new and pr.sh request), or null
@@ -2015,12 +2136,12 @@ def close_of(b):
   | (first($f | capture($closere)) // null) as $m
   | if $m == null then null
     elif ($m.record // "") != "" then {kind: "latitude", words: null, record: $m.record, seat: $m.seat, line: $f}
-    elif ($m.answer // "") != "" then {kind: "covered", words: null, record: $m.answer, seat: $m.cseat, line: $f}
+    elif ($m.answer // "") != "" then {kind: "covered", words: null, record: $m.answer, seat: $m.cseat, met: (if ($m.met // "") == "" then null else $m.met end), line: $f}
     else {kind: (if $m.verdict == "Rejected" then "rejected" else "closed" end),
           words: (first($b | capture("^(Closed|Rejected) on the word, verbatim: \"(?<w>.*)\"\n\nRecord: "; "p") | .w) // null),
           record: (first($b | capture("\nRecord: (?<r>.*)\\. Closed by seat ") | .r) // null),
           seat: (tag_closer($b) | .seat?), line: $f} end;
-def close_text(c): if c.kind == "latitude" then "no words: merged under standing latitude by \(c.seat), record \(c.record)" elif c.kind == "covered" then "no words: covered by the program approval \(c.record), closed by \(c.seat)" elif c.words != null then "\"\(c.words)\"" else c.line end;
+def close_text(c): if c.kind == "latitude" then "no words: merged under standing latitude by \(c.seat), record \(c.record)" elif c.kind == "covered" then "no words: covered by the program approval \(c.record), closed by \(c.seat)\(if c.met then "; condition met: \(c.met)" else "" end)" elif c.words != null then "\"\(c.words)\"" else c.line end;
 def close_last(cs): ([cs[]? | . as $c | close_of($c.body) | select(. != null) | . + {url: $c.html_url}] | last // null);
 def tag_actor(desk):
   . as $c | (($c.body // "") | gsub("\r"; "")) as $b | ($b | tag_first | sub("\\s+$"; "")) as $f
@@ -2318,6 +2439,50 @@ for i, v in enumerate(V):
     if v in out: sys.exit("daita-beast: roster %s: vendored lists %s twice" % (r, json.dumps(v)))
     out.append(v)
 print(json.dumps(out))
+PY
+}
+
+# roster_census <seat id> [roster]: the one parser of a seat row's "census": the targets whose reviewed and served
+# versions census.sh compares before the seat files a build or deploy ask. Prints one compact JSON object per target,
+# {"name", "reviewed", "served"}, each side a reader of exactly one kind:
+#   {"git": "<ref>"}                   (optional "dir": a plain path relative to the main checkout) the commit <ref> names
+#                                      in that checkout (git rev-parse --verify <ref>^{commit}); census never fetches
+#   {"cmd": "<shell command>"}         run by bash from the main checkout; its whole output, trimmed, is one 40-hex sha
+# Nothing when the row has no "census". Dies naming the first malformed part: not a list, a target that is not an
+# object with exactly those keys, a name that is not a slug or is listed twice, a reader with another key or both kinds.
+roster_census() {
+  local id="$1" r="${2:-}"
+  [[ -n "$r" ]] || r="$(roster_path)"
+  [[ -f "$r" ]] || die "no roster at $r — run init-repo.sh for this repo first"
+  python3 -I - "$r" "$id" <<'PY' || exit 1
+import json, re, sys
+r, sid = sys.argv[1], sys.argv[2]
+rows = [x for x in json.load(open(r, encoding="utf-8")).get("seats", []) if "%s/%s" % (x.get("github"), x.get("label")) == sid]
+if len(rows) != 1: sys.exit("daita-beast: roster %s has no seat row %s" % (r, sid))
+C = rows[0].get("census")
+if C is None: sys.exit(0)
+def bad(why): sys.exit("daita-beast: roster %s: seat %s: census %s" % (r, sid, why))
+if not isinstance(C, list) or not C: bad("is a non-empty list of {\"name\", \"reviewed\", \"served\"}, got %s" % json.dumps(C))
+seen = set()
+def reader(i, side, v):
+    if not isinstance(v, dict): bad("[%d].%s is {\"git\": \"<ref>\"[, \"dir\": \"<path>\"]} or {\"cmd\": \"<command>\"}, got %s" % (i, side, json.dumps(v)))
+    k = set(v)
+    if k in ({"git"}, {"git", "dir"}):
+        if not isinstance(v["git"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/@{}~^-]*", v["git"]): bad("[%d].%s.git is a git ref, got %s" % (i, side, json.dumps(v["git"])))
+        d = v.get("dir")
+        if d is not None and not (isinstance(d, str) and d and not d.startswith("/") and "\n" not in d and not any(x in ("", ".", "..") for x in d.rstrip("/").split("/"))):
+            bad("[%d].%s.dir is a plain path relative to the main checkout, got %s" % (i, side, json.dumps(d)))
+    elif k == {"cmd"}:
+        if not isinstance(v["cmd"], str) or not v["cmd"].strip() or "\n" in v["cmd"]: bad("[%d].%s.cmd is one line of shell, got %s" % (i, side, json.dumps(v["cmd"])))
+    else: bad("[%d].%s has keys %s: a reader is {\"git\"[, \"dir\"]} or {\"cmd\"}, one kind" % (i, side, sorted(k)))
+for i, t in enumerate(C):
+    if not isinstance(t, dict) or set(t) != {"name", "reviewed", "served"}: bad("[%d] is {\"name\", \"reviewed\", \"served\"} exactly, got %s" % (i, json.dumps(t)))
+    n = t["name"]
+    if not isinstance(n, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", n): bad("[%d].name is a slug (a-z, 0-9, -), got %s" % (i, json.dumps(n)))
+    if n in seen: bad("lists the target %s twice" % n)
+    seen.add(n)
+    reader(i, "reviewed", t["reviewed"]); reader(i, "served", t["served"])
+    print(json.dumps(t, separators=(",", ":")))
 PY
 }
 
@@ -2749,21 +2914,27 @@ coord_write_guard() {
 #   Closed as covered by <<answer url>> by <seat id>             covered   decision.sh close --covered: a follow-on row
 #                                                                           closed under its program (program_cover); quotes
 #                                                                           no words, cites the program's approving answer
+#   Closed as covered by <<answer url>> by <seat id>; condition met: <evidence>
+#                                                                 covered   the same, for a sub-act with a condition
+#                                                                           (--condition-met: one line, the evidence)
 # then "Record: <record>. Closed by seat <id> at <UTC>." ("Closed by seat <id> at <UTC>." on a latitude or covered close,
 # whose record is in its close line), then the closer's BEAST-ACK (state=seen). A close line is never an answer form (answer_kind): it
 # never stands as the decider's answer. CLOSE_LINE_RE reads the close line (jq, and the page's CLOSE_RE alike:
 # plugin/tests/regex-mirror.test.mjs); "Closed on the decider's word" is the old pointer close, read with no words.
-CLOSE_LINE_RE='^(?:(?<verdict>Closed|Rejected) on the (?:word, verbatim: |decider.s word)|Merged under standing latitude <(?<record>https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/blob/[0-9a-f]{40}/[^ <>]+)> by (?<seat>[A-Za-z0-9-]+/[A-Z0-9_-]+)$|Closed as covered by <(?<answer>https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:issues|pull)/[0-9]+#issuecomment-[0-9]+)> by (?<cseat>[A-Za-z0-9-]+/[A-Z0-9_-]+)$)'
+CLOSE_LINE_RE='^(?:(?<verdict>Closed|Rejected) on the (?:word, verbatim: |decider.s word)|Merged under standing latitude <(?<record>https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/blob/[0-9a-f]{40}/[^ <>]+)> by (?<seat>[A-Za-z0-9-]+/[A-Z0-9_-]+)$|Closed as covered by <(?<answer>https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:issues|pull)/[0-9]+#issuecomment-[0-9]+)> by (?<cseat>[A-Za-z0-9-]+/[A-Z0-9_-]+)(?:; condition met: (?<met>\S.*))?$)'
 
-# row_close_comment <repo> <N> "<words>" "<record>" <by-id> "<next>" closed|rejected|latitude|covered: posts the close
-# comment, the one writer of its shape for a decision issue and a pull request alike. A latitude or covered close takes no
-# words (""); a latitude close's record is the link latitude_record verified, a covered close's the program's approving
-# answer program_cover returned; either close line is checked against CLOSE_LINE_RE before it is posted. The caller
-# closes, merges or labels (row_close does it for an issue).
+# row_close_comment <repo> <N> "<words>" "<record>" <by-id> "<next>" closed|rejected|latitude|covered ["<condition met>"]:
+# posts the close comment, the one writer of its shape for a decision issue and a pull request alike. A latitude or covered
+# close takes no words (""); a latitude close's record is the link latitude_record verified, a covered close's the
+# program's approving answer program_cover returned; either close line is checked against CLOSE_LINE_RE before it is
+# posted. The eighth argument, a covered close's only, is the evidence that its sub-act's condition holds (one line),
+# written into the close line. The caller closes, merges or labels (row_close does it for an issue).
 row_close_comment() {
-  local repo="$1" n="$2" words="$3" rec="$4" by="$5" next="$6" first tail
+  local repo="$1" n="$2" words="$3" rec="$4" by="$5" next="$6" met="${8:-}" first tail
   [[ "$by" =~ $SEAT_ID_RE ]] || die "row_close_comment: --by '$by' is not a seat id"
   [[ "$next" != *$'\n'* ]] || die "--next is one line"
+  [[ -z "$met" || "$7" == covered ]] || die "row_close_comment: condition evidence belongs to a covered close only, not a $7 close"
+  [[ "$met" != *$'\n'* ]] || die "--condition-met is one line"
   case "$7" in
     closed) first="Closed on the word, verbatim: \"$words\""; tail="Record: $rec. Closed by seat $by at $(utc_now)." ;;
     rejected) first="Rejected on the word, verbatim: \"$words\""; tail="Record: $rec. Closed by seat $by at $(utc_now)." ;;
@@ -2774,9 +2945,9 @@ row_close_comment() {
         || die "row_close_comment: the latitude close line '$first' does not read back as one (CLOSE_LINE_RE): the record is not a blob link at a full sha" ;;
     covered)
       [[ -z "$words" ]] || die "row_close_comment: a covered close quotes no words"
-      first="Closed as covered by <$rec> by $by"; tail="Closed by seat $by at $(utc_now)."
-      jq -en --arg l "$first" --arg re "$CLOSE_LINE_RE" '$l | test($re)' >/dev/null \
-        || die "row_close_comment: the covered close line '$first' does not read back as one (CLOSE_LINE_RE): the record is not an answer comment's URL" ;;
+      first="Closed as covered by <$rec> by $by${met:+; condition met: $met}"; tail="Closed by seat $by at $(utc_now)."
+      jq -en --arg l "$first" --arg re "$CLOSE_LINE_RE" --arg met "$met" '$l | capture($re) | (.met // "") == $met' >/dev/null \
+        || die "row_close_comment: the covered close line '$first' does not read back as one (CLOSE_LINE_RE): the record is not an answer comment's URL, or the condition evidence does not read back whole" ;;
     *) die "row_close_comment: the kind is closed, rejected, latitude or covered, not '$7'" ;;
   esac
   local ack; ack="$(ack_line "$by" seen "$next")" || exit 1
@@ -2787,14 +2958,15 @@ $tail
 $ack" >/dev/null
 }
 
-# row_close <repo> <N> "<words>" "<record>" <by-id> "<next>" closed|rejected|latitude|covered <board repo>: closes a decision issue:
-# the close comment (row_close_comment), the issue closed (not_planned and labelled rejected on a reject), then
-# row_after_close. The caller has refused a public repo (coord_write_guard) and a pending revise (row_revise_pending).
+# row_close <repo> <N> "<words>" "<record>" <by-id> "<next>" closed|rejected|latitude|covered <board repo> ["<condition met>"]:
+# closes a decision issue: the close comment (row_close_comment; the ninth argument is a covered close's condition
+# evidence), the issue closed (not_planned and labelled rejected on a reject), then row_after_close. The caller has refused
+# a public repo (coord_write_guard) and a pending revise (row_revise_pending).
 row_close() {
-  [[ $# -eq 8 ]] || die "row_close takes <repo> <N> <words> <record> <by> <next> <kind> <board>, not $*"
+  [[ $# -eq 8 || ( $# -eq 9 && "$7" == covered ) ]] || die "row_close takes <repo> <N> <words> <record> <by> <next> <kind> <board> [<condition met>, covered only], not $*"
   local assignee
   assignee="$(issue_get "$1" "$2" | jq -r '.assignees[0].login // empty')" || die "$1#$2: cannot read its assignee (named above): nothing was written"
-  row_close_comment "$1" "$2" "$3" "$4" "$5" "$6" "$7"
+  row_close_comment "$1" "$2" "$3" "$4" "$5" "$6" "$7" "${9:-}"
   if [[ "$7" == rejected ]]; then row_mark_rejected "$1" "$2"; issue_close "$1" "$2" not_planned
   else issue_close "$1" "$2" completed; fi
   echo "closed $1#$2"
@@ -3123,9 +3295,14 @@ waits_on_parse() {
 # A PROGRAM row is a decision row whose body carries the section `## Sub-acts` (filed right after `## Decision`), one line
 # per sub-act the decider's one word pre-authorizes:
 #   - <slug>: <one-line act>                       SUB_ACT_RE; <slug>: lowercase letters, digits and '-'
+#   - <slug>: <one-line act> when: <condition>     the same, with the condition the act waits on (the first " when: "
+#                                                  splits act from condition; an act that still carries "when:" dies)
 # sub_acts_render writes the lines (decision.sh new --sub, revise --sub), sub_acts_parse reads them. The decider's standing
 # approving answer on the program row (row_answer_url) pre-authorizes every listed sub-act; a later revise: or amend line
-# makes it not stand, and so re-opens every sub-act until the decider approves the program again.
+# makes it not stand, and so re-opens every sub-act until the decider approves the program again. A sub-act with a
+# condition is covered only with evidence that the condition holds: decision.sh close --covered --condition-met
+# "<evidence>" writes it into the close line (row_close_comment); without it the close is refused, and a sub-act whose
+# condition does not hold is a stop, never a widening.
 # A FOLLOW-ON row is a decision row filed for one listed sub-act (decision.sh new --follows <program> --sub-act <slug>),
 # marked by one line at the end of its `## Decision`:
 #   Follows: <owner/repo#N> sub-act <slug>         FOLLOWS_RE
@@ -3133,7 +3310,7 @@ waits_on_parse() {
 # under its program, never as the decider's turn, and its seat closes it with decision.sh close --covered, whose close line
 # cites the program's approving answer and quotes no words (row_close_comment, kind covered). The page's SUBACT_RE and
 # FOLLOWS_RE are the twins (plugin/tests/regex-mirror.test.mjs; plugin/tests/program.test.mjs runs both readers).
-SUB_ACT_RE='^- (?<slug>[a-z0-9][a-z0-9-]*): (?<act>\S.*)$'
+SUB_ACT_RE='^- (?<slug>[a-z0-9][a-z0-9-]*): (?<act>\S.*?)(?: when: (?<when>\S.*))?$'
 FOLLOWS_RE='^Follows: (?<ref>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+) sub-act (?<slug>[a-z0-9][a-z0-9-]*)$'
 SUB_ACTS_SECTION="Sub-acts"
 
@@ -3144,7 +3321,9 @@ sub_acts_render() {
   for s in "$@"; do
     l="- $s"
     [[ "$s" != *$'\n'* ]] && jq -en --arg l "$l" --arg re "$SUB_ACT_RE" '$l | test($re)' >/dev/null \
-      || die "--sub '$s' is not '<slug>: <one-line act>' (slug: lowercase letters, digits and -)"
+      || die "--sub '$s' is not '<slug>: <one-line act>[ when: <condition>]' (slug: lowercase letters, digits and -)"
+    jq -en --arg l "$l" --arg re "$SUB_ACT_RE" '$l | capture($re) | .act | test("when:") | not' >/dev/null \
+      || die "--sub '$s': its act carries 'when:' that is not ' when: <condition>' (one space each side, a condition after it)"
     slug="${s%%:*}"
     [[ "$slugs" != *$'\n'"$slug"$'\n'* ]] || die "--sub names the sub-act '$slug' twice"
     slugs+="$slug"$'\n'; out+="$l"$'\n'
@@ -3152,18 +3331,28 @@ sub_acts_render() {
   printf '%s' "$out"
 }
 
-# sub_acts_parse <who> <body>: "<slug>\t<act>" per sub-act of the body's `## Sub-acts`, nothing when it has none. A
-# non-empty line there that is not the shape, or a slug listed twice, dies naming <who>: a sub-act is never guessed.
+# sub_acts_parse <who> <body>: "<slug>\t<act>\t<condition>" per sub-act of the body's `## Sub-acts` (the condition empty
+# when the line has none), nothing when it has none. A non-empty line there that is not the shape, an act that still
+# carries "when:", or a slug listed twice, dies naming <who>: a sub-act is never guessed.
 sub_acts_parse() {
   local who="$1" sec bad out dup
   sec="$(printf '%s\n' "$2" | tr -d '\r' | section "$SUB_ACTS_SECTION")"
   [[ -n "${sec//[[:space:]]/}" ]] || return 0
-  bad="$(jq -Rr --arg re "$SUB_ACT_RE" 'sub("\\s+$"; "") | select(test("\\S")) | select(test($re) | not)' <<< "$sec")"
-  [[ -z "$bad" ]] || die "$who: a '## $SUB_ACTS_SECTION' line that is not '- <slug>: <one-line act>': $bad"
-  out="$(jq -Rr --arg re "$SUB_ACT_RE" 'sub("\\s+$"; "") | capture($re) // empty | "\(.slug)\t\(.act)"' <<< "$sec")"
+  bad="$(jq -Rr --arg re "$SUB_ACT_RE" 'sub("\\s+$"; "") | select(test("\\S")) | select((test($re) | not) or (capture($re) | .act | test("when:")))' <<< "$sec")"
+  [[ -z "$bad" ]] || die "$who: a '## $SUB_ACTS_SECTION' line that is not '- <slug>: <one-line act>[ when: <condition>]': $bad"
+  out="$(jq -Rr --arg re "$SUB_ACT_RE" 'sub("\\s+$"; "") | capture($re) // empty | "\(.slug)\t\(.act)\t\(.when // "")"' <<< "$sec")"
   dup="$(cut -f1 <<< "$out" | sort | uniq -d | paste -sd, -)"
   [[ -z "$dup" ]] || die "$who: '## $SUB_ACTS_SECTION' lists the sub-act $dup twice"
   printf '%s\n' "$out"
+}
+
+# sub_act_condition <who> <program body> <slug>: the condition of that sub-act's line (" when: <condition>"), nothing when it
+# carries none; dies naming <who> on a malformed `## Sub-acts` (sub_acts_parse). Read by decision.sh new --follows (the hint)
+# and close --covered (the --condition-met requirement).
+sub_act_condition() {
+  local subs
+  subs="$(sub_acts_parse "$1" "$2")" || exit 1
+  awk -F'\t' -v s="$3" '$1 == s { print $3 }' <<< "$subs"
 }
 
 # follows_line <owner/repo#N> <slug>: the follow-on's marker line.

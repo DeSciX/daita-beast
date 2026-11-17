@@ -1,0 +1,53 @@
+{
+  "id": "sample-dns-verification",
+  "title": "Verify a domain for outbound mail",
+  "anchor": "acme/widgets#12",
+  "minutes": 10,
+  "fallback": "https://github.com/acme/widgets/issues/12",
+  "goal": [
+    "The mail service needs proof that we own example.org before it will send from it. The proof is one TXT record at the domain registrar.",
+    "This run reads the current records, adds the one record, and records what the registrar shows afterwards."
+  ],
+  "checked": [
+    "A public lookup shows no verification record on example.org today.",
+    "The mail service lists the domain as Pending."
+  ],
+  "stops": [
+    "The registrar shows a different domain, or an account you do not recognise.",
+    "The registrar asks for a payment or a plan change.",
+    "A verification record already exists with a different value."
+  ],
+  "never": [
+    "Passwords, sign-in codes or recovery codes.",
+    "The registrar's API keys."
+  ],
+  "steps": [
+    {
+      "id": "read-records", "kind": "read", "title": "Read the current DNS records",
+      "where": {"url": "https://registrar.example.org/domains/example.org/dns", "account": "the domain owner"},
+      "hands": "sign in to the registrar if asked.",
+      "do": ["Open the DNS records list for example.org.", "Find every TXT record on the root name."],
+      "capture": [
+        {"key": "existing_txt_records", "label": "TXT records on the root name", "shape": "One per line: the value, shortened to its first 40 characters."},
+        {"key": "nameservers", "label": "Nameservers shown", "shape": "One per line."}
+      ]
+    },
+    {
+      "id": "add-record", "kind": "change", "title": "Add the verification record",
+      "where": {"url": "https://registrar.example.org/domains/example.org/dns"},
+      "rule": "If a record starting with mail-verify= already exists with the same value, set this step to Skipped by rule. If one exists with a different value, stop.",
+      "do": ["Choose Add record.", "Type: TXT. Name: @. Value: mail-verify=sample-0000. TTL: 3600.", "Save."],
+      "capture": [
+        {"key": "record_saved_as", "label": "The record as the registrar now shows it", "shape": "Type, name, value and TTL, exactly as displayed.", "multiline": false}
+      ]
+    },
+    {
+      "id": "confirm", "kind": "read", "title": "Confirm the mail service sees it",
+      "where": {"url": "https://mail.example.org/domains"},
+      "do": ["Press Verify next to example.org.", "Wait up to two minutes and reload once."],
+      "capture": [
+        {"key": "domain_status", "label": "Status shown for example.org", "shape": "One word, as displayed.", "multiline": false}
+      ]
+    }
+  ]
+}

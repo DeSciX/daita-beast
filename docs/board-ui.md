@@ -21,8 +21,9 @@ The read budget is one open search (two calls) per 2 min, one closed search (two
 
 - A row is a PR when its `html_url` contains `/pull/<n>`. This connector's search results carry no `pull_request` field, and its `labels` and `assignees` are strings.
 - A decision issue's body is parsed by shape into six sections: `## Decision`, `## Unblocks`, `## Waits`, `## Recommendation`, `## Approve with`, `## Record`. A body with a section empty or missing renders the card with "malformed: empty or missing ## <section>" (each one, comma-separated) and no buttons. The exact phrase is the quoted string in `## Approve with`.
+- Its optional `## Stops if` and `## Undo` (the page's `OPTIONAL_SECTIONS`, equal to `lib.sh` `ROW_OPTIONAL_SECTIONS`) are shown after the Recommendation when present; their absence is not malformed. A program's sub-act shows its condition as `<slug>: <act> — when: <condition>`, and a covered close of one shows `Condition met: <evidence>`.
 - A PR body is parsed by shape into two sections, `## Unblocks` and `## Recommendation` (written by `pr.sh request`; the page's `PR_SECTIONS`, held equal to `lib.sh` `PR_ROW_SECTIONS`, as `SECTIONS` is to `ROW_SECTIONS`). A PR with one empty or missing renders "malformed: empty or missing ## <section>" and no buttons. If it has a `## Approve with` heading, the phrase is its quoted string (no quoted string there is "malformed", no buttons); otherwise the phrase is a bare `approve`.
-- Labels shown as chips: `PR` (the row is a pull request), `hands` (red: only the viewer can perform the act), `seat:<id>` (who waits).
+- Labels shown as chips: `PR` (the row is a pull request), `hands` (red: only the viewer can perform the act), `seat:<id>` (who waits). A hands row with one `Run sheet: <https url>` line (`runSheetOf`, `RUN_SHEET_RE`) also shows a `run sheet` chip linking the page.
 
 ## Cards
 

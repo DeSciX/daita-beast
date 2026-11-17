@@ -200,6 +200,9 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
      (plugin/tests/board-page.test.mjs holds these equal to them). */
   var SECTIONS = ["Decision", "Unblocks", "Waits", "Recommendation", "Approve with", "Record"];
   var PR_SECTIONS = ["Unblocks", "Recommendation"];
+  /* A decision row's optional sections, shown under its Recommendation when present: lib.sh ROW_OPTIONAL_SECTIONS, the
+     owner (held equal by the same test). */
+  var OPTIONAL_SECTIONS = ["Stops if", "Undo"];
   var FIELDS = ["number", "title", "body", "state", "html_url", "labels", "assignees", "comments", "created_at", "updated_at", "repository_url", "milestone"];
   var DENIED = { needs_reauth: 1, server_not_connected: 1, server_not_found: 1, selection_required: 1, blocked_by_policy: 1, approval_required: 1, not_in_manifest: 1, not_granted: 1, consent_required: 1, capability_disabled: 1, capability_removed: 1 };
   var AMBIGUOUS = { server_unavailable: 1, upstream_error: 1, cancelled: 1 };
@@ -355,7 +358,11 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
      quoted phrase of a "## Approve with" section when the body has that heading (no quoted phrase there is
      malformed), otherwise a bare "approve". */
   function parseItem(it) {
-    if (!isPR(it)) { var d = parseBody(it.body, SECTIONS); d.kind = "decision"; d.subs = subActsOf(it.body); d.follows = followsOf(it.body); return d; }
+    if (!isPR(it)) {
+      var d = parseBody(it.body, SECTIONS), o = parseBody(it.body, OPTIONAL_SECTIONS).sec;
+      OPTIONAL_SECTIONS.forEach(function (n) { if (o[n]) d.sec[n] = o[n]; });
+      d.kind = "decision"; d.subs = subActsOf(it.body); d.follows = followsOf(it.body); d.runSheet = runSheetOf(it.body); return d;
+    }
     var p = parseBody(it.body, PR_SECTIONS), has = /^##\s+Approve with\s*$/im.test(String(it.body || ""));
     return { kind: "pr", sec: p.sec, missing: p.missing, phrase: has ? p.phrase : "approve", nested: has && p.nested, approveWith: has };
   }
@@ -364,17 +371,26 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
      plugin/tests/regex-mirror.test.mjs and plugin/tests/program.test.mjs hold the twins alike). A program row lists its
      sub-acts in "## Sub-acts", "- <slug>: <act>" each; the decider's one approving answer pre-authorizes all of them. A
      follow-on row carries "Follows: <owner/repo#N> sub-act <slug>": it is rendered under its program and is never the
-     viewer's turn. A malformed line reads as none here (the scripts refuse to write one and board.sh names it). */
-  var SUBACT_RE = /^- ([a-z0-9][a-z0-9-]*): (\S.*)$/;
+     viewer's turn. A sub-act line may end " when: <condition>": its follow-on closes covered only with evidence the
+     condition holds. A malformed line reads as none here (the scripts refuse to write one and board.sh names it). */
+  var SUBACT_RE = /^- ([a-z0-9][a-z0-9-]*): (\S.*?)(?: when: (\S.*))?$/;
   var FOLLOWS_RE = /^Follows: ([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[0-9]+) sub-act ([a-z0-9][a-z0-9-]*)$/;
   function subActsOf(body) {
     var on = false, out = [];
     String(body || "").split(/\r?\n/).forEach(function (l) {
       if (/^## /.test(l)) { on = l === "## Sub-acts"; return; }
       var m = on && SUBACT_RE.exec(l.replace(/\s+$/, ""));
-      if (m) out.push({ slug: m[1], act: m[2] });
+      if (m && !/when:/.test(m[2])) out.push({ slug: m[1], act: m[2], when: m[3] || null });
     });
     return out;
+  }
+  /* A hands row's run sheet: one "Run sheet: <https url>" line (lib.sh RUN_SHEET_RE and run_sheet_parse, the owners;
+     RUN_SHEET_RE here is the twin, plugin/tests/regex-mirror.test.mjs). Two lines read as none. */
+  var RUN_SHEET_RE = /^Run sheet: (https:\/\/\S+)$/;
+  function runSheetOf(body) {
+    var got = [];
+    String(body || "").split(/\r?\n/).forEach(function (l) { var m = RUN_SHEET_RE.exec(l.replace(/\s+$/, "")); if (m) got.push(m[1]); });
+    return got.length === 1 ? got[0] : null;
   }
   function followsOf(body) {
     var got = [];
@@ -859,6 +875,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     if (lat && lat.kind === "covered") chips.appendChild(h("span", { class: "chip covered", title: "Closed by " + lat.seat + " as covered by the program's approval, with no new words of yours: " + lat.record, text: "covered" }));
     if (lat && lat.kind === "latitude") chips.appendChild(h("span", { class: "chip latitude", title: "Merged under " + lat.seat + "'s standing latitude, with no words of yours: audit the record " + lat.record, text: "latitude" }));
     if (labelNames(it).indexOf("hands") >= 0) chips.appendChild(h("span", { class: "chip hands", title: "Only you can perform this act", text: "hands" }));
+    if (row.p.runSheet) chips.appendChild(h("a", { class: "chip hands", href: row.p.runSheet, target: "_blank", rel: "noopener noreferrer", title: "The run sheet for this act: open it and follow the page with your browser agent", text: "run sheet", onclick: stop }));
     d.seats.forEach(function (x) {
       var a = d.known ? ackFor(d.acks, x) : null, cur = d.known && d.current.indexOf(x) >= 0;
       var ttl = !d.known ? "The thread has not been read yet" : cur ? "acked " + a.at + " · " + a.state : "no ack after the latest event" + (a ? " (last ack " + a.at + ")" : "") + (d.event ? " · " + d.event.kind + " " + d.event.at : "");
@@ -883,8 +900,8 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     card.appendChild(h("div", { class: "hrow tools" }, p.kind === "pr" ? openOnGitHub(it) : null, ctxButton(row)));
 
     var dl = h("dl");
-    ["Decision", "Sub-acts", "Unblocks", "Waits", "Recommendation", "Record"].forEach(function (name) {
-      var text = name === "Sub-acts" ? (p.subs || []).map(function (x) { return x.slug + ": " + x.act; }).join("\n") : p.sec[name];
+    ["Decision", "Sub-acts", "Unblocks", "Waits", "Recommendation"].concat(OPTIONAL_SECTIONS, ["Record"]).forEach(function (name) {
+      var text = name === "Sub-acts" ? (p.subs || []).map(function (x) { return x.slug + ": " + x.act + (x.when ? " — when: " + x.when : ""); }).join("\n") : p.sec[name];
       if (!text) return;
       var dd = h("dd"); dd.appendChild(linkify(text));
       dl.appendChild(h("div", { class: "sec" }, h("dt", { text: name }), dd));
@@ -977,8 +994,9 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
   /* A closed decision: the close (the hearing seat's close comment), then the thread. The close line (lib.sh CLOSE_LINE_RE,
      the owner; plugin/tests/regex-mirror.test.mjs holds the two alike) is the words the row closed on, or a latitude
      close: merged under the seat's standing latitude, no words, the record linked, shown as kind "latitude" to audit; or a
-     covered close: a follow-on closed under its program, no new words, the program's approving answer linked. */
-  var CLOSE_RE = /^(?:(?<verdict>Closed|Rejected) on the (?:word, verbatim: |decider.s word)|Merged under standing latitude <(?<record>https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/blob\/[0-9a-f]{40}\/[^ <>]+)> by (?<seat>[A-Za-z0-9-]+\/[A-Z0-9_-]+)$|Closed as covered by <(?<answer>https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/(?:issues|pull)\/[0-9]+#issuecomment-[0-9]+)> by (?<cseat>[A-Za-z0-9-]+\/[A-Z0-9_-]+)$)/;
+     covered close: a follow-on closed under its program, no new words, the program's approving answer linked (and, for a
+     sub-act with a condition, "; condition met: <evidence>" read as met). */
+  var CLOSE_RE = /^(?:(?<verdict>Closed|Rejected) on the (?:word, verbatim: |decider.s word)|Merged under standing latitude <(?<record>https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/blob\/[0-9a-f]{40}\/[^ <>]+)> by (?<seat>[A-Za-z0-9-]+\/[A-Z0-9_-]+)$|Closed as covered by <(?<answer>https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/(?:issues|pull)\/[0-9]+#issuecomment-[0-9]+)> by (?<cseat>[A-Za-z0-9-]+\/[A-Z0-9_-]+)(?:; condition met: (?<met>\S.*))?$)/;
   function closeOf(list) {
     var best = null, bm = null;
     (list || []).forEach(function (c) {
@@ -987,7 +1005,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     });
     if (!best) return null;
     if (bm.groups.record) return { kind: "latitude", record: bm.groups.record, seat: bm.groups.seat, url: best.html_url };
-    if (bm.groups.answer) return { kind: "covered", record: bm.groups.answer, seat: bm.groups.cseat, url: best.html_url };
+    if (bm.groups.answer) return { kind: "covered", record: bm.groups.answer, seat: bm.groups.cseat, met: bm.groups.met, url: best.html_url };
     return { kind: bm.groups.verdict === "Rejected" ? "rejected" : "closed", words: String(best.body).split(/\r?\n/)[0].replace(/\s+$/, "").slice(bm[0].length).trim(), url: best.html_url };
   }
   function buildClosed(row, seat, expanded) {
@@ -1005,7 +1023,7 @@ pre.doc { max-height: 22rem; overflow: auto; user-select: text; }
     }
     else if (w && w.kind === "covered") {
       dt = "Covered";
-      dd.appendChild(document.createTextNode("No new words: closed by " + seatText(w.seat) + " under the program's approval. "));
+      dd.appendChild(document.createTextNode("No new words: closed by " + seatText(w.seat) + " under the program's approval. " + (w.met ? "Condition met: " + w.met + ". " : "")));
       dd.appendChild(h("a", { href: w.record, target: "_blank", rel: "noopener noreferrer", text: "your approval" }));
       dd.appendChild(document.createTextNode(" · "));
       dd.appendChild(h("a", { href: w.url, target: "_blank", rel: "noopener noreferrer", text: "the close" }));

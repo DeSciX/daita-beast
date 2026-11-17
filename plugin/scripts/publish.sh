@@ -35,7 +35,7 @@
 #   publish.sh request <slug> --seat <SEAT> --body-file <f> [--milestone "<title>"]
 #       re-scrubs (branch and body), pushes the branch to the public repo, opens the PR there with the body (an
 #       outside-reader description), and files the approval row in the twin (decision.sh new, home repo,
-#       --decides <public>, approved with "publish <slug>", under --milestone, which is required when the twin has an
+#       --decides <public>, approved with "publish <slug>", its `## Undo` the revert by a new publish, under --milestone, which is required when the twin has an
 #       open milestone and is checked before anything is pushed). Nothing else is written on the public repo.
 #   publish.sh request <slug> --amend --seat <SEAT> [--body-file <f>]
 #       after prepare --amend: re-gates, force-pushes publish/<slug> with --force-with-lease on the open PR's head (the one
@@ -596,6 +596,7 @@ case "$cmd" in
       --unblocks "the squash-merge of $pr into $PUB $db" \
       --waits "your review of the PR's diff and description, written for outside readers" \
       --recommendation "Approve when the diff and the description are right for outside readers; the scrub gate passed on both." \
+      --undo "Revert the squash commit on $PUB $db with a new publish (publish.sh) of the revert; what was public meanwhile stays seen." \
       --approve-with "publish $slug" \
       --record "$pr" ${ms:+--milestone "$ms"}
     ;;

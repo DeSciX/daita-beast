@@ -110,12 +110,13 @@ test("the standing answer: lib.sh row_answer_url and the page's standingOf agree
   assert.equal(standingOf(THREADS["plain comments only"], "approve", "alice").answer, null, "a plain comment is never the standing answer");
 });
 
-test("the section lists: the page's SECTIONS and PR_SECTIONS equal lib.sh ROW_SECTIONS and PR_ROW_SECTIONS", () => {
+test("the section lists: the page's SECTIONS, PR_SECTIONS and OPTIONAL_SECTIONS equal lib.sh ROW_SECTIONS, PR_ROW_SECTIONS and ROW_OPTIONAL_SECTIONS", () => {
   const src = readFileSync(PAGE, "utf8");
   const arr = (name) => { const m = new RegExp(`var ${name} = (\\[[^\\]]*\\]);`).exec(src); assert.ok(m, `${PAGE} has no var ${name} = [...]`); return JSON.parse(m[1]); };
   const lib = (name) => sh(`printf '%s\\n' "\${${name}[@]}"`).out.split("\n");
   assert.deepEqual(arr("SECTIONS"), lib("ROW_SECTIONS"));
   assert.deepEqual(arr("PR_SECTIONS"), lib("PR_ROW_SECTIONS"));
+  assert.deepEqual(arr("OPTIONAL_SECTIONS"), lib("ROW_OPTIONAL_SECTIONS"));
 });
 
 // ---- the page against a stubbed connector ----

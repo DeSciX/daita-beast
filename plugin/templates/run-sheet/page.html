@@ -1,0 +1,195 @@
+<title>/*__TITLE__*/</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: one readable column. A brief for the browser agent first, then numbered step cards, then the results block. */
+:root{
+  --bg:#f1f3f5; --panel:#ffffff; --panel-2:#e7ebef; --ink:#18222c; --muted:#556270; --line:#cdd5dd;
+  --accent:#2f4bb5; --on-accent:#ffffff; --accent-bg:#e2e7fb;
+  --hands:#8a4b00; --hands-bg:#fdebc8; --change:#9b2c22; --change-bg:#fbe3e0; --ok:#1d7a46; --ok-bg:#dff3e7;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif; --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#0e1319; --panel:#161d26; --panel-2:#1f2833; --ink:#e7ecf2; --muted:#9aa8b6; --line:#2c3948;
+  --accent:#9aa9ff; --on-accent:#0e1319; --accent-bg:#232c55;
+  --hands:#f0c36f; --hands-bg:#3b2d10; --change:#f39a91; --change-bg:#3d1c1a; --ok:#74cf9b; --ok-bg:#153524; color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --bg:#0e1319; --panel:#161d26; --panel-2:#1f2833; --ink:#e7ecf2; --muted:#9aa8b6; --line:#2c3948;
+  --accent:#9aa9ff; --on-accent:#0e1319; --accent-bg:#232c55;
+  --hands:#f0c36f; --hands-bg:#3b2d10; --change:#f39a91; --change-bg:#3d1c1a; --ok:#74cf9b; --ok-bg:#153524; color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.55}
+.wrap{max-width:820px;margin:0 auto;padding-block:20px 56px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:16px}
+h1{font-size:24px;line-height:1.2;margin:0;letter-spacing:-.01em;text-wrap:balance}
+h2{font-size:17px;margin:0 0 6px}
+h3{font-size:16px;margin:0;text-wrap:balance}
+p{margin:0 0 8px;max-width:68ch} ul,ol{margin:0 0 8px;padding-left:22px;max-width:68ch} li{margin-bottom:3px}
+.meta{color:var(--muted);font-size:13px;margin:4px 0 0}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;min-width:0}
+.agent{border-color:var(--accent);background:var(--accent-bg)}
+.progress{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.step-head{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;margin-bottom:8px}
+.num{font-family:var(--mono);font-size:13px;color:var(--muted)}
+.pill{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;border-radius:999px;padding:2px 9px;white-space:nowrap}
+.pill.read{background:var(--panel-2);color:var(--muted)} .pill.change{background:var(--change-bg);color:var(--change)}
+.pill.hands{background:var(--hands-bg);color:var(--hands)}
+.where{font-size:13.5px;margin-bottom:8px;overflow-wrap:anywhere} .where a{color:var(--accent)}
+.hands-note{background:var(--hands-bg);color:var(--ink);border-radius:6px;padding:8px 10px;margin:0 0 8px}
+.rule{border-left:3px solid var(--accent);padding-left:10px;color:var(--ink)}
+.cap{display:flex;flex-direction:column;gap:3px;margin-top:10px}
+.cap label{font-weight:600;font-size:13.5px} .cap .key{font-family:var(--mono);font-weight:400;color:var(--muted);font-size:12px}
+.cap .shape{color:var(--muted);font-size:12.5px}
+textarea,input[type=text],select{font-family:var(--sans);font-size:14px;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:7px 9px;width:100%;max-width:100%}
+textarea{font-family:var(--mono);font-size:13px;resize:vertical;min-height:44px}
+.foot{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+.foot select{width:auto} .foot input{flex:1 1 220px;width:auto}
+.step.done{border-color:var(--ok)} .step.blocked{border-color:var(--change)}
+.btn{font-family:var(--sans);font-size:13.5px;padding:7px 12px;border-radius:6px;border:1px solid var(--line);background:var(--panel-2);color:var(--ink);cursor:pointer}
+.btn.primary{background:var(--accent);color:var(--on-accent);border-color:var(--accent);font-weight:600}
+button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.saved{font-size:13px;color:var(--muted)} .saved.warn{color:var(--change)}
+.sticky{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);padding-block:8px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;border-bottom:1px solid var(--line)}
+#out{min-height:140px}
+code{font-family:var(--mono);font-size:.92em;background:var(--panel-2);border-radius:4px;padding:0 4px;overflow-wrap:anywhere}
+</style>
+<div class="wrap">
+  <header>
+    <h1 id="title"></h1>
+    <p class="meta" id="sub"></p>
+  </header>
+  <div class="sticky"><span class="progress" id="progress"></span><span class="saved" id="saved" role="status"></span></div>
+  <section class="box agent" aria-labelledby="h-agent">
+    <h2 id="h-agent">For the browser agent</h2>
+    <ol>
+      <li>Work through the steps below in order. Open each step's link in a new tab; keep this page open.</li>
+      <li>A step marked <b>HANDS</b> needs the person. Stop, tell them exactly what to do, and wait.</li>
+      <li>A step marked <b>CHANGE</b> alters a setting. Enter the values exactly as written. A step marked <b>READ</b> only looks.</li>
+      <li>After each step, type what you found into that step's result fields on this page and set its status. Results save as you type.</li>
+      <li>Follow each rule as written. If a screen does not match the step, or a stop condition below applies, set the step to Blocked, write what you saw, and stop.</li>
+      <li>Never type a password, code, token, key or secret into this page. For a downloaded secret file, record only its file name and folder.</li>
+    </ol>
+    <p id="fallback"></p>
+  </section>
+  <section class="box" aria-labelledby="h-goal"><h2 id="h-goal">Goal</h2><div id="goal"></div></section>
+  <section class="box" id="checked-box" aria-labelledby="h-checked"><h2 id="h-checked">Already checked</h2><ul id="checked"></ul></section>
+  <section class="box" aria-labelledby="h-stops"><h2 id="h-stops">Stop and record if</h2><ul id="stops"></ul><h2>Never record</h2><ul id="never"></ul></section>
+  <div id="steps" style="display:flex;flex-direction:column;gap:16px"></div>
+  <section class="box" aria-labelledby="h-out">
+    <h2 id="h-out">Results</h2>
+    <p>Everything recorded above, as one block. It updates as you type.</p>
+    <textarea id="out" readonly aria-label="Results as JSON"></textarea>
+    <div class="foot"><button class="btn primary" type="button" id="copy">Copy results</button><span class="saved" id="copied" role="status"></span></div>
+  </section>
+</div>
+<script type="application/json" id="run">/*__RUN__*/</script>
+<script>
+(function(){
+  var run = JSON.parse(document.getElementById('run').textContent);
+  var $ = function(id){ return document.getElementById(id); };
+  var LKEY = 'beast-run-sheet-' + run.id;   /* a per-browser backup only; the evidence store below is the record */
+  var state = {results: {}, steps: {}, updatedAt: null};
+  var ref = null, timer = null, where = 'pending';
+
+  function el(tag, attrs, kids){
+    var n = document.createElement(tag); attrs = attrs || {};
+    Object.keys(attrs).forEach(function(k){ if(attrs[k] == null || attrs[k] === false) return; if(k === 'class') n.className = attrs[k]; else if(k === 'text') n.textContent = attrs[k]; else n.setAttribute(k, attrs[k]); });
+    (kids || []).forEach(function(c){ if(c != null) n.append(c); });
+    return n;
+  }
+  function list(host, items){ (items || []).forEach(function(t){ host.append(el('li', {text: t})); }); }
+  function link(url){ return el('a', {href: url, target: '_blank', rel: 'noopener', text: url}); }
+
+  // ---------- the sheet ----------
+  $('title').textContent = run.title;
+  $('sub').textContent = [run.anchor ? 'Anchor: ' + run.anchor : '', run.steps.length + ' steps', run.steps.filter(function(s){ return s.hands; }).length + ' need the person', run.minutes ? 'about ' + run.minutes + ' minutes' : ''].filter(Boolean).join(' · ');
+  (run.goal || []).forEach(function(p){ $('goal').append(el('p', {text: p})); });
+  list($('checked'), run.checked); $('checked-box').hidden = !(run.checked && run.checked.length);
+  list($('stops'), run.stops); list($('never'), run.never);
+  if(run.fallback){ $('fallback').append('If you cannot type into this page: press Copy results at the bottom and post that block as one comment at ', link(run.fallback), '.'); }
+
+  run.steps.forEach(function(s, i){
+    var card = el('section', {class: 'box step', id: 'step-' + s.id, 'aria-labelledby': 'h-' + s.id});
+    card.append(el('div', {class: 'step-head'}, [el('span', {class: 'num', text: 'Step ' + (i + 1) + ' of ' + run.steps.length}), el('span', {class: 'pill ' + s.kind, text: s.kind}), s.hands ? el('span', {class: 'pill hands', text: 'Hands'}) : null]));
+    card.append(el('h3', {id: 'h-' + s.id, text: s.title}));
+    if(s.where){ var w = el('p', {class: 'where'}, ['Open: ', link(s.where.url)]); if(s.where.account) w.append(' · signed in as ' + s.where.account); card.append(w); }
+    if(s.hands) card.append(el('p', {class: 'hands-note', text: 'Person: ' + (s.hands === true ? 'you will need to act here.' : s.hands)}));
+    if(s.do && s.do.length){ var ol = el('ol'); list(ol, s.do); card.append(ol); }
+    if(s.rule) card.append(el('p', {class: 'rule', text: 'Rule: ' + s.rule}));
+    (s.capture || []).forEach(function(c){
+      var id = 'cap-' + c.key;
+      var input = c.multiline === false ? el('input', {type: 'text', id: id, 'data-key': c.key, autocomplete: 'off'}) : el('textarea', {id: id, 'data-key': c.key, rows: c.rows || 2});
+      card.append(el('div', {class: 'cap'}, [el('label', {for: id}, [c.label + ' ', el('span', {class: 'key', text: c.key})]), c.shape ? el('span', {class: 'shape', text: c.shape}) : null, input]));
+    });
+    var sel = el('select', {id: 'status-' + s.id, 'data-step': s.id, 'aria-label': 'Status of step ' + (i + 1)}, ['todo:Not done', 'done:Done', 'blocked:Blocked', 'skipped:Skipped by rule'].map(function(o){ var p = o.split(':'); return el('option', {value: p[0], text: p[1]}); }));
+    card.append(el('div', {class: 'foot'}, [sel, el('input', {type: 'text', id: 'note-' + s.id, 'data-note': s.id, placeholder: 'Note (what you saw, if anything differed)', 'aria-label': 'Note for step ' + (i + 1), autocomplete: 'off'})]));
+    $('steps').append(card);
+  });
+
+  // ---------- state ----------
+  function paint(){
+    document.querySelectorAll('[data-key]').forEach(function(n){ var v = state.results[n.dataset.key]; if(document.activeElement !== n) n.value = v == null ? '' : v; });
+    run.steps.forEach(function(s){
+      var st = state.steps[s.id] || {};
+      var sel = $('status-' + s.id), note = $('note-' + s.id);
+      if(document.activeElement !== sel) sel.value = st.status || 'todo';
+      if(document.activeElement !== note) note.value = st.note || '';
+      $('step-' + s.id).className = 'box step ' + (st.status || 'todo');
+    });
+    var done = run.steps.filter(function(s){ var st = (state.steps[s.id] || {}).status; return st === 'done' || st === 'skipped'; }).length;
+    var blocked = run.steps.filter(function(s){ return (state.steps[s.id] || {}).status === 'blocked'; }).length;
+    $('progress').textContent = done + ' of ' + run.steps.length + ' steps finished' + (blocked ? ' · ' + blocked + ' blocked' : '');
+    $('out').value = JSON.stringify({run: run.id, results: state.results, steps: state.steps, updatedAt: state.updatedAt}, null, 1);
+  }
+  function said(text, warn){ var n = $('saved'); n.textContent = text; n.className = 'saved' + (warn ? ' warn' : ''); }
+  function saveLocal(){ try{ localStorage.setItem(LKEY, JSON.stringify(state)); return true; }catch(e){ return false; } }
+  function save(){
+    state.updatedAt = new Date().toISOString(); paint();
+    var local = saveLocal();
+    clearTimeout(timer);
+    timer = setTimeout(function(){
+      if(!ref){ said(local ? 'Saved in this browser only. Use Copy results when finished.' : 'Not saved. Use Copy results when finished.', true); return; }
+      ref.set(JSON.parse(JSON.stringify(state))).then(function(){ where = 'store'; said('Saved to the page ' + state.updatedAt.slice(11, 19) + ' UTC'); })
+        .catch(function(){ said('The page store refused the save. Use Copy results when finished.', true); });
+    }, 500);
+  }
+  document.addEventListener('input', function(e){
+    var t = e.target;
+    if(t.dataset.key){ state.results[t.dataset.key] = t.value; save(); }
+    else if(t.dataset.note){ (state.steps[t.dataset.note] = state.steps[t.dataset.note] || {}).note = t.value; save(); }
+  });
+  document.addEventListener('change', function(e){
+    var t = e.target; if(!t.dataset.step) return;
+    (state.steps[t.dataset.step] = state.steps[t.dataset.step] || {}).status = t.value; save();
+  });
+  $('copy').addEventListener('click', function(){
+    var text = $('out').value, n = $('copied');
+    var fail = function(){ $('out').focus(); $('out').select(); n.textContent = 'Select all and copy the block above.'; };
+    try{ navigator.clipboard.writeText(text).then(function(){ n.textContent = 'Copied.'; }, fail); }catch(e){ fail(); }
+  });
+
+  function adopt(v){ if(v && typeof v === 'object'){ state.results = v.results || {}; state.steps = v.steps || {}; state.updatedAt = v.updatedAt || null; } }
+  try{ adopt(JSON.parse(localStorage.getItem(LKEY) || 'null')); }catch(e){ /* start empty */ }
+  paint(); said('Loading saved results…');
+  /* The evidence store: the one place the results are written and read back (runs/<run id>: {results, steps, updatedAt}).
+     EVIDENCE_STORE "artifact-db" is the page's own artifact store, the only store today. SEAM: DeSciX private media
+     replaces it once its contract is published; its calls go in openEvidenceStore and nowhere else, and none of its names
+     is written here before that contract exists. Any other value fails loud. */
+  var EVIDENCE_STORE = 'artifact-db';
+  function openEvidenceStore(){
+    if(EVIDENCE_STORE !== 'artifact-db') return Promise.reject(new Error('unknown evidence store ' + EVIDENCE_STORE));
+    var use = window.claude && typeof window.claude.use === 'function' ? window.claude.use('db') : Promise.resolve(null);
+    return Promise.resolve(use).then(function(db){ if(!db) throw new Error('no store'); return db.doc('runs/' + run.id); });
+  }
+  var gave = setTimeout(function(){ if(where === 'pending'){ where = 'local'; said('Results are kept in this browser only. Use Copy results when finished.', true); } }, 10000);
+  openEvidenceStore().then(function(doc){
+    ref = doc;
+    return ref.get();
+  }).then(function(snap){
+    clearTimeout(gave); where = 'store';
+    var remote = snap.exists ? snap.data() : null;
+    if(remote && (!state.updatedAt || String(remote.updatedAt || '') >= String(state.updatedAt))) adopt(remote);   // the newer record wins
+    paint(); said(snap.exists ? 'Results load from and save to this page.' : 'Results will save to this page as you type.');
+  }).catch(function(){ clearTimeout(gave); ref = null; where = 'local'; said('Results are kept in this browser only. Use Copy results when finished.', true); });
+})();
+</script>
