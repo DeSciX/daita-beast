@@ -104,7 +104,7 @@ sequenceDiagram
   participant D as Decider
   participant B as Seat B (also affected)
   A->>G: decision.sh new, six sections, one phrase, seat A and seat B labels, milestone
-  Note over A,G: filed BEFORE the seat asks anyone
+  Note over A,G: filed when the decider is not active in A's session
   R-->>A: event NEW
   R-->>B: event NEW
   B->>G: ack.sh state seen

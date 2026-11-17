@@ -82,10 +82,10 @@ All measured; each shapes code.
 **Rule.** An approval no newer than a publish row's latest `Amended at` line does not count (`lib.sh::row_answer_url`, `lib.sh::row_amended_at`); `publish.sh merge` on an amended row takes the approval only from the decider's comment.
 **Why.** The decider approved what the amend replaced.
 
-## 6. The board works only if seats file before asking
+## 6. The board holds what the decider cannot answer in the session
 
-**Rule.** Anything a seat waits on from the decider is a row filed with `decision.sh new` before the seat asks, and stays open until the word. `decision.sh record` (file and close in one act) is only for a significant word already given in a session before any row existed. A minor word goes only into the repo's dated record. One check holds it: `lib.sh::ask_inline_check` makes `decision.sh new`, `record` and `desk.sh ask` refuse a question that points elsewhere for its substance ("see session", "as discussed", a local path).
-**Why.** A record-and-close row is never pending, so the decider's board never shows it as a question; a question asked in a session or a chat is invisible to the decider's one view.
+**Rule.** While the decider is active in a seat's session, the seat asks there and files nothing; a material question waits on the board (`decision.sh new`, open until the word) only when they are not, or the seat is unsure. `decision.sh record` (file and close in one act) is only for an answer given in dialogue that another seat needs, or that sets the workstream's direction. One check holds what is filed: `lib.sh::ask_inline_check` makes `decision.sh new`, `record` and `desk.sh ask` refuse a question that points elsewhere for its substance ("see session", "as discussed", a local path).
+**Why.** A record-and-close row is never pending, so the decider's board never shows it as a question; the board is the decider's one view only when they are away from the session, and an answer another seat needs is invisible to it unless recorded.
 **Evidence.** In one repo, 19 of 66 decision rows were closed within two minutes of filing, so they never appeared as pending. A license carve-out question existed only in one seat's session until it was found there.
 
 **Rule.** Every question is answerable from the board alone: the content inline, or a link to a file at a commit.
