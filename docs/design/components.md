@@ -62,7 +62,7 @@ The catalogue of the plugin as built. Paths are relative to `plugin/`. "lib.sh" 
 | `milestone.sh` | `new`, `list`, `move --why`, `close [--carry]` | the `milestone_*` functions, `waits_on_*`, `desk_parse`, `ask_header`, `coord_write_guard` | GitHub milestones; carried items; edited ask headers |
 | `deps.sh` | `deps.sh <SEAT>`: each declared dependency and its state | `deps_declared`, `dep_state`, `seat_repo` | nothing |
 | `census.sh` | `census.sh <SEAT>`: reviewed vs served per target of the seat's roster `census` | `roster_census`, `repo_main_root`, `seat_rostered` | nothing |
-| `build-run-sheet.mjs` | `node build-run-sheet.mjs run.json --out page.html`: a hands row's run sheet from `templates/run-sheet/page.html` (`validateRun` owns the run's shape) | none (node only) | the page file |
+| `build-run-sheet.mjs` | `node build-run-sheet.mjs run.json --out page.html`: a hands row's run sheet or an acceptance walk from `templates/run-sheet/page.html` (`validateRun` owns the run's shape, `browserPrompt` the browser agent's prompt); `--check page.html` (`verifyPage`) refuses a page whose prompt drifted from its steps | none (node only) | the page file |
 | `report.sh` | period activity JSON; `milestone <title> [--post --by or --outside-notes]` | `deps_declared`, `dep_state`, `milestone_*`, `desk_find`, `seat_repo`, `seat_resolve`, `award_policy`, `coord_write_guard`, `search_issues` | desk messages (through `desk.sh msg`) and the milestone's `Report:` line |
 | `publish.sh` | `prepare [--amend]`, `scrub`, `request [--amend]`, `merge`, `pull`, `release`, `scan` | `roster_pair_check`, `scrub_patterns`, `scrub_scan`, `roster_scrub`, `roster_license`, `row_answer_url`, `row_amended_at`, `amend_line`, `answer_kind`, `milestone_require`, `coord_write_guard`; its own `public_info`, `public_fetch`, `public_push`, `public_send`, `publish_view`, `publish_base`, `scrub_run`, `license_gate` | branch `publish/<slug>`; the public branch, PR, merge and release; the twin row and its amend line; the merge commit on twin `main` |
 | `license.sh` | `render [-o]`, `check <dir or tree-ish>`, `audit` | `roster_license`, `roster_public_owners`, `scrub_patterns`, `scrub_scan`, `on_exit` | the rendered file (`-o`); never GitHub |
@@ -108,7 +108,7 @@ Each skill is `skills/<name>/SKILL.md`; the verb skills wrap one script, and eac
 | `milestone` | "set the milestones", "M2 slips a week" | `milestone.sh` |
 | `deps` | "what am I waiting on" | `deps.sh` |
 | `census` | "is anything reviewed but not shipped" | `census.sh` |
-| `stage-hands` | "make a run sheet for this hands row" | `build-run-sheet.mjs`, `decision.sh --run-sheet` |
+| `stage-hands` | "make a run sheet for this hands row", "make an acceptance walk" | `build-run-sheet.mjs`, `decision.sh --run-sheet` |
 | `report` | "monthly report", milestone participant report | `report.sh`, rendered by the `reporter` agent |
 | `publish` | "publish this to the public repo" | `publish.sh` |
 | `license` | "which public repos lack our license" | `license.sh` |

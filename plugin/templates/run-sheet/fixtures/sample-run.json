@@ -4,6 +4,7 @@
   "anchor": "acme/widgets#12",
   "minutes": 10,
   "fallback": "https://github.com/acme/widgets/issues/12",
+  "cost": "About 0.02 USD of AI credits: the one assistant question in step 4. Nothing else is charged.",
   "goal": [
     "The mail service needs proof that we own example.org before it will send from it. The proof is one TXT record at the domain registrar.",
     "This run reads the current records, adds the one record, and records what the registrar shows afterwards."
@@ -23,7 +24,7 @@
   ],
   "steps": [
     {
-      "id": "read-records", "kind": "read", "title": "Read the current DNS records",
+      "id": "read-records", "kind": "read", "env": "prod", "title": "Read the current DNS records",
       "where": {"url": "https://registrar.example.org/domains/example.org/dns", "account": "the domain owner"},
       "hands": "sign in to the registrar if asked.",
       "do": ["Open the DNS records list for example.org.", "Find every TXT record on the root name."],
@@ -33,7 +34,7 @@
       ]
     },
     {
-      "id": "add-record", "kind": "change", "title": "Add the verification record",
+      "id": "add-record", "kind": "change", "env": "prod", "title": "Add the verification record",
       "where": {"url": "https://registrar.example.org/domains/example.org/dns"},
       "rule": "If a record starting with mail-verify= already exists with the same value, set this step to Skipped by rule. If one exists with a different value, stop.",
       "do": ["Choose Add record.", "Type: TXT. Name: @. Value: mail-verify=sample-0000. TTL: 3600.", "Save."],
@@ -42,12 +43,21 @@
       ]
     },
     {
-      "id": "confirm", "kind": "read", "title": "Confirm the mail service sees it",
+      "id": "confirm", "kind": "read", "env": "prod", "title": "Confirm the mail service sees it",
       "where": {"url": "https://mail.example.org/domains"},
       "do": ["Press Verify next to example.org.", "Wait up to two minutes and reload once."],
+      "expect": "example.org shows Verified within two minutes of pressing Verify.",
+      "measured": {"at": "2026-11-16", "text": "A public lookup from the seat's machine saw no mail-verify= record; the service showed Pending."},
       "capture": [
         {"key": "domain_status", "label": "Status shown for example.org", "shape": "One word, as displayed.", "multiline": false}
       ]
+    },
+    {
+      "id": "ask-assistant", "kind": "read", "env": "branch", "metered": true, "title": "Ask the support assistant",
+      "where": {"url": "https://mail.example.org/help"},
+      "asks": ["Is example.org verified for sending, and since when?"],
+      "expect": "The reply names example.org as Verified, gives the time, and links the domain's settings page with an address that opens it.",
+      "measured": {"at": "2026-11-16", "text": "On the branch build the reply named the domain but linked a settings page that does not exist."}
     }
   ]
 }
